@@ -1,0 +1,8 @@
+1 chr1
+2 chr2
+3 chr3
+...
+22 chr22
+X chrX
+Y chrY
+MT chrM

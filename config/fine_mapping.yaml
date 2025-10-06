@@ -1,0 +1,28 @@
+# Configuration for fine-mapping with strict parameters
+results_dir: "fine_mapping_analysis"
+
+input_files:
+  genotypes: "data/high_quality_genotypes.vcf.gz"
+  covariates: "data/covariates.txt"
+  annotations: "data/annotations.bed"
+  expression: "data/expression.txt"
+
+# Strict filtering for fine-mapping
+genotype_processing:
+  filter_variants: true
+  min_maf: 0.01           # Include rare variants for fine-mapping
+  min_call_rate: 0.99     # High call rate required
+  quality_threshold: 50   # High quality threshold
+  handle_multiallelic: true
+  multiallelic_action: "split"
+
+analysis:
+  qtl_types: "eqtl"
+
+qtl:
+  cis_window: 500000      # Smaller window for fine-mapping
+  permutations: 10000     # More permutations for accurate FDR
+  fdr_threshold: 0.01     # Stricter FDR threshold
+
+output:
+  generate_report: true

@@ -1,0 +1,217 @@
+# QTL Analysis Pipeline - Complete Configuration
+# ==============================================
+# This configuration file controls all aspects of the QTL analysis pipeline.
+# All paths can be absolute or relative to the project root.
+# Comments provide examples and explanations for each parameter.
+
+# MANDATORY: Results directory where all output will be stored
+# Logs, plots, reports, and intermediate files will be created here.
+# Example: "results", "/path/to/analysis_results", "my_qtl_study_2024"
+results_dir: "results"
+
+# MANDATORY: Input files section
+# Provide paths to all required input files
+input_files:
+  # MANDATORY: Genotype file - supports VCF, VCF.GZ, BCF, PLINK BED formats
+  # Examples:
+  #   "data/genotypes.vcf.gz"          # GATK joint-called VCF
+  #   "data/genotypes.bcf"             # BCF format
+  #   "data/plink_data.bed"            # PLINK BED (with .bim and .fam)
+  #   "path/to/wgs_joint_called.vcf.gz" # Whole genome sequencing data
+  genotypes: "data/genotypes.vcf.gz"
+  
+  # MANDATORY: Covariates file (tab-separated)
+  # Format: covariates in rows, samples in columns, first column is covariate names
+  # Examples of covariates: PCA components, sex, age, batch effects, sequencing depth
+  # Example file structure:
+  #   ID      sample1 sample2 sample3
+  #   PC1     0.01    -0.02   0.03
+  #   PC2     -0.03   0.01    -0.02
+  #   sex     1       2       1
+  #   age     45      32      28
+  covariates: "data/covariates.txt"
+  
+  # MANDATORY: Annotation file (BED format)
+  # Maps molecular features to genomic coordinates
+  # Required columns: chr, start, end, gene_id, strand (optional)
+  # Example:
+  #   chr1    1000000 1005000 ENSG000001  +
+  #   chr1    2000000 2008000 ENSG000002  -
+  annotations: "data/annotations.bed"
+  
+  # OPTIONAL: Phenotype files - only required for analyses you run
+  # Format: features in rows, samples in columns, first column is feature IDs
+  
+  # Expression data for eQTL analysis
+  # Example:
+  #   GeneID      sample1 sample2 sample3
+  #   ENSG000001  10.5    11.2    9.8
+  #   ENSG000002  8.3     7.9     9.1
+  expression: "data/expression.txt"
+  
+  # Protein abundance data for pQTL analysis
+  # Example:
+  #   ProteinID   sample1 sample2 sample3
+  #   PROT000001  45.2    47.8    43.1
+  #   PROT000002  32.1    30.8    33.5
+  protein: "data/protein.txt"
+  
+  # Splicing data for sQTL analysis (PSI values or ratios)
+  # Example:
+  #   EventID     sample1 sample2 sample3
+  #   SE_0001     0.85    0.79    0.91
+  #   SE_0002     0.45    0.51    0.38
+  splicing: "data/splicing.txt"
+
+# OPTIONAL: Genotype pre-processing configuration
+# These settings control how genotype files are processed before analysis
+genotype_processing:
+  # Basic format detection and conversion
+  auto_detect_format: true        # Automatically detect input format
+  output_format: "vcf.gz"         # Output format: "vcf.gz" or "bcf"
+  
+  # Chromosome naming normalization
+  # GATK may use "1" while other tools expect "chr1" - this handles conversion
+  normalize_chromosomes: true
+  chromosome_prefix: "chr"        # Options: "chr", "none", "auto"
+                                  # "chr": ensure chromosomes have 'chr' prefix
+                                  # "none": remove 'chr' prefix if present
+                                  # "auto": automatically detect and standardize
+  
+  # Variant filtering - recommended for quality control
+  filter_variants: true
+  min_maf: 0.01                   # Minimum Minor Allele Frequency (0.01 = 1%)
+  min_call_rate: 0.95             # Minimum call rate per variant (95%)
+  max_missing: 0.1                # Maximum missing rate (10%)
+  quality_threshold: 30           # Minimum QUAL score for variants
+  
+  # Multi-allelic site handling
+  # GATK joint calling may produce multi-allelic sites that need processing
+  handle_multiallelic: true
+  multiallelic_action: "split"    # Options: "split", "drop", "first_alt"
+                                  # "split": split into multiple biallelic records
+                                  # "drop": remove multi-allelic sites
+                                  # "first_alt": keep only first alternate allele
+  
+  # Phasing handling
+  # Remove phasing information as QTLTools typically uses unphased data
+  remove_phasing: true
+  
+  # Sample matching with phenotype files
+  match_samples: true
+  sample_matching_method: "exact" # Options: "exact", "prefix", "pattern"
+                                  # "exact": exact sample name matching
+                                  # "prefix": match by sample name prefixes
+                                  # "pattern": use regex patterns for matching
+  
+  # Advanced normalization options
+  normalize_indels: true          # Normalize INDEL representations
+  remove_duplicates: true         # Remove duplicate variant records
+  left_align_variants: true       # Left-align variants for consistency
+
+# OPTIONAL: Analysis configuration
+# Control which analyses to run and their basic settings
+analysis:
+  # QTL types to run
+  # Options: "all", "eqtl", "pqtl", "sqtl" or comma-separated list
+  # Examples:
+  #   "all"                    # Run all available QTL analyses
+  #   "eqtl,pqtl"             # Run only eQTL and pQTL
+  #   "sqtl"                  # Run only sQTL
+  qtl_types: "all"
+  
+  # GWAS analysis configuration
+  run_gwas: false                # Set to true to enable GWAS analysis
+  gwas_phenotype: "data/gwas_phenotype.txt"  # Required if run_gwas is true
+                                             # File should have 'sample_id' column
+
+# OPTIONAL: QTL analysis parameters
+# These parameters control the statistical analysis for QTL mapping
+qtl:
+  # Cis-window size: distance from gene to consider variants for association
+  # Larger windows increase multiple testing burden but capture more distant regulators
+  cis_window: 1000000            # 1 Mb window (common for eQTL studies)
+  
+  # Permutation count for empirical p-values and FDR control
+  # Higher values give more accurate FDR but increase computation time
+  permutations: 1000             # Typical values: 1000-10000
+  
+  # MAF threshold for including variants in analysis
+  maf_threshold: 0.05            # Exclude variants with MAF < 5%
+  
+  # FDR threshold for significant associations
+  fdr_threshold: 0.05            # Standard 5% FDR threshold
+  
+  # Additional quality filters
+  min_maf: 0.01                  # Minimum MAF for variants (1%)
+  min_call_rate: 0.95            # Minimum call rate for variants (95%)
+
+# OPTIONAL: GWAS analysis parameters
+# Only used if analysis.run_gwas is true
+gwas:
+  # Association testing method
+  method: "linear"               # Options: "linear", "logistic"
+                                 # "linear": for continuous traits
+                                 # "logistic": for case-control traits
+  
+  # Covariate adjustment
+  covariates: true               # Adjust for covariates from covariates file
+  
+  # Variant filtering for GWAS
+  maf_threshold: 0.01            # MAF filter for GWAS variants (1%)
+  
+  # Missing data handling
+  imputation: "mean"             # Options: "mean", "median", "drop"
+                                 # "mean": impute with mean value
+                                 # "median": impute with median value
+                                 # "drop": remove samples with missing data
+
+# OPTIONAL: Paths to tools
+# If tools are in your system PATH, these can be left as defaults
+# Otherwise, provide full paths to the executables
+paths:
+  qtltools: "qtltools"           # QTLTools for QTL mapping
+  bcftools: "bcftools"           # BCFtools for VCF processing
+  bgzip: "bgzip"                 # BGZIP for compression
+  tabix: "tabix"                 # Tabix for indexing
+  python: "python3"              # Python interpreter
+  plink: "plink"                 # PLINK for GWAS analysis
+
+# OPTIONAL: Plotting configuration
+# Control visualization outputs
+plotting:
+  enabled: true                  # Enable/disable plotting
+  dpi: 300                       # Plot resolution (300 for publication)
+  format: "png"                  # Output format: "png", "pdf", "svg"
+  style: "seaborn"               # Plot style: "seaborn", "ggplot", "default"
+  
+  # Color scheme for plots
+  colors:
+    primary: "#2E86AB"           # Primary color for plots
+    secondary: "#A23B72"         # Secondary color
+    significant: "#F18F01"       # Color for significant associations
+    nonsignificant: "#C5C5C5"    # Color for non-significant points
+  
+  # Plot types to generate
+  plot_types:
+    - "manhattan"                # Genome-wide association plot
+    - "qq"                       # Q-Q plot for p-value distribution
+    - "volcano"                  # Effect size vs significance
+    - "distribution"             # P-value and effect size distributions
+    - "summary"                  # Summary plot comparing analyses
+
+# OPTIONAL: Output settings
+# Control output file handling and reporting
+output:
+  compression: true              # Compress intermediate files to save space
+  remove_intermediate: false     # Remove temporary files after analysis
+  generate_report: true          # Generate comprehensive HTML report
+  report_format: "html"          # Report format: "html" or "txt"
+
+# OPTIONAL: Quality control settings
+# Additional QC steps for data processing
+qc:
+  check_sample_concordance: true # Check sample overlap between files
+  filter_low_expressed: true     # Filter lowly expressed genes (eQTL only)
+  expression_threshold: 0.1      # Expression threshold for filtering
+  normalize: true                # Normalize phenotype data

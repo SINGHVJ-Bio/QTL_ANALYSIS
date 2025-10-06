@@ -1,0 +1,28 @@
+# Configuration for large-scale eQTL study with many samples
+results_dir: "large_scale_eqtl"
+
+input_files:
+  genotypes: "data/large_cohort.vcf.gz"
+  covariates: "data/covariates.txt"
+  annotations: "data/annotations.bed"
+  expression: "data/expression_matrix.txt"
+
+# Optimized for large datasets
+genotype_processing:
+  filter_variants: true
+  min_maf: 0.01
+  min_call_rate: 0.95
+  handle_multiallelic: true
+  multiallelic_action: "split"
+
+analysis:
+  qtl_types: "eqtl"
+
+qtl:
+  cis_window: 1000000
+  permutations: 1000        # Reduced for computational efficiency
+  fdr_threshold: 0.05
+
+output:
+  compression: true
+  remove_intermediate: true  # Save disk space for large analyses

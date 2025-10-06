@@ -1,0 +1,12 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##fileDate=20240115
+##source=simulated_data
+##contig=<ID=chr1>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	sample1	sample2	sample3	sample4	sample5	sample6	sample7	sample8	sample9	sample10
+chr1	1000000	rs001	A	G	.	PASS	.	GT	0/0	0/1	1/1	0/0	0/1	0/0	1/1	0/1	0/0	0/1
+chr1	1500000	rs002	C	T	.	PASS	.	GT	0/1	0/0	0/1	1/1	0/0	0/1	0/0	1/1	0/1	0/0
+chr1	2000000	rs003	G	A	.	PASS	.	GT	1/1	0/1	0/0	0/1	1/1	0/0	0/1	0/0	1/1	0/1
+chr1	2500000	rs004	T	C	.	PASS	.	GT	0/0	1/1	0/1	0/0	0/1	1/1	0/0	0/1	0/0	1/1
+chr1	3000000	rs005	A	T	.	PASS	.	GT	0/1	0/0	1/1	0/1	0/0	0/1	1/1	0/0	0/1	0/0

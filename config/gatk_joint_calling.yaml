@@ -1,0 +1,31 @@
+# Configuration for GATK4.5 joint-called VCF.GZ files
+results_dir: "gatk_analysis_results"
+
+input_files:
+  genotypes: "path/to/gatk_joint_called.vcf.gz"
+  covariates: "data/covariates.txt"
+  annotations: "data/annotations.bed"
+  expression: "data/expression.txt"
+  protein: "data/protein.txt"
+
+# GATK-specific processing
+genotype_processing:
+  auto_detect_format: true
+  normalize_chromosomes: true
+  chromosome_prefix: "chr"  # GATK often uses "1" instead of "chr1"
+  filter_variants: true
+  min_maf: 0.01
+  min_call_rate: 0.98      # GATK joint calling typically has high call rates
+  handle_multiallelic: true
+  multiallelic_action: "split"  # Split multi-allelic sites from joint calling
+  remove_phasing: true
+  remove_duplicates: true
+
+analysis:
+  qtl_types: "eqtl,pqtl"
+  run_gwas: false
+
+qtl:
+  cis_window: 1000000
+  permutations: 1000
+  fdr_threshold: 0.05
