@@ -104,13 +104,13 @@ def run_plink_gwas(config, vcf_gz, gwas_data, results_dir):
     # Run GWAS for each phenotype
     all_results = []
     
-    for phenotype in gwas_data['phenotype_cols']:
-        logger.info(f"🔍 Running GWAS for phenotype: {phenotype}")
+    for i, phenotype in enumerate(gwas_data['phenotype_cols']):
+        logger.info(f"🔍 Running GWAS for phenotype: {phenotype} (column {i+1})")
         
         output_prefix = os.path.join(results_dir, f"gwas_{phenotype}")
         
-        # Build PLINK command
-        cmd = f"{config['paths']['plink']} --bfile {plink_base} --pheno {gwas_data['phenotype_file']} --mpheno {phenotype}"
+        # Build PLINK command - FIXED: Use numeric index for --mpheno
+        cmd = f"{config['paths']['plink']} --bfile {plink_base} --pheno {gwas_data['phenotype_file']} --mpheno {i+1}"
         
         if gwas_config.get('covariates', True):
             cmd += f" --covar {gwas_data['covariate_file']}"

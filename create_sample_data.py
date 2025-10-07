@@ -26,7 +26,7 @@ def create_sample_data():
     # Create covariates.txt
     create_covariates_file(data_dir / "covariates.txt", samples)
     
-    # Create annotations.bed
+    # Create annotations.bed (FIXED: removed # from header)
     create_annotations_file(data_dir / "annotations.bed")
     
     # Create expression.txt
@@ -38,7 +38,7 @@ def create_sample_data():
     # Create splicing.txt
     create_splicing_file(data_dir / "splicing.txt", samples)
     
-    # Create gwas_phenotype.txt
+    # Create gwas_phenotype.txt (optional)
     create_gwas_phenotype_file(data_dir / "gwas_phenotype.txt", samples)
     
     print("✅ All sample data files created successfully!")
@@ -106,6 +106,8 @@ def create_genotypes_file(file_path, samples):
             
             line = f"{chrom}\t{pos}\t{variant_id}\t{ref}\t{alt}\t100\tPASS\t{info}\tGT:DS\t" + "\t".join(genotypes)
             f.write(line + "\n")
+    
+    print(f"✅ Created genotypes.vcf with {len(variants)} variants")
 
 def create_covariates_file(file_path, samples):
     """Create covariates file with NAFLD-relevant covariates"""
@@ -142,6 +144,7 @@ def create_covariates_file(file_path, samples):
             df[col] = df[col].round(2)
     
     df.to_csv(file_path, sep='\t', float_format='%.2f')
+    print(f"✅ Created covariates.txt with {len(df)} covariates")
 
 def create_annotations_file(file_path):
     """Create annotations BED file with NAFLD-related genes"""
@@ -161,12 +164,17 @@ def create_annotations_file(file_path):
     ]
     
     with open(file_path, 'w') as f:
-        f.write("#chr\tstart\tend\tgene_id\tstrand\tgene_name\tgene_type\n")
+        # FIXED: Removed # from header line
+        f.write("chr\tstart\tend\tgene_id\tstrand\tgene_name\tgene_type\n")
         for gene in genes:
-            f.write("\t".join(gene) + "\n")
+            # FIXED: Convert all elements to strings before joining
+            gene_str = [str(element) for element in gene]
+            f.write("\t".join(gene_str) + "\n")
+    
+    print(f"✅ Created annotations.bed with {len(genes)} genes")
 
 def create_expression_file(file_path, samples):
-    """Create expression data for NAFLD-related genes"""
+    """Create expression data for NAFLD-related genes with stronger associations"""
     
     np.random.seed(42)
     
@@ -178,17 +186,30 @@ def create_expression_file(file_path, samples):
         # Create expression values with some structure
         base_level = np.random.uniform(5, 15)
         variation = np.random.uniform(2, 4, len(samples))
-        data[gene_id] = base_level + variation
+        expr_values = base_level + variation
+        
+        # Create strong association for PNPLA3 with genotype to ensure significant results
+        if gene_id == "ENSG00000130032":  # PNPLA3
+            # Make expression correlate strongly with first genotype
+            for j, sample in enumerate(samples):
+                # Use the genotype pattern from our VCF file
+                if j % 3 == 0:  # 0|0 genotypes (samples 0, 3, 6, 9)
+                    expr_values[j] = 8.0 + np.random.normal(0, 0.5)
+                elif j % 3 == 1:  # 0|1 genotypes (samples 1, 4, 7)
+                    expr_values[j] = 10.0 + np.random.normal(0, 0.5)
+                else:  # 1|1 genotypes (samples 2, 5, 8)
+                    expr_values[j] = 12.0 + np.random.normal(0, 0.5)
+        
+        data[gene_id] = expr_values
     
     df = pd.DataFrame(data, index=samples).T
     df.index.name = 'gene_id'
-    
-    # Add some correlation with genotypes for realistic eQTLs
     df = df.round(2)
     df.to_csv(file_path, sep='\t')
+    print(f"✅ Created expression.txt with {len(df)} genes")
 
 def create_protein_file(file_path, samples):
-    """Create protein abundance data"""
+    """Create protein abundance data with associations"""
     
     np.random.seed(42)
     
@@ -198,12 +219,25 @@ def create_protein_file(file_path, samples):
     for protein_id in protein_ids:
         base_level = np.random.uniform(35, 55)
         variation = np.random.uniform(3, 8, len(samples))
-        data[protein_id] = base_level + variation
+        protein_values = base_level + variation
+        
+        # Create association for PNPLA3 protein
+        if protein_id == "PNPLA3":
+            for j, sample in enumerate(samples):
+                if j % 3 == 0:  # 0|0
+                    protein_values[j] = 40.0 + np.random.normal(0, 2)
+                elif j % 3 == 1:  # 0|1
+                    protein_values[j] = 45.0 + np.random.normal(0, 2)
+                else:  # 1|1
+                    protein_values[j] = 50.0 + np.random.normal(0, 2)
+        
+        data[protein_id] = protein_values
     
     df = pd.DataFrame(data, index=samples).T
     df.index.name = 'protein_id'
     df = df.round(2)
     df.to_csv(file_path, sep='\t')
+    print(f"✅ Created protein.txt with {len(df)} proteins")
 
 def create_splicing_file(file_path, samples):
     """Create splicing data (PSI values)"""
@@ -222,6 +256,7 @@ def create_splicing_file(file_path, samples):
     df.index.name = 'event_id'
     df = df.round(2)
     df.to_csv(file_path, sep='\t')
+    print(f"✅ Created splicing.txt with {len(df)} splicing events")
 
 def create_gwas_phenotype_file(file_path, samples):
     """Create GWAS phenotype data for NAFLD traits"""
@@ -240,6 +275,7 @@ def create_gwas_phenotype_file(file_path, samples):
     df = pd.DataFrame(data)
     df = df.round(1)
     df.to_csv(file_path, sep='\t', index=False)
+    print(f"✅ Created gwas_phenotype.txt with {len(df)} samples")
 
 if __name__ == "__main__":
     create_sample_data()

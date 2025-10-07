@@ -25,12 +25,26 @@ class QTLPlotter:
         
     def setup_plotting_style(self):
         """Setup matplotlib and seaborn style"""
-        style = self.plot_config.get('style', 'seaborn')
+        style = self.plot_config.get('style', 'default')
         try:
-            plt.style.use(style)
-        except:
+            if style == 'seaborn':
+                try:
+                    # Try to import seaborn
+                    import seaborn as sns
+                    sns.set_theme(style="whitegrid")
+                    self.using_seaborn = True
+                    logger.info("✅ Using seaborn style")
+                except ImportError:
+                    plt.style.use('default')
+                    self.using_seaborn = False
+                    logger.info("⚠️ Seaborn not available, using default style")
+            else:
+                plt.style.use(style)
+                self.using_seaborn = False
+        except Exception as e:
             plt.style.use('default')
-            logger.warning(f"Plot style {style} not found, using default")
+            self.using_seaborn = False
+            logger.info(f"⚠️ Style {style} not found, using default: {e}")
         
         # Set color palette
         colors = self.plot_config.get('colors', {})

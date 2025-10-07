@@ -1,4 +1,4 @@
-#chr	start	end	gene_id	strand	gene_name	gene_type
+chr	start	end	gene_id	strand	gene_name	gene_type
 chr19	1045000	1055000	ENSG00000130032	+	PNPLA3	protein_coding
 chr19	1058000	1068000	ENSG00000130024	-	TM6SF2	protein_coding
 chr19	1072000	1082000	ENSG00000130018	+	MBOAT7	protein_coding

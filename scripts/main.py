@@ -206,33 +206,34 @@ class QTLPipeline:
                     cis_result = qtl_analysis.run_cis_analysis(
                         self.config, vcf_gz, qtl_type, self.qtl_results_dir
                     )
-                    results[qtl_type]['cis'] = {
-                        'status': 'completed',
-                        'result_file': cis_result['result_file'],
-                        'nominals_file': cis_result['nominals_file'],
-                        'significant_count': cis_result['significant_count']
-                    }
-                    self.logger.info(f"✅ {qtl_type.upper()} cis completed: {cis_result['significant_count']} significant")
+                    results[qtl_type]['cis'] = cis_result
+                    status_msg = "✅" if cis_result['status'] == 'completed' else "❌"
+                    self.logger.info(f"{status_msg} {qtl_type.upper()} cis: {cis_result.get('significant_count', 0)} significant")
                 
-                # Run trans-QTL if requested
+                # Run trans-QTL if requested  
                 if qtl_mode in ['trans', 'both']:
                     trans_result = qtl_analysis.run_trans_analysis(
                         self.config, vcf_gz, qtl_type, self.qtl_results_dir
                     )
-                    results[qtl_type]['trans'] = {
-                        'status': 'completed', 
-                        'result_file': trans_result['result_file'],
-                        'significant_count': trans_result['significant_count']
-                    }
-                    self.logger.info(f"✅ {qtl_type.upper()} trans completed: {trans_result['significant_count']} significant")
+                    results[qtl_type]['trans'] = trans_result
+                    status_msg = "✅" if trans_result['status'] == 'completed' else "❌"
+                    self.logger.info(f"{status_msg} {qtl_type.upper()} trans: {trans_result.get('significant_count', 0)} significant")
                     
             except Exception as e:
                 self.logger.error(f"❌ {qtl_type.upper()} failed: {e}")
                 if 'cis' not in results[qtl_type]:
-                    results[qtl_type]['cis'] = {'status': 'failed', 'error': str(e)}
+                    results[qtl_type]['cis'] = {
+                        'status': 'failed', 
+                        'error': str(e),
+                        'significant_count': 0
+                    }
                 if 'trans' not in results[qtl_type] and qtl_mode in ['trans', 'both']:
-                    results[qtl_type]['trans'] = {'status': 'failed', 'error': str(e)}
-                
+                    results[qtl_type]['trans'] = {
+                        'status': 'failed', 
+                        'error': str(e),
+                        'significant_count': 0
+                    }
+                    
         return results
         
     def run_gwas_analysis(self, vcf_gz):

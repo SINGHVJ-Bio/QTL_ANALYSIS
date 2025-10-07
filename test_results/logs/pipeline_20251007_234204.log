@@ -1,0 +1,66 @@
+2025-10-07 23:42:04,728 - QTLPipeline - INFO - 🚀 QTL Analysis Pipeline Started
+2025-10-07 23:42:04,728 - QTLPipeline - INFO - 📁 Results directory: test_results
+2025-10-07 23:42:04,728 - QTLPipeline - INFO - 🔧 Analysis mode: cis
+2025-10-07 23:42:04,728 - QTLPipeline - INFO - 📋 Step 1: Validating inputs...
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 🧬 Step 2: Preparing genotype data...
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 🔧 Preparing genotype data with enhanced processing...
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 🔧 Processing genotype file: data/genotypes.vcf
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 📊 Input file size: 0.00 GB
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 📁 Detected input format: vcf
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - Executing: Compressing VCF file
+2025-10-07 23:42:04,878 - QTLPipeline - INFO - ✅ Compressing VCF file completed successfully
+2025-10-07 23:42:04,878 - QTLPipeline - INFO - 🔧 Applying filter_variants...
+2025-10-07 23:42:04,878 - QTLPipeline - INFO - Executing: Filtering variants
+2025-10-07 23:42:04,889 - QTLPipeline - INFO - ✅ Filtering variants completed successfully
+2025-10-07 23:42:04,889 - QTLPipeline - INFO - Executing: Indexing filtered VCF
+2025-10-07 23:42:04,897 - QTLPipeline - INFO - ✅ Indexing filtered VCF completed successfully
+2025-10-07 23:42:04,897 - QTLPipeline - INFO - 🔧 Applying handle_multiallelic...
+2025-10-07 23:42:04,897 - QTLPipeline - INFO - Executing: Splitting multi-allelic sites
+2025-10-07 23:42:04,909 - QTLPipeline - INFO - ✅ Splitting multi-allelic sites completed successfully
+2025-10-07 23:42:04,909 - QTLPipeline - INFO - Executing: Indexing biallelic VCF
+2025-10-07 23:42:04,917 - QTLPipeline - INFO - ✅ Indexing biallelic VCF completed successfully
+2025-10-07 23:42:04,917 - QTLPipeline - INFO - 🔧 Applying normalize_chromosomes...
+2025-10-07 23:42:04,917 - QTLPipeline - INFO - Executing: Adding 'chr' prefix to chromosomes
+2025-10-07 23:42:04,930 - QTLPipeline - INFO - ✅ Adding 'chr' prefix to chromosomes completed successfully
+2025-10-07 23:42:04,930 - QTLPipeline - INFO - Executing: Indexing chromosome-normalized VCF
+2025-10-07 23:42:04,939 - QTLPipeline - INFO - ✅ Indexing chromosome-normalized VCF completed successfully
+2025-10-07 23:42:04,939 - QTLPipeline - INFO - 🔧 Applying remove_phasing...
+2025-10-07 23:42:04,939 - QTLPipeline - INFO - Executing: Removing phasing information
+2025-10-07 23:42:04,951 - QTLPipeline - INFO - ✅ Removing phasing information completed successfully
+2025-10-07 23:42:04,951 - QTLPipeline - INFO - Executing: Indexing unphased VCF
+2025-10-07 23:42:04,960 - QTLPipeline - INFO - ✅ Indexing unphased VCF completed successfully
+2025-10-07 23:42:04,960 - QTLPipeline - INFO - 🔧 Applying remove_duplicates...
+2025-10-07 23:42:04,961 - QTLPipeline - INFO - Executing: Removing duplicate variants
+2025-10-07 23:42:04,971 - QTLPipeline - INFO - ✅ Removing duplicate variants completed successfully
+2025-10-07 23:42:04,972 - QTLPipeline - INFO - Executing: Indexing deduplicated VCF
+2025-10-07 23:42:04,979 - QTLPipeline - INFO - ✅ Indexing deduplicated VCF completed successfully
+2025-10-07 23:42:04,979 - QTLPipeline - INFO - 📊 Generating QC reports...
+2025-10-07 23:42:04,980 - QTLPipeline - INFO - Executing: Generating VCF statistics
+2025-10-07 23:42:04,991 - QTLPipeline - INFO - ✅ Generating VCF statistics completed successfully
+2025-10-07 23:42:04,991 - QTLPipeline - INFO - Executing: Counting samples
+2025-10-07 23:42:05,003 - QTLPipeline - INFO - ✅ Counting samples completed successfully
+2025-10-07 23:42:05,003 - QTLPipeline - INFO - Executing: Counting variants
+2025-10-07 23:42:05,015 - QTLPipeline - INFO - ✅ Counting variants completed successfully
+2025-10-07 23:42:05,015 - QTLPipeline - INFO - ✅ QC reports generated
+2025-10-07 23:42:05,015 - QTLPipeline - INFO - Executing: Creating final genotype file
+2025-10-07 23:42:05,021 - QTLPipeline - INFO - ✅ Creating final genotype file completed successfully
+2025-10-07 23:42:05,021 - QTLPipeline - INFO - Executing: Copying index file
+2025-10-07 23:42:05,026 - QTLPipeline - INFO - ✅ Copying index file completed successfully
+2025-10-07 23:42:05,027 - QTLPipeline - INFO - 🔍 Validating VCF file structure...
+2025-10-07 23:42:05,027 - QTLPipeline - INFO - Executing: Validating VCF header
+2025-10-07 23:42:05,038 - QTLPipeline - INFO - ✅ VCF validation completed successfully
+2025-10-07 23:42:05,039 - QTLPipeline - INFO - Executing: Counting final variants
+2025-10-07 23:42:05,051 - QTLPipeline - INFO - Executing: Counting final samples
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - 📊 Final genotype data: 10 variants, 10 samples
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - ✅ Genotype processing completed: test_results/genotype_processing/final_genotypes.vcf.gz
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - ✅ Genotype preparation completed: test_results/genotype_processing/final_genotypes.vcf.gz
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - 🔍 Step 3: Running QTL analyses...
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - 📈 Step 5: Generating plots...
+2025-10-07 23:42:05,064 - QTLPipeline - INFO - ✅ Using seaborn style
+2025-10-07 23:42:05,064 - QTLPipeline - WARNING - ⚠️ No completed analyses for summary plot
+2025-10-07 23:42:05,254 - QTLPipeline - INFO - 💾 Saved plot: significance_comparison.png
+2025-10-07 23:42:05,254 - QTLPipeline - INFO - 📝 Step 6: Generating reports...
+2025-10-07 23:42:05,254 - QTLPipeline - INFO - 📄 HTML report generated: test_results/reports/analysis_report.html
+2025-10-07 23:42:05,254 - QTLPipeline - INFO - 📋 Summary report generated: test_results/pipeline_summary.txt
+2025-10-07 23:42:05,255 - QTLPipeline - INFO - 💾 Results metadata saved: test_results/results_metadata.json
+2025-10-07 23:42:05,255 - QTLPipeline - INFO - ✅ Pipeline completed successfully in 0:00:00.529653

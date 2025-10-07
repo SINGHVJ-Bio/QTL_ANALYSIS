@@ -1,0 +1,240 @@
+[0;32m
+╔══════════════════════════════════════════════════════════════╗
+║                   QTL Analysis Pipeline                      ║
+║                 Complete cis/trans Mapping                  ║
+╚══════════════════════════════════════════════════════════════╝
+[0m
+[0;36m[STEP][0m 🚀 Starting Enhanced QTL Analysis Pipeline
+[0;36m[STEP][0m Configuration Summary:
+[0;34m[INFO][0m Project root:    /Users/singhvj/QTL_ANALYSIS
+[0;34m[INFO][0m Data directory:  data
+[0;34m[INFO][0m Output directory: test_results
+[0;34m[INFO][0m Config file:     config/test_config.yaml
+[0;34m[INFO][0m Analysis types:  all
+[0;34m[INFO][0m QTL mode:        cis
+[0;34m[INFO][0m GWAS analysis:   false
+[0;34m[INFO][0m Validate only:   false
+[0;34m[INFO][0m Debug mode:      true
+[0;34m[INFO][0m Date:            Tue  7 Oct 2025 23:42:00 +08
+[0;36m[STEP][0m Checking system requirements...
+[0;32m[SUCCESS][0m All required tools are available
+[0;34m[INFO][0m Tool versions:
+[0;34m[INFO][0m   qtltools: 
+version unknown
+[0;34m[INFO][0m   bgzip: bgzip (htslib) 1.22.1
+[0;34m[INFO][0m   tabix: tabix (htslib) 1.22.1
+[0;34m[INFO][0m   bcftools: bcftools 1.22
+[0;34m[INFO][0m   python3: Python 3.13.7
+[0;36m[STEP][0m Checking Python dependencies...
+[0;32m[SUCCESS][0m All Python dependencies are available
+[0;36m[STEP][0m Setting up data directory structure...
+[0;34m[INFO][0m Checking data files...
+[0;34m[INFO][0m ✅ Found genotypes files
+[0;34m[INFO][0m ✅ Found covariates files
+[0;34m[INFO][0m ✅ Found annotations files
+[0;36m[STEP][0m Running comprehensive input validation...
+2025-10-07 23:42:02,977 - DEBUG - matplotlib data path: /Users/singhvj/miniconda3/lib/python3.13/site-packages/matplotlib/mpl-data
+2025-10-07 23:42:02,979 - DEBUG - CONFIGDIR=/Users/singhvj/.matplotlib
+2025-10-07 23:42:02,980 - DEBUG - interactive is False
+2025-10-07 23:42:02,980 - DEBUG - platform is darwin
+2025-10-07 23:42:03,006 - DEBUG - CACHEDIR=/Users/singhvj/.matplotlib
+2025-10-07 23:42:03,007 - DEBUG - Using fontManager instance from /Users/singhvj/.matplotlib/fontlist-v390.json
+2025-10-07 23:42:03,556 - QTLPipeline - INFO - 🚀 QTL Analysis Pipeline Started
+2025-10-07 23:42:03,556 - QTLPipeline - INFO - 📁 Results directory: test_results
+2025-10-07 23:42:03,556 - QTLPipeline - INFO - 🔧 Analysis mode: cis
+🔍 Running comprehensive input validation...
+🔍 Starting comprehensive input validation...
+✅ Found genotypes file: data/genotypes.vcf
+📁 Detected genotype format: vcf
+✅ Found 10 samples in genotype file
+✅ Found 10 variants in genotype file
+✅ Found covariates file: data/covariates.txt
+✅ Covariates: 10 covariates, 10 samples
+✅ Found annotations file: data/annotations.bed
+✅ Annotations: 10 features
+✅ Found qtltools: qtltools
+✅ Found bcftools: bcftools 1.22
+✅ Found bgzip: bgzip (htslib) 1.22.1
+✅ Found tabix: tabix (htslib) 1.22.1
+✅ Found plink: plink
+✅ Found R: R
+✅ Genotype samples: 10
+✅ Covariate samples: 10
+✅ Genotype-covariate overlap: 10 samples (100.0%)
+
+🎉 All inputs validated successfully!
+✅ All inputs validated successfully!
+[0;32m[SUCCESS][0m Input validation completed successfully
+[0;36m[STEP][0m Starting QTL analysis pipeline...
+[0;34m[INFO][0m Running: python3 /Users/singhvj/QTL_ANALYSIS/run_QTLPipeline.py --config config/test_config.yaml --output-dir test_results --debug
+2025-10-07 23:42:04,152 - DEBUG - matplotlib data path: /Users/singhvj/miniconda3/lib/python3.13/site-packages/matplotlib/mpl-data
+2025-10-07 23:42:04,154 - DEBUG - CONFIGDIR=/Users/singhvj/.matplotlib
+2025-10-07 23:42:04,155 - DEBUG - interactive is False
+2025-10-07 23:42:04,155 - DEBUG - platform is darwin
+2025-10-07 23:42:04,183 - DEBUG - CACHEDIR=/Users/singhvj/.matplotlib
+2025-10-07 23:42:04,184 - DEBUG - Using fontManager instance from /Users/singhvj/.matplotlib/fontlist-v390.json
+2025-10-07 23:42:04,728 - QTLPipeline - INFO - 🚀 QTL Analysis Pipeline Started
+2025-10-07 23:42:04,728 - QTLPipeline - INFO - 📁 Results directory: test_results
+2025-10-07 23:42:04,728 - QTLPipeline - INFO - 🔧 Analysis mode: cis
+🚀 Starting QTL Analysis Pipeline...
+2025-10-07 23:42:04,728 - QTLPipeline - INFO - 📋 Step 1: Validating inputs...
+🔍 Starting comprehensive input validation...
+✅ Found genotypes file: data/genotypes.vcf
+📁 Detected genotype format: vcf
+✅ Found 10 samples in genotype file
+✅ Found 10 variants in genotype file
+✅ Found covariates file: data/covariates.txt
+✅ Covariates: 10 covariates, 10 samples
+✅ Found annotations file: data/annotations.bed
+✅ Annotations: 10 features
+✅ Found qtltools: qtltools
+✅ Found bcftools: bcftools 1.22
+✅ Found bgzip: bgzip (htslib) 1.22.1
+✅ Found tabix: tabix (htslib) 1.22.1
+✅ Found plink: plink
+✅ Found R: R
+✅ Genotype samples: 10
+✅ Covariate samples: 10
+✅ Genotype-covariate overlap: 10 samples (100.0%)
+
+🎉 All inputs validated successfully!
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 🧬 Step 2: Preparing genotype data...
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 🔧 Preparing genotype data with enhanced processing...
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 🔧 Processing genotype file: data/genotypes.vcf
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 📊 Input file size: 0.00 GB
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - 📁 Detected input format: vcf
+2025-10-07 23:42:04,868 - QTLPipeline - INFO - Executing: Compressing VCF file
+2025-10-07 23:42:04,878 - QTLPipeline - INFO - ✅ Compressing VCF file completed successfully
+2025-10-07 23:42:04,878 - QTLPipeline - INFO - 🔧 Applying filter_variants...
+2025-10-07 23:42:04,878 - QTLPipeline - INFO - Executing: Filtering variants
+2025-10-07 23:42:04,889 - QTLPipeline - INFO - ✅ Filtering variants completed successfully
+2025-10-07 23:42:04,889 - QTLPipeline - INFO - Executing: Indexing filtered VCF
+2025-10-07 23:42:04,897 - QTLPipeline - INFO - ✅ Indexing filtered VCF completed successfully
+2025-10-07 23:42:04,897 - QTLPipeline - INFO - 🔧 Applying handle_multiallelic...
+2025-10-07 23:42:04,897 - QTLPipeline - INFO - Executing: Splitting multi-allelic sites
+2025-10-07 23:42:04,909 - QTLPipeline - INFO - ✅ Splitting multi-allelic sites completed successfully
+2025-10-07 23:42:04,909 - QTLPipeline - INFO - Executing: Indexing biallelic VCF
+2025-10-07 23:42:04,917 - QTLPipeline - INFO - ✅ Indexing biallelic VCF completed successfully
+2025-10-07 23:42:04,917 - QTLPipeline - INFO - 🔧 Applying normalize_chromosomes...
+2025-10-07 23:42:04,917 - QTLPipeline - INFO - Executing: Adding 'chr' prefix to chromosomes
+2025-10-07 23:42:04,930 - QTLPipeline - INFO - ✅ Adding 'chr' prefix to chromosomes completed successfully
+2025-10-07 23:42:04,930 - QTLPipeline - INFO - Executing: Indexing chromosome-normalized VCF
+2025-10-07 23:42:04,939 - QTLPipeline - INFO - ✅ Indexing chromosome-normalized VCF completed successfully
+2025-10-07 23:42:04,939 - QTLPipeline - INFO - 🔧 Applying remove_phasing...
+2025-10-07 23:42:04,939 - QTLPipeline - INFO - Executing: Removing phasing information
+2025-10-07 23:42:04,951 - QTLPipeline - INFO - ✅ Removing phasing information completed successfully
+2025-10-07 23:42:04,951 - QTLPipeline - INFO - Executing: Indexing unphased VCF
+2025-10-07 23:42:04,960 - QTLPipeline - INFO - ✅ Indexing unphased VCF completed successfully
+2025-10-07 23:42:04,960 - QTLPipeline - INFO - 🔧 Applying remove_duplicates...
+2025-10-07 23:42:04,961 - QTLPipeline - INFO - Executing: Removing duplicate variants
+2025-10-07 23:42:04,971 - QTLPipeline - INFO - ✅ Removing duplicate variants completed successfully
+2025-10-07 23:42:04,972 - QTLPipeline - INFO - Executing: Indexing deduplicated VCF
+2025-10-07 23:42:04,979 - QTLPipeline - INFO - ✅ Indexing deduplicated VCF completed successfully
+2025-10-07 23:42:04,979 - QTLPipeline - INFO - 📊 Generating QC reports...
+2025-10-07 23:42:04,980 - QTLPipeline - INFO - Executing: Generating VCF statistics
+2025-10-07 23:42:04,991 - QTLPipeline - INFO - ✅ Generating VCF statistics completed successfully
+2025-10-07 23:42:04,991 - QTLPipeline - INFO - Executing: Counting samples
+2025-10-07 23:42:05,003 - QTLPipeline - INFO - ✅ Counting samples completed successfully
+2025-10-07 23:42:05,003 - QTLPipeline - INFO - Executing: Counting variants
+2025-10-07 23:42:05,015 - QTLPipeline - INFO - ✅ Counting variants completed successfully
+2025-10-07 23:42:05,015 - QTLPipeline - INFO - ✅ QC reports generated
+2025-10-07 23:42:05,015 - QTLPipeline - INFO - Executing: Creating final genotype file
+2025-10-07 23:42:05,021 - QTLPipeline - INFO - ✅ Creating final genotype file completed successfully
+2025-10-07 23:42:05,021 - QTLPipeline - INFO - Executing: Copying index file
+2025-10-07 23:42:05,026 - QTLPipeline - INFO - ✅ Copying index file completed successfully
+2025-10-07 23:42:05,027 - QTLPipeline - INFO - 🔍 Validating VCF file structure...
+2025-10-07 23:42:05,027 - QTLPipeline - INFO - Executing: Validating VCF header
+2025-10-07 23:42:05,038 - QTLPipeline - INFO - ✅ VCF validation completed successfully
+2025-10-07 23:42:05,039 - QTLPipeline - INFO - Executing: Counting final variants
+2025-10-07 23:42:05,051 - QTLPipeline - INFO - Executing: Counting final samples
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - 📊 Final genotype data: 10 variants, 10 samples
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - ✅ Genotype processing completed: test_results/genotype_processing/final_genotypes.vcf.gz
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - ✅ Genotype preparation completed: test_results/genotype_processing/final_genotypes.vcf.gz
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - 🔍 Step 3: Running QTL analyses...
+2025-10-07 23:42:05,063 - QTLPipeline - INFO - 📈 Step 5: Generating plots...
+2025-10-07 23:42:05,064 - QTLPipeline - INFO - ✅ Using seaborn style
+2025-10-07 23:42:05,064 - QTLPipeline - WARNING - ⚠️ No completed analyses for summary plot
+2025-10-07 23:42:05,254 - QTLPipeline - INFO - 💾 Saved plot: significance_comparison.png
+2025-10-07 23:42:05,254 - QTLPipeline - INFO - 📝 Step 6: Generating reports...
+2025-10-07 23:42:05,254 - QTLPipeline - INFO - 📄 HTML report generated: test_results/reports/analysis_report.html
+2025-10-07 23:42:05,254 - QTLPipeline - INFO - 📋 Summary report generated: test_results/pipeline_summary.txt
+2025-10-07 23:42:05,255 - QTLPipeline - INFO - 💾 Results metadata saved: test_results/results_metadata.json
+2025-10-07 23:42:05,255 - QTLPipeline - INFO - ✅ Pipeline completed successfully in 0:00:00.529653
+
+================================================================================
+🎉 QTL ANALYSIS PIPELINE COMPLETED SUCCESSFULLY!
+================================================================================
+📁 Results Directory: test_results
+📊 Analysis Mode:     cis
+⏱️  Total Runtime:     0:00:00.529685
+
+📈 ANALYSIS SUMMARY
+--------------------------------------------------------------------------------
+QTL Results:
+
+📋 OUTPUT FILES
+--------------------------------------------------------------------------------
+📄 HTML Report:      test_results/reports/analysis_report.html
+📊 Plots Directory:  test_results/plots/
+📈 Results:          test_results/QTL_results/
+📝 Logs:             test_results/logs/
+📋 Summary:          test_results/pipeline_summary.txt
+
+💡 NEXT STEPS
+--------------------------------------------------------------------------------
+1. Review the HTML report for comprehensive results
+2. Check generated plots in the plots directory
+3. Examine detailed results in QTL_results directory
+4. Review logs for any warnings or additional information
+================================================================================
+[0;32m[SUCCESS][0m ✅ QTL analysis pipeline completed successfully
+[0;36m[STEP][0m Generating final reports...
+[0;32m[SUCCESS][0m HTML report: test_results/reports/analysis_report.html
+[0;32m[SUCCESS][0m Summary report: test_results/pipeline_summary.txt
+[0;34m[INFO][0m Output directory structure:
+test_results
+├── genotype_processing
+│   ├── biallelic.vcf.gz
+│   ├── biallelic.vcf.gz.tbi
+│   ├── chrom_normalized.vcf.gz
+│   ├── chrom_normalized.vcf.gz.tbi
+│   ├── deduplicated.vcf.gz
+│   ├── deduplicated.vcf.gz.tbi
+│   ├── filtered.vcf.gz
+│   ├── filtered.vcf.gz.tbi
+│   ├── final_genotypes.vcf.gz
+│   ├── final_genotypes.vcf.gz.tbi
+│   ├── sample_count.txt
+│   ├── standardized.vcf.gz
+│   ├── unphased.vcf.gz
+│   ├── unphased.vcf.gz.tbi
+│   ├── variant_count.txt
+│   └── vcf_stats.txt
+├── GWAS_results
+├── logs
+│   ├── pipeline_20251007_234203.log
+│   └── pipeline_20251007_234204.log
+├── pipeline_summary.txt
+├── pipeline.log
+├── plots
+│   └── significance_comparison.png
+├── QC_reports
+├── QTL_results
+├── reports
+│   └── analysis_report.html
+├── results_metadata.json
+└── temp
+
+9 directories, 23 files
+[0;36m[STEP][0m 🎉 PIPELINE COMPLETED SUCCESSFULLY!
+[0;34m[INFO][0m Results available in: test_results
+[0;34m[INFO][0m Log file: test_results/pipeline.log
+[0;34m[INFO][0m HTML report: test_results/reports/analysis_report.html
+[0;34m[INFO][0m Summary: test_results/pipeline_summary.txt
+
+[0;36m[STEP][0m 📋 NEXT STEPS:
+[0;34m[INFO][0m 1. Review the HTML report: test_results/reports/analysis_report.html
+[0;34m[INFO][0m 2. Check generated plots: test_results/plots/
+[0;34m[INFO][0m 3. Examine detailed results: test_results/QTL_results/
+[0;34m[INFO][0m 4. Review logs for any warnings: test_results/logs/
+[0;32m[SUCCESS][0m Pipeline completed successfully

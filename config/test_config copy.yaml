@@ -11,7 +11,7 @@ input_files:
   expression: "data/expression.txt"
   protein: "data/protein.txt"
   splicing: "data/splicing.txt"
-  gwas_phenotype: "data/gwas_phenotype.txt"
+  # gwas_phenotype: "data/gwas_phenotype.txt"  # Commented out since PLINK is missing
 
 # Genotype processing (optimized for test data)
 genotype_processing:
@@ -48,7 +48,7 @@ genotype_processing:
 analysis:
   qtl_types: "all"  # Test all QTL types
   qtl_mode: "cis"   # Test cis-QTL only for speed
-  run_gwas: false    # Test GWAS as well
+  run_gwas: false   # Disabled since PLINK is missing
 
 # QTL parameters (optimized for test data)
 qtl:
@@ -59,13 +59,6 @@ qtl:
   min_maf: 0.1
   min_call_rate: 0.8
 
-# GWAS parameters
-gwas:
-  method: "linear"
-  covariates: true
-  maf_threshold: 0.1
-  imputation: "mean"
-
 # Tool paths
 paths:
   qtltools: "qtltools"
@@ -73,7 +66,7 @@ paths:
   bgzip: "bgzip"
   tabix: "tabix"
   python: "python3"
-  plink: "plink"
+  # plink: "plink"  # Commented out since not available
 
 # Plotting configuration
 plotting:

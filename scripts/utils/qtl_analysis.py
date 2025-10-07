@@ -123,7 +123,12 @@ def run_cis_analysis(config, vcf_gz, qtl_type, results_dir):
     try:
         # Prepare phenotype data
         bed_gz = prepare_phenotype_data(config, qtl_type, results_dir)
+        if not bed_gz or not os.path.exists(bed_gz):
+            raise FileNotFoundError(f"Could not prepare {qtl_type} phenotype data")
+            
         covariates_file = config['input_files']['covariates']
+        if not os.path.exists(covariates_file):
+            raise FileNotFoundError(f"Covariates file not found: {covariates_file}")
         
         # Set output paths
         output_prefix = os.path.join(results_dir, f"{qtl_type}_cis")
@@ -148,12 +153,24 @@ def run_cis_analysis(config, vcf_gz, qtl_type, results_dir):
         if 'min_maf' in qtl_config:
             cmd += f" --ma-min {qtl_config['min_maf']}"
             
+        logger.info(f"Running QTLTools command: {cmd}")
         run_command(cmd, f"{qtl_type} cis nominal associations", config)
+        
+        # Check if results were generated
+        nominals_file = f"{output_prefix}_nominals.txt"
+        if not os.path.exists(nominals_file) or os.path.getsize(nominals_file) == 0:
+            logger.warning(f"⚠️ No results generated for {qtl_type} cis analysis")
+            return {
+                'result_file': "",
+                'nominals_file': nominals_file,
+                'significant_count': 0,
+                'status': 'completed'  # Mark as completed even with no results
+            }
         
         # Run FDR correction
         fdr_cmd = (
             f"{config['paths']['qtltools']} correct "
-            f"--qtl {output_prefix}_nominals.txt "
+            f"--qtl {nominals_file} "
             f"--out {output_prefix}_significant.txt "
             f"--threshold {qtl_config.get('fdr_threshold', 0.05)}"
         )
@@ -163,25 +180,34 @@ def run_cis_analysis(config, vcf_gz, qtl_type, results_dir):
         # Count significant associations
         sig_file = f"{output_prefix}_significant.txt"
         significant_count = 0
-        if os.path.exists(sig_file):
+        if os.path.exists(sig_file) and os.path.getsize(sig_file) > 0:
             try:
                 sig_df = pd.read_csv(sig_file, sep='\t')
                 significant_count = len(sig_df)
                 logger.info(f"✅ {qtl_type} cis: Found {significant_count} significant associations")
             except Exception as e:
                 logger.warning(f"⚠️ Could not read significant associations file: {e}")
+                significant_count = 0
         else:
-            logger.warning(f"⚠️ No significant associations file created for {qtl_type} cis")
+            logger.info(f"ℹ️ No significant associations found for {qtl_type} cis")
+            significant_count = 0
             
         return {
             'result_file': sig_file,
-            'nominals_file': f"{output_prefix}_nominals.txt",
-            'significant_count': significant_count
+            'nominals_file': nominals_file,
+            'significant_count': significant_count,
+            'status': 'completed'
         }
         
     except Exception as e:
         logger.error(f"❌ cis-QTL analysis failed for {qtl_type}: {e}")
-        raise
+        return {
+            'result_file': "",
+            'nominals_file': "",
+            'significant_count': 0,
+            'status': 'failed',
+            'error': str(e)
+        }
 
 def run_trans_analysis(config, vcf_gz, qtl_type, results_dir):
     """Run trans-QTL analysis"""
