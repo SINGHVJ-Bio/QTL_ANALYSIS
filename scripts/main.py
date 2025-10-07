@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced Main QTL Analysis Pipeline with comprehensive genotype processing
+Enhanced Main QTL Analysis Pipeline with cis/trans capabilities
 """
 
 import os
@@ -37,49 +37,68 @@ class QTLPipeline:
                 config = yaml.safe_load(f)
             
             # Validate mandatory fields
-            if 'results_dir' not in config:
-                raise ValueError("'results_dir' must be specified in the config file")
-            
-            if 'input_files' not in config:
-                raise ValueError("'input_files' must be specified in the config file")
+            mandatory_fields = ['results_dir', 'input_files']
+            for field in mandatory_fields:
+                if field not in config:
+                    raise ValueError(f"'{field}' must be specified in the config file")
             
             mandatory_inputs = ['genotypes', 'covariates', 'annotations']
             for input_file in mandatory_inputs:
                 if input_file not in config['input_files']:
                     raise ValueError(f"'{input_file}' must be specified in 'input_files'")
             
-            # Set defaults for genotype processing
+            # Set comprehensive defaults
             config.setdefault('genotype_processing', {})
-            config['genotype_processing'].setdefault('auto_detect_format', True)
-            config['genotype_processing'].setdefault('filter_variants', True)
-            config['genotype_processing'].setdefault('normalize_chromosomes', True)
-            config['genotype_processing'].setdefault('handle_multiallelic', True)
-            config['genotype_processing'].setdefault('remove_phasing', True)
+            processing_defaults = {
+                'auto_detect_format': True,
+                'filter_variants': True,
+                'normalize_chromosomes': True,
+                'handle_multiallelic': True,
+                'remove_phasing': True,
+                'min_maf': 0.01,
+                'min_call_rate': 0.95
+            }
+            for key, value in processing_defaults.items():
+                config['genotype_processing'].setdefault(key, value)
             
-            # Set defaults for other sections
+            # Analysis defaults
             config.setdefault('analysis', {})
             config['analysis'].setdefault('qtl_types', 'all')
+            config['analysis'].setdefault('qtl_mode', 'cis')
             config['analysis'].setdefault('run_gwas', False)
             
+            # QTL defaults
             config.setdefault('qtl', {})
-            config['qtl'].setdefault('cis_window', 1000000)
-            config['qtl'].setdefault('permutations', 1000)
-            config['qtl'].setdefault('fdr_threshold', 0.05)
+            qtl_defaults = {
+                'cis_window': 1000000,
+                'permutations': 1000,
+                'fdr_threshold': 0.05,
+                'maf_threshold': 0.05,
+                'min_maf': 0.01,
+                'min_call_rate': 0.95
+            }
+            for key, value in qtl_defaults.items():
+                config['qtl'].setdefault(key, value)
             
-            config.setdefault('plotting', {})
-            config['plotting'].setdefault('enabled', True)
+            # Other section defaults
+            config.setdefault('plotting', {'enabled': True})
+            config.setdefault('output', {'generate_report': True})
+            config.setdefault('qc', {'check_sample_concordance': True})
+            config.setdefault('performance', {'num_threads': 4})
             
-            config.setdefault('output', {})
-            config['output'].setdefault('generate_report', True)
-            
-            # Set default tool paths
+            # Tool paths
             config.setdefault('paths', {})
-            config['paths'].setdefault('qtltools', 'qtltools')
-            config['paths'].setdefault('bcftools', 'bcftools')
-            config['paths'].setdefault('bgzip', 'bgzip')
-            config['paths'].setdefault('tabix', 'tabix')
-            config['paths'].setdefault('python', 'python3')
-            config['paths'].setdefault('plink', 'plink')
+            tool_defaults = {
+                'qtltools': 'qtltools',
+                'bcftools': 'bcftools', 
+                'bgzip': 'bgzip',
+                'tabix': 'tabix',
+                'python': 'python3',
+                'plink': 'plink',
+                'R': 'R'
+            }
+            for key, value in tool_defaults.items():
+                config['paths'].setdefault(key, value)
             
             return config
             
@@ -88,27 +107,34 @@ class QTLPipeline:
             raise
             
     def setup_directories(self):
-        """Create directory structure inside results_dir"""
+        """Create comprehensive directory structure"""
         self.results_dir = self.config['results_dir']
+        
         directories = {
-            'logs': os.path.join(self.results_dir, "logs"),
-            'temp': os.path.join(self.results_dir, "temp"),
-            'plots': os.path.join(self.results_dir, "plots"),
-            'qtl_results': os.path.join(self.results_dir, "qtl_results"),
-            'gwas_results': os.path.join(self.results_dir, "gwas_results"),
-            'reports': os.path.join(self.results_dir, "reports"),
-            'genotype_processing': os.path.join(self.results_dir, "genotype_processing")
+            'logs': "logs",
+            'temp': "temp", 
+            'plots': "plots",
+            'qtl_results': "QTL_results",
+            'gwas_results': "GWAS_results",
+            'reports': "reports",
+            'genotype_processing': "genotype_processing",
+            'qc_reports': "QC_reports"
         }
         
         for name, path in directories.items():
-            setattr(self, f"{name}_dir", path)
-            Path(path).mkdir(parents=True, exist_ok=True)
+            full_path = os.path.join(self.results_dir, path)
+            setattr(self, f"{name}_dir", full_path)
+            Path(full_path).mkdir(parents=True, exist_ok=True)
             
     def setup_logging(self):
-        """Setup comprehensive logging configuration"""
+        """Setup comprehensive logging"""
         timestamp = self.start_time.strftime("%Y%m%d_%H%M%S")
         log_file = os.path.join(self.logs_dir, f"pipeline_{timestamp}.log")
         
+        # Clear any existing handlers
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+            
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -117,22 +143,24 @@ class QTLPipeline:
                 logging.StreamHandler(sys.stdout)
             ]
         )
+        
         self.logger = logging.getLogger('QTLPipeline')
-        self.logger.info(f"🚀 Pipeline started at {self.start_time}")
+        self.logger.info("🚀 QTL Analysis Pipeline Started")
         self.logger.info(f"📁 Results directory: {self.results_dir}")
+        self.logger.info(f"🔧 Analysis mode: {self.config['analysis'].get('qtl_mode', 'cis')}")
         
     def run_pipeline(self):
         """Execute the complete analysis pipeline"""
         try:
-            # Step 1: Validate inputs
+            # Step 1: Comprehensive input validation
             self.logger.info("📋 Step 1: Validating inputs...")
             validation.validate_inputs(self.config)
             
-            # Step 2: Prepare genotype data with pre-processing
-            self.logger.info("🧬 Step 2: Preparing genotype data with pre-processing...")
+            # Step 2: Prepare genotype data with enhanced processing
+            self.logger.info("🧬 Step 2: Preparing genotype data...")
             vcf_gz = qtl_analysis.prepare_genotypes(self.config, self.results_dir)
             
-            # Step 3: Run QTL analyses
+            # Step 3: Run QTL analyses (cis/trans/both)
             self.logger.info("🔍 Step 3: Running QTL analyses...")
             qtl_results = self.run_qtl_analyses(vcf_gz)
             self.results['qtl'] = qtl_results
@@ -143,16 +171,16 @@ class QTLPipeline:
                 gwas_results = self.run_gwas_analysis(vcf_gz)
                 self.results['gwas'] = gwas_results
             
-            # Step 5: Generate plots
+            # Step 5: Generate comprehensive plots
             if self.config['plotting'].get('enabled', True):
                 self.logger.info("📈 Step 5: Generating plots...")
                 self.generate_plots()
             
-            # Step 6: Generate reports
+            # Step 6: Generate detailed reports
             self.logger.info("📝 Step 6: Generating reports...")
             self.generate_reports()
             
-            # Calculate runtime
+            # Calculate and log runtime
             runtime = datetime.now() - self.start_time
             self.logger.info(f"✅ Pipeline completed successfully in {runtime}")
             
@@ -163,30 +191,47 @@ class QTLPipeline:
             raise
             
     def run_qtl_analyses(self, vcf_gz):
-        """Run all specified QTL analyses"""
+        """Run QTL analyses based on configuration"""
         qtl_types = self.get_qtl_types()
+        qtl_mode = self.config['analysis'].get('qtl_mode', 'cis')
         results = {}
         
         for qtl_type in qtl_types:
-            self.logger.info(f"🔬 Running {qtl_type.upper()} analysis...")
+            self.logger.info(f"🔬 Running {qtl_type.upper()} analysis ({qtl_mode})...")
+            results[qtl_type] = {}
+            
             try:
-                result = qtl_analysis.run_qtl_analysis(
-                    self.config, vcf_gz, qtl_type, self.qtl_results_dir
-                )
-                results[qtl_type] = {
-                    'status': 'completed',
-                    'result_file': result['result_file'],
-                    'nominals_file': result['nominals_file'],
-                    'significant_count': result['significant_count']
-                }
-                self.logger.info(f"✅ {qtl_type.upper()} completed: {result['significant_count']} significant associations")
+                # Run cis-QTL if requested
+                if qtl_mode in ['cis', 'both']:
+                    cis_result = qtl_analysis.run_cis_analysis(
+                        self.config, vcf_gz, qtl_type, self.qtl_results_dir
+                    )
+                    results[qtl_type]['cis'] = {
+                        'status': 'completed',
+                        'result_file': cis_result['result_file'],
+                        'nominals_file': cis_result['nominals_file'],
+                        'significant_count': cis_result['significant_count']
+                    }
+                    self.logger.info(f"✅ {qtl_type.upper()} cis completed: {cis_result['significant_count']} significant")
                 
+                # Run trans-QTL if requested
+                if qtl_mode in ['trans', 'both']:
+                    trans_result = qtl_analysis.run_trans_analysis(
+                        self.config, vcf_gz, qtl_type, self.qtl_results_dir
+                    )
+                    results[qtl_type]['trans'] = {
+                        'status': 'completed', 
+                        'result_file': trans_result['result_file'],
+                        'significant_count': trans_result['significant_count']
+                    }
+                    self.logger.info(f"✅ {qtl_type.upper()} trans completed: {trans_result['significant_count']} significant")
+                    
             except Exception as e:
                 self.logger.error(f"❌ {qtl_type.upper()} failed: {e}")
-                results[qtl_type] = {
-                    'status': 'failed',
-                    'error': str(e)
-                }
+                if 'cis' not in results[qtl_type]:
+                    results[qtl_type]['cis'] = {'status': 'failed', 'error': str(e)}
+                if 'trans' not in results[qtl_type] and qtl_mode in ['trans', 'both']:
+                    results[qtl_type]['trans'] = {'status': 'failed', 'error': str(e)}
                 
         return results
         
@@ -210,11 +255,15 @@ class QTLPipeline:
             }
             
     def get_qtl_types(self):
-        """Parse and validate QTL types"""
+        """Parse and validate QTL types from config"""
         config_types = self.config['analysis']['qtl_types']
         
         if config_types == 'all':
-            return ['eqtl', 'pqtl', 'sqtl']
+            available_types = []
+            for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
+                if qtl_type in self.config['input_files'] and self.config['input_files'][qtl_type]:
+                    available_types.append(qtl_type)
+            return available_types
         elif isinstance(config_types, str):
             return [t.strip() for t in config_types.split(',')]
         elif isinstance(config_types, list):
@@ -229,8 +278,10 @@ class QTLPipeline:
         # Generate QTL plots
         if 'qtl' in self.results:
             for qtl_type, result in self.results['qtl'].items():
-                if result['status'] == 'completed':
-                    plotter.create_qtl_plots(qtl_type, result)
+                if 'cis' in result and result['cis']['status'] == 'completed':
+                    plotter.create_cis_plots(qtl_type, result['cis'])
+                if 'trans' in result and result['trans']['status'] == 'completed':
+                    plotter.create_trans_plots(qtl_type, result['trans'])
         
         # Generate GWAS plots
         if 'gwas' in self.results and self.results['gwas']['status'] == 'completed':
@@ -245,7 +296,8 @@ class QTLPipeline:
             'results': self.results,
             'config': self.config,
             'runtime': str(datetime.now() - self.start_time),
-            'timestamp': self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+            'timestamp': self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            'results_dir': self.results_dir
         }
         
         # Generate HTML report
@@ -262,5 +314,5 @@ class QTLPipeline:
         # Save results metadata
         metadata_file = os.path.join(self.results_dir, "results_metadata.json")
         with open(metadata_file, 'w') as f:
-            json.dump(self.results, f, indent=2)
+            json.dump(self.results, f, indent=2, default=str)
         self.logger.info(f"💾 Results metadata saved: {metadata_file}")

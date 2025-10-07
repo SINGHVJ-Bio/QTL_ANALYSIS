@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 QTL Analysis Pipeline - Main Runner Script
-Located in root directory for easy access
+Complete pipeline for cis/trans QTL analysis with comprehensive reporting
 """
 
 import os
@@ -22,7 +22,7 @@ def setup_logging():
 def main():
     """Main runner function"""
     parser = argparse.ArgumentParser(
-        description='QTL Analysis Pipeline Runner',
+        description='QTL Analysis Pipeline Runner - Complete cis/trans QTL analysis',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -30,26 +30,38 @@ Examples:
   python run_QTLPipeline.py --config config/config.yaml
 
   # Run specific QTL types only
-  python run_QTLPipeline.py --config config/config.yaml --analysis-types eqtl,pqtl
+  python run_QTLPipeline.py --config config/config.yaml --qtl-types eqtl,pqtl
 
-  # Run with GWAS analysis enabled
-  python run_QTLPipeline.py --config config/config.yaml --run-gwas
+  # Run only cis-QTL analysis
+  python run_QTLPipeline.py --config config/config.yaml --qtl-mode cis
 
-  # Run only eQTL analysis
-  python run_QTLPipeline.py --config config/config.yaml --analysis-types eqtl
+  # Run only trans-QTL analysis  
+  python run_QTLPipeline.py --config config/config.yaml --qtl-mode trans
 
-  # Validate inputs only without running analysis
+  # Run both cis and trans
+  python run_QTLPipeline.py --config config/config.yaml --qtl-mode both
+
+  # Validate inputs only
   python run_QTLPipeline.py --config config/config.yaml --validate-only
+
+  # Run with custom output directory
+  python run_QTLPipeline.py --config config/config.yaml --output-dir my_results
         """
     )
     parser.add_argument('--config', required=True, 
                        help='Path to configuration file (YAML format)')
-    parser.add_argument('--analysis-types', 
-                       help='Override analysis types from config (comma-separated: eqtl,pqtl,sqtl)')
+    parser.add_argument('--qtl-types', 
+                       help='Override QTL types from config (comma-separated: eqtl,pqtl,sqtl)')
+    parser.add_argument('--qtl-mode', choices=['cis', 'trans', 'both'],
+                       help='Override QTL mapping mode from config')
+    parser.add_argument('--output-dir',
+                       help='Override results directory from config')
     parser.add_argument('--run-gwas', action='store_true', 
                        help='Enable GWAS analysis (overrides config setting)')
     parser.add_argument('--validate-only', action='store_true',
                        help='Only validate inputs, do not run analysis')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug mode with detailed logging')
     
     args = parser.parse_args()
     
@@ -58,54 +70,72 @@ Examples:
         print(f"❌ Error: Config file not found: {args.config}")
         sys.exit(1)
     
+    # Set debug level if requested
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
     # Add scripts directory to Python path
     script_dir = Path(__file__).parent / "scripts"
     sys.path.insert(0, str(script_dir))
     
     try:
-        from main import QTLPipeline
+        # Import after adding scripts to path
+        from scripts.main import QTLPipeline
         
         # Initialize pipeline
         pipeline = QTLPipeline(args.config)
         
         # Override settings from command line
-        if args.analysis_types:
-            pipeline.config['analysis']['qtl_types'] = args.analysis_types
+        if args.qtl_types:
+            analysis_types = [atype.strip() for atype in args.qtl_types.split(',')]
+            pipeline.config['analysis']['qtl_types'] = analysis_types
         
+        if args.qtl_mode:
+            pipeline.config['analysis']['qtl_mode'] = args.qtl_mode
+            
+        if args.output_dir:
+            pipeline.config['results_dir'] = args.output_dir
+            # Recreate directories with new path
+            pipeline.setup_directories()
+            
         if args.run_gwas:
             pipeline.config['analysis']['run_gwas'] = True
             
         if args.validate_only:
-            # Only run validation
-            print("🔍 Running input validation only...")
-            from utils.validation import validate_inputs
+            from scripts.utils.validation import validate_inputs
+            print("🔍 Running comprehensive input validation...")
             validate_inputs(pipeline.config)
-            print("✅ Validation completed successfully!")
+            print("✅ All inputs validated successfully!")
             return
         
         # Run the complete pipeline
+        print("🚀 Starting QTL Analysis Pipeline...")
         results = pipeline.run_pipeline()
         
-        # Print success summary
-        print("\n" + "="*70)
+        # Print comprehensive success summary
+        print("\n" + "="*80)
         print("🎉 QTL ANALYSIS PIPELINE COMPLETED SUCCESSFULLY!")
-        print("="*70)
+        print("="*80)
         print(f"📁 Results Directory: {pipeline.results_dir}")
-        print(f"📊 Plots Directory:   {pipeline.plots_dir}")
-        print(f"📋 Reports Directory: {pipeline.reports_dir}")
-        print(f"📝 Logs Directory:    {pipeline.logs_dir}")
-        print(f"⏱️  Total Runtime:    {datetime.now() - pipeline.start_time}")
+        print(f"📊 Analysis Mode:     {pipeline.config['analysis'].get('qtl_mode', 'cis')}")
+        print(f"⏱️  Total Runtime:     {datetime.now() - pipeline.start_time}")
         
-        # Print analysis summary
+        # Print detailed analysis summary
         print("\n" + "📈 ANALYSIS SUMMARY")
-        print("-" * 70)
+        print("-" * 80)
         
         if 'qtl' in results:
             print("QTL Results:")
             for qtl_type, result in results['qtl'].items():
-                status = "✅ COMPLETED" if result['status'] == 'completed' else "❌ FAILED"
-                count = result.get('significant_count', 0) if result['status'] == 'completed' else 'N/A'
-                print(f"  {qtl_type.upper():<8} {status:<15} Significant: {count}")
+                if 'cis' in result:
+                    cis_status = "✅" if result['cis']['status'] == 'completed' else "❌"
+                    cis_count = result['cis'].get('significant_count', 0) if result['cis']['status'] == 'completed' else 'N/A'
+                    print(f"  {qtl_type.upper():<8} CIS:  {cis_status} Significant: {cis_count}")
+                
+                if 'trans' in result:
+                    trans_status = "✅" if result['trans']['status'] == 'completed' else "❌"  
+                    trans_count = result['trans'].get('significant_count', 0) if result['trans']['status'] == 'completed' else 'N/A'
+                    print(f"  {qtl_type.upper():<8} TRANS: {trans_status} Significant: {trans_count}")
                 
         if 'gwas' in results:
             gwas_result = results['gwas']
@@ -114,13 +144,26 @@ Examples:
             method = gwas_result.get('method', 'N/A')
             print(f"GWAS Analysis: {status} (Method: {method}, Significant: {count})")
             
-        print("\n" + "📋 NEXT STEPS")
-        print("-" * 70)
-        print(f"1. View the HTML report: {pipeline.reports_dir}/analysis_report.html")
-        print(f"2. Check generated plots: {pipeline.plots_dir}/")
-        print(f"3. Review detailed logs: {pipeline.logs_dir}/")
-        print("="*70)
+        print("\n" + "📋 OUTPUT FILES")
+        print("-" * 80)
+        print(f"📄 HTML Report:      {pipeline.reports_dir}/analysis_report.html")
+        print(f"📊 Plots Directory:  {pipeline.plots_dir}/")
+        print(f"📈 Results:          {pipeline.qtl_results_dir}/")
+        print(f"📝 Logs:             {pipeline.logs_dir}/")
+        print(f"📋 Summary:          {pipeline.results_dir}/pipeline_summary.txt")
         
+        print("\n" + "💡 NEXT STEPS")
+        print("-" * 80)
+        print("1. Review the HTML report for comprehensive results")
+        print("2. Check generated plots in the plots directory") 
+        print("3. Examine detailed results in QTL_results directory")
+        print("4. Review logs for any warnings or additional information")
+        print("="*80)
+        
+    except ImportError as e:
+        logging.error(f"❌ Import error - make sure all dependencies are installed: {e}")
+        print("\n💡 Install required packages: pip install -r requirements.txt")
+        sys.exit(1)
     except Exception as e:
         logging.error(f"❌ Pipeline execution failed: {e}")
         sys.exit(1)

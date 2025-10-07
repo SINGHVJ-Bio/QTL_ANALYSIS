@@ -1,0 +1,74 @@
+# Complete QTL Analysis Configuration with Reference Genome
+results_dir: "results_with_reference"
+
+# Input files
+input_files:
+  genotypes: "data/genotypes.vcf.gz"
+  covariates: "data/covariates.txt"
+  annotations: "data/annotations.bed"
+  expression: "data/expression.txt"
+  protein: "data/protein.txt"
+  splicing: "data/splicing.txt"
+
+# Genotype processing with reference genome
+genotype_processing:
+  # Reference genome configuration
+  reference_genome: "/path/to/reference/genome.fa"  # REQUIRED for indel normalization
+  # reference_genome: "data/hg38.fa"  # Example with relative path
+  
+  # Basic processing
+  auto_detect_format: true
+  output_format: "vcf.gz"
+  normalize_chromosomes: true
+  chromosome_prefix: "chr"
+  
+  # Variant filtering
+  filter_variants: true
+  min_maf: 0.01
+  min_call_rate: 0.95
+  quality_threshold: 30
+  
+  # Multi-allelic sites
+  handle_multiallelic: true
+  multiallelic_action: "split"
+  
+  # Advanced normalization (require reference genome)
+  normalize_indels: true    # Requires reference genome
+  remove_duplicates: true
+  left_align_variants: true # Requires reference genome
+  
+  # Other options
+  remove_phasing: true
+  match_samples: true
+
+# Analysis configuration
+analysis:
+  qtl_types: "all"
+  qtl_mode: "cis"
+  run_gwas: false
+
+# QTL parameters
+qtl:
+  cis_window: 1000000
+  permutations: 1000
+  maf_threshold: 0.05
+  fdr_threshold: 0.05
+
+# Tool paths
+paths:
+  qtltools: "qtltools"
+  bcftools: "bcftools"
+  bgzip: "bgzip"
+  tabix: "tabix"
+  python: "python3"
+  plink: "plink"
+
+# Output settings
+output:
+  generate_report: true
+  compression: true
+
+# Quality control
+qc:
+  check_sample_concordance: true
+  filter_low_expressed: true

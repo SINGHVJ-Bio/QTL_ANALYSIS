@@ -1,15 +1,15 @@
-# QTL Analysis Pipeline - Complete Configuration
-# ==============================================
-# This configuration file controls all aspects of the QTL analysis pipeline.
-# All paths can be absolute or relative to the project root.
+# QTL Analysis Pipeline Configuration for Shell Script
+# Optimized for command-line usage with shell script
+# ==================================================
 
-# MANDATORY: Results directory where all output will be stored
+# MANDATORY: Results directory (can be overridden by -o option)
 results_dir: "results"
 
 # MANDATORY: Input files section
+# Note: Data files should be in the directory specified by -d option
 input_files:
   # Genotype file - supports VCF, VCF.GZ, BCF, PLINK BED formats
-  genotypes: "data/genotypes.vcf"
+  genotypes: "data/genotypes.vcf.gz"
   
   # Covariates file (tab-separated)
   covariates: "data/covariates.txt"
@@ -17,26 +17,27 @@ input_files:
   # Annotation file (BED format)
   annotations: "data/annotations.bed"
   
-  # Phenotype files
+  # Phenotype files (optional - only required for analyses you run)
   expression: "data/expression.txt"
   protein: "data/protein.txt"
   splicing: "data/splicing.txt"
 
 # Genotype pre-processing configuration
 genotype_processing:
+  # Reference genome configuration (optional)
+  # Uncomment and provide path to enable advanced features
+  # reference_genome: ""  # e.g., "reference/hg38.fa"
+  # reference_genome_index: ""  # e.g., "reference/hg38.fa.fai"
+  
   # Basic processing
   auto_detect_format: true
   output_format: "vcf.gz"
-  
-  # Reference genome configuration
-  reference_genome: ""  # Path to reference genome FASTA file
-  reference_genome_index: ""  # Path to reference genome index (.fai)
   
   # Chromosome naming normalization
   normalize_chromosomes: true
   chromosome_prefix: "auto"  # "chr", "none", "auto"
   
-  # Variant filtering
+  # Variant filtering (recommended for quality control)
   filter_variants: true
   min_maf: 0.01
   min_call_rate: 0.95
@@ -58,25 +59,25 @@ genotype_processing:
   sample_matching_method: "exact"
 
 # Analysis configuration
+# These can be overridden by command-line options
 analysis:
-  # QTL analysis types
+  # QTL types to run (can be overridden by -a option)
   qtl_types: "all"  # "all", "eqtl", "pqtl", "sqtl" or comma-separated list
   
-  # QTL mapping mode
+  # QTL mapping mode (can be overridden by -m option)
   qtl_mode: "cis"  # "cis", "trans", "both"
   
-  # GWAS analysis
+  # GWAS analysis (can be overridden by -g option)
   run_gwas: false
   gwas_phenotype: "data/gwas_phenotype.txt"
 
 # QTL analysis parameters
 qtl:
-  # Cis-window size (for cis-QTL)
-  cis_window: 1000000
+  # Cis-window size for cis-QTL analysis
+  cis_window: 1000000  # 1 Mb window
   
-  # Trans analysis parameters (if mode is trans or both)
-  trans_chunk_size: 100
-  trans_window: 5000000
+  # Trans analysis parameters
+  trans_window: 5000000  # 5 Mb window for trans-QTL
   
   # Statistical parameters
   permutations: 1000
@@ -84,12 +85,6 @@ qtl:
   fdr_threshold: 0.05
   min_maf: 0.01
   min_call_rate: 0.95
-  
-  # Performance tuning
-  chunk_size: 100
-  num_permutations: 1000
-  run_nominal: true
-  run_permutations: true
 
 # GWAS analysis parameters (only used if analysis.run_gwas is true)
 gwas:
@@ -115,14 +110,14 @@ plotting:
   format: "png"
   style: "seaborn"
   
-  # Color scheme
+  # Color scheme for plots
   colors:
     primary: "#2E86AB"
     secondary: "#A23B72"
     significant: "#F18F01"
     nonsignificant: "#C5C5C5"
   
-  # Plot types
+  # Plot types to generate
   plot_types:
     - "manhattan"
     - "qq"
@@ -163,7 +158,7 @@ performance:
   temp_dir: "temp"
   cleanup_temp: true
 
-# Advanced settings (for experienced users)
+# Advanced settings
 advanced:
   debug_mode: false
   save_logs: true
