@@ -2,6 +2,7 @@
 """
 QTL Analysis Pipeline - Main Runner Script - Enhanced Version
 Complete pipeline for cis/trans QTL analysis with comprehensive reporting
+With proper normalization strategies per QTL type
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
@@ -57,6 +58,9 @@ Examples:
 
   # Run with performance tuning
   python run_QTLPipeline.py --config config/config.yaml --threads 8 --memory 16
+
+  # Override normalization methods
+  python run_QTLPipeline.py --config config/config.yaml --eqtl-norm vst --pqtl-norm log2 --sqtl-norm log2
         """
     )
     parser.add_argument('--config', required=True, 
@@ -83,6 +87,14 @@ Examples:
                        help='Only validate inputs, do not run analysis')
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug mode with detailed logging')
+    
+    # Normalization override arguments
+    parser.add_argument('--eqtl-norm', choices=['vst', 'log2', 'quantile', 'tpm', 'raw'],
+                       help='Override eQTL normalization method')
+    parser.add_argument('--pqtl-norm', choices=['log2', 'quantile', 'zscore', 'raw'],
+                       help='Override pQTL normalization method')
+    parser.add_argument('--sqtl-norm', choices=['log2', 'arcsinh', 'zscore', 'raw'],
+                       help='Override sQTL normalization method')
     
     args = parser.parse_args()
     
@@ -136,6 +148,19 @@ Examples:
             
         if args.memory:
             pipeline.config['performance']['memory_gb'] = args.memory
+        
+        # Override normalization methods if specified
+        if args.eqtl_norm:
+            pipeline.config['normalization']['eqtl']['method'] = args.eqtl_norm
+            print(f"✅ Overriding eQTL normalization: {args.eqtl_norm}")
+            
+        if args.pqtl_norm:
+            pipeline.config['normalization']['pqtl']['method'] = args.pqtl_norm
+            print(f"✅ Overriding pQTL normalization: {args.pqtl_norm}")
+            
+        if args.sqtl_norm:
+            pipeline.config['normalization']['sqtl']['method'] = args.sqtl_norm
+            print(f"✅ Overriding sQTL normalization: {args.sqtl_norm}")
             
         if args.validate_only:
             from scripts.utils.validation import validate_inputs
@@ -143,6 +168,15 @@ Examples:
             validate_inputs(pipeline.config)
             print("✅ All inputs validated successfully!")
             return
+        
+        # Print normalization settings
+        print("\n🔧 Normalization Configuration:")
+        print("=" * 40)
+        for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
+            if qtl_type in pipeline.config['normalization']:
+                method = pipeline.config['normalization'][qtl_type]['method']
+                print(f"   {qtl_type.upper():<6}: {method}")
+        print("=" * 40)
         
         # Run the complete pipeline
         print("🚀 Starting Enhanced QTL Analysis Pipeline...")
@@ -167,6 +201,14 @@ Examples:
         print(f"📁 Results Directory: {pipeline.results_dir}")
         print(f"📊 Analysis Mode:     {pipeline.config['analysis'].get('qtl_mode', 'cis')}")
         print(f"⏱️  Total Runtime:     {datetime.now() - pipeline.start_time}")
+        
+        # Print normalization summary
+        print("\n🔧 Normalization Methods Used:")
+        print("-" * 40)
+        for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
+            if qtl_type in pipeline.config['normalization']:
+                method = pipeline.config['normalization'][qtl_type]['method']
+                print(f"   {qtl_type.upper():<6}: {method}")
         
         # Print detailed analysis summary
         print("\n" + "📈 ANALYSIS SUMMARY")
@@ -238,6 +280,7 @@ Examples:
         print("   - scikit-learn: for PCA analysis")
         print("   - plotly: for interactive plots")
         print("   - statsmodels: for statistical models")
+        print("   - DESeq2 (R package): for VST normalization")
         sys.exit(1)
     except Exception as e:
         logging.error(f"❌ Pipeline execution failed: {e}")

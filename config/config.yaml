@@ -1,7 +1,6 @@
 # QTL Analysis Pipeline - Complete Configuration
+# Optimized for QTLtools with proper normalization strategies
 # ==============================================
-# This configuration file controls all aspects of the QTL analysis pipeline.
-# All paths can be absolute or relative to the project root.
 
 # MANDATORY: Results directory where all output will be stored
 results_dir: "results"
@@ -21,6 +20,43 @@ input_files:
   expression: "data/expression.txt"
   protein: "data/protein.txt"
   splicing: "data/splicing.txt"
+
+# Large dataset configuration
+large_data:
+  min_memory_gb: 16
+  min_disk_gb: 50
+  command_timeout: 7200
+  process_by_chromosome: true
+  force_plink: true
+  monitor_resources: true
+  cache_intermediate: true
+
+# Normalization configuration per QTL type
+normalization:
+  # eQTL normalization options
+  eqtl:
+    method: "vst"  # "vst", "log2", "quantile", "tpm", "raw"
+    vst_blind: true
+    fit_type: "parametric"
+    use_deseq2: true
+    
+  # pQTL normalization options  
+  pqtl:
+    method: "log2"  # "log2", "quantile", "zscore", "raw"
+    log2_pseudocount: 1
+    remove_zeros: true
+    
+  # sQTL normalization options
+  sqtl:
+    method: "log2"  # "log2", "arcsinh", "zscore", "raw"
+    log2_pseudocount: 1
+    psi_range: [0, 1]  # PSI values range
+    
+  # Global normalization settings
+  global:
+    remove_constant_features: true
+    constant_threshold: 0.95
+    missing_value_threshold: 0.2
 
 # Genotype pre-processing configuration
 genotype_processing:
@@ -56,6 +92,9 @@ genotype_processing:
   remove_phasing: true
   match_samples: true
   sample_matching_method: "exact"
+  
+  # QTLtools-specific optimizations
+  prefer_plink: true  # Use PLINK format for better performance with QTLtools
 
 # Analysis configuration
 analysis:
@@ -69,12 +108,12 @@ analysis:
   run_gwas: false
   gwas_phenotype: "data/gwas_phenotype.txt"
 
-# QTL analysis parameters
+# QTLtools-specific analysis parameters
 qtl:
-  # Cis-window size (for cis-QTL)
+  # QTLtools cis-window size
   cis_window: 1000000
   
-  # Trans analysis parameters (if mode is trans or both)
+  # Trans analysis parameters
   trans_chunk_size: 100
   trans_window: 5000000
   
@@ -85,11 +124,25 @@ qtl:
   min_maf: 0.01
   min_call_rate: 0.95
   
-  # Performance tuning
+  # QTLtools performance tuning
   chunk_size: 100
   num_permutations: 1000
   run_nominal: true
   run_permutations: true
+  
+  # QTLtools specific options
+  normal: true  # Use normal approximation for permutations
+  bootstrap: false  # Use bootstrap instead of permutations
+  seed: 12345  # Random seed for reproducibility
+  group: "genes"  # Group by genes for FDR correction
+  
+  # Conditional analysis
+  run_conditional: false
+  conditional_method: "nominal"  # "nominal", "permutation"
+  
+  # Interaction analysis via QTLtools
+  run_interaction: false
+  interaction_covariate: ""  # Specific covariate for interaction
 
 # GWAS analysis parameters (only used if analysis.run_gwas is true)
 gwas:
@@ -98,9 +151,10 @@ gwas:
   maf_threshold: 0.01
   imputation: "mean"  # "mean", "median", "drop"
 
-# Enhanced QC configuration
+# Enhanced QC configuration with QTLtools compatibility
 enhanced_qc:
   enable: true
+  generate_normalization_plots: true 
   sample_missingness_threshold: 0.1
   variant_missingness_threshold: 0.1
   hwe_threshold: 1e-6
@@ -110,13 +164,18 @@ enhanced_qc:
   batch_effect_correction: true
   expression_normalization: true
   outlier_detection: true
+  
+  # QTLtools PCA options
+  pca_covariates: true  # Include PCs as covariates
+  num_pc_covariates: 5  # Number of PCs to include as covariates
 
-# Interaction analysis
+# Interaction analysis using QTLtools
 interaction_analysis:
   enable: false
   interaction_covariates: ["age", "sex", "bmi"]
   fdr_threshold: 0.1
-  method: "linear"
+  method: "nominal"  # QTLtools method: "nominal", "permutation"
+  window: 1000000  # Window for interaction analysis
 
 # Fine-mapping configuration
 fine_mapping:
@@ -127,13 +186,14 @@ fine_mapping:
 
 # Paths to tools (use default if in PATH)
 paths:
-  qtltools: "qtltools"
+  qtltools: "QTLtools"
   bcftools: "bcftools"
   bgzip: "bgzip"
   tabix: "tabix"
   python: "python3"
   plink: "plink"
   R: "R"
+  r_script_deseq2: "scripts/utils/deseq2_vst.R"
 
 # Plotting configuration
 plotting:
@@ -158,7 +218,6 @@ plotting:
     - "summary"
     - "locuszoom"
     - "heatmap"
-    - "interactive"
 
 # Output settings
 output:
@@ -170,6 +229,12 @@ output:
   create_summary: true
   interactive_reports: true
   generate_methods_section: true
+  
+  # QTLtools output options
+  save_nominal: true
+  save_permutations: true
+  save_interactions: false
+  save_conditional: false
 
 # Quality control settings
 qc:
@@ -188,14 +253,19 @@ qc:
   variant_missingness_threshold: 0.1
   hwe_threshold: 1e-6
 
-# Performance settings
+# Performance settings optimized for QTLtools
 performance:
-  num_threads: 4
-  memory_gb: 8
+  num_threads: 8
+  memory_gb: 32
   temp_dir: "temp"
   cleanup_temp: true
   parallel_processing: true
   chunk_size: 1000
+  
+  # QTLtools-specific performance
+  qtltools_threads: 4
+  qtltools_memory: "16G"
+  split_by_chromosome: true
 
 # Advanced settings (for experienced users)
 advanced:
@@ -204,3 +274,8 @@ advanced:
   validate_outputs: true
   strict_mode: true
   benchmark: true
+  
+  # QTLtools advanced options
+  qtltools_debug: false
+  dry_run: false
+  resume: false  # Resume from previous run

@@ -1,72 +1,131 @@
-# Test Configuration for NAFLD QTL Analysis Pipeline
-# This configuration uses the sample data provided
+# QTL Analysis Pipeline - Complete Configuration
+# ==============================================
+# This configuration file controls all aspects of the QTL analysis pipeline.
+# All paths can be absolute or relative to the project root.
 
+# MANDATORY: Results directory where all output will be stored
 results_dir: "test_results"
 
-# Input files
+# MANDATORY: Input files section
 input_files:
+  # Genotype file - supports VCF, VCF.GZ, BCF, PLINK BED formats
   genotypes: "data/genotypes.vcf"
+  
+  # Covariates file (tab-separated)
   covariates: "data/covariates.txt"
+  
+  # Annotation file (BED format)
   annotations: "data/annotations.bed"
+  
+  # Phenotype files
   expression: "data/expression.txt"
   protein: "data/protein.txt"
   splicing: "data/splicing.txt"
-  gwas_phenotype: "data/gwas_phenotype.txt"
 
-# Genotype processing (optimized for test data)
+# Genotype pre-processing configuration
 genotype_processing:
   # Basic processing
   auto_detect_format: true
   output_format: "vcf.gz"
   
-  # Chromosome naming
+  # Reference genome configuration
+  reference_genome: ""  # Path to reference genome FASTA file
+  reference_genome_index: ""  # Path to reference genome index (.fai)
+  
+  # Chromosome naming normalization
   normalize_chromosomes: true
-  chromosome_prefix: "chr"
+  chromosome_prefix: "auto"  # "chr", "none", "auto"
   
-  # Variant filtering (relaxed for test data)
+  # Variant filtering
   filter_variants: true
-  min_maf: 0.1
-  min_call_rate: 0.8
-  max_missing: 0.2
-  quality_threshold: 20
+  min_maf: 0.01
+  min_call_rate: 0.95
+  max_missing: 0.1
+  quality_threshold: 30
   
-  # Multi-allelic sites
+  # Multi-allelic site handling
   handle_multiallelic: true
-  multiallelic_action: "split"
+  multiallelic_action: "split"  # "split", "drop", "first_alt"
   
-  # Advanced options (disabled for test)
-  normalize_indels: false
+  # Advanced normalization options (require reference genome)
+  normalize_indels: false  # Requires reference genome
   remove_duplicates: true
-  left_align_variants: false
+  left_align_variants: false  # Requires reference genome
   
-  # Other options
+  # Other processing options
   remove_phasing: true
   match_samples: true
   sample_matching_method: "exact"
 
 # Analysis configuration
 analysis:
-  qtl_types: "all"  # Test all QTL types
-  qtl_mode: "cis"   # Test cis-QTL only for speed
-  run_gwas: false    # Test GWAS as well
+  # QTL analysis types
+  qtl_types: "all"  # "all", "eqtl", "pqtl", "sqtl" or comma-separated list
+  
+  # QTL mapping mode
+  qtl_mode: "cis"  # "cis", "trans", "both"
+  
+  # GWAS analysis
+  run_gwas: false
+  gwas_phenotype: "data/gwas_phenotype.txt"
 
-# QTL parameters (optimized for test data)
+# QTL analysis parameters
 qtl:
-  cis_window: 500000  # Smaller window for test data
-  permutations: 100   # Fewer permutations for testing
-  maf_threshold: 0.1
-  fdr_threshold: 0.1  # Relaxed threshold for testing
-  min_maf: 0.1
-  min_call_rate: 0.8
+  # Cis-window size (for cis-QTL)
+  cis_window: 1000000
+  
+  # Trans analysis parameters (if mode is trans or both)
+  trans_chunk_size: 100
+  trans_window: 5000000
+  
+  # Statistical parameters
+  permutations: 1000
+  maf_threshold: 0.05
+  fdr_threshold: 0.05
+  min_maf: 0.01
+  min_call_rate: 0.95
+  
+  # Performance tuning
+  chunk_size: 100
+  num_permutations: 1000
+  run_nominal: true
+  run_permutations: true
 
-# GWAS parameters
+# GWAS analysis parameters (only used if analysis.run_gwas is true)
 gwas:
-  method: "linear"
+  method: "linear"  # "linear", "logistic"
   covariates: true
-  maf_threshold: 0.1
-  imputation: "mean"
+  maf_threshold: 0.01
+  imputation: "mean"  # "mean", "median", "drop"
 
-# Tool paths
+# Enhanced QC configuration
+enhanced_qc:
+  enable: true
+  sample_missingness_threshold: 0.1
+  variant_missingness_threshold: 0.1
+  hwe_threshold: 1e-6
+  maf_threshold: 0.01
+  run_pca: true
+  num_pcs: 10
+  batch_effect_correction: true
+  expression_normalization: true
+  outlier_detection: true
+
+# Interaction analysis
+interaction_analysis:
+  enable: false
+  interaction_covariates: ["age", "sex", "bmi"]
+  fdr_threshold: 0.1
+  method: "linear"
+
+# Fine-mapping configuration
+fine_mapping:
+  enable: false
+  method: "susie"  # "susie", "finemap"
+  credible_set_threshold: 0.95
+  max_causal_variants: 5
+
+# Paths to tools (use default if in PATH)
 paths:
   qtltools: "qtltools"
   bcftools: "bcftools"
@@ -74,42 +133,74 @@ paths:
   tabix: "tabix"
   python: "python3"
   plink: "plink"
+  R: "R"
 
 # Plotting configuration
 plotting:
   enabled: true
-  dpi: 150  # Lower DPI for testing
+  dpi: 300
   format: "png"
   style: "seaborn"
+  
+  # Color scheme
+  colors:
+    primary: "#2E86AB"
+    secondary: "#A23B72"
+    significant: "#F18F01"
+    nonsignificant: "#C5C5C5"
+  
+  # Plot types
   plot_types:
     - "manhattan"
     - "qq"
+    - "volcano"
+    - "distribution"
     - "summary"
+    - "locuszoom"
+    - "heatmap"
+    - "interactive"
 
 # Output settings
 output:
-  compression: false  # Disable compression for easier debugging
+  compression: true
   remove_intermediate: false
   generate_report: true
   report_format: "html"
+  save_plots: true
+  create_summary: true
+  interactive_reports: true
+  generate_methods_section: true
 
-# Quality control
+# Quality control settings
 qc:
   check_sample_concordance: true
   filter_low_expressed: true
-  expression_threshold: 0.05
+  expression_threshold: 0.1
   normalize: true
+  check_maf_distribution: true
+  check_missingness: true
+  
+  # Sample QC
+  sample_missingness_threshold: 0.1
+  sample_heterozygosity_threshold: 3
+  
+  # Variant QC
+  variant_missingness_threshold: 0.1
+  hwe_threshold: 1e-6
 
-# Performance settings (optimized for testing)
+# Performance settings
 performance:
-  num_threads: 2
-  memory_gb: 4
+  num_threads: 4
+  memory_gb: 8
   temp_dir: "temp"
-  cleanup_temp: false
+  cleanup_temp: true
+  parallel_processing: true
+  chunk_size: 1000
 
-# Advanced settings
+# Advanced settings (for experienced users)
 advanced:
-  debug_mode: true  # Enable debug for testing
+  debug_mode: false
   save_logs: true
   validate_outputs: true
-  strict_mode: false  # Relaxed for testing
+  strict_mode: true
+  benchmark: true

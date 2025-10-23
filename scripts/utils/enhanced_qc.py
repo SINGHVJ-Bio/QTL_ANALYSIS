@@ -58,38 +58,49 @@ class EnhancedQC:
         return qc_results
     
     def genotype_qc(self, vcf_file, output_dir):
-        """Comprehensive genotype QC"""
+        """Comprehensive genotype QC using PLINK"""
         logger.info("🔬 Running genotype QC...")
         
         qc_metrics = {}
         
         try:
-            # Sample missingness
-            sample_missingness = self.calculate_sample_missingness(vcf_file)
+            # Convert VCF to PLINK format first
+            plink_base = os.path.join(output_dir, "plink_qc")
+            
+            # Convert VCF to PLINK binary format
+            cmd = f"{self.config['paths']['plink']} --vcf {vcf_file} --make-bed --out {plink_base}"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
+            
+            if result.returncode != 0:
+                logger.warning("VCF to PLINK conversion failed, trying alternative approach")
+                return {}
+            
+            # Sample missingness using PLINK
+            sample_missingness = self.calculate_sample_missingness_plink(plink_base)
             qc_metrics['sample_missingness'] = sample_missingness
             
-            # Variant missingness  
-            variant_missingness = self.calculate_variant_missingness(vcf_file)
+            # Variant missingness using PLINK
+            variant_missingness = self.calculate_variant_missingness_plink(plink_base)
             qc_metrics['variant_missingness'] = variant_missingness
             
-            # MAF distribution
-            maf_distribution = self.calculate_maf_distribution(vcf_file)
+            # MAF distribution using PLINK
+            maf_distribution = self.calculate_maf_distribution_plink(plink_base)
             qc_metrics['maf_distribution'] = maf_distribution
             
-            # HWE testing
-            hwe_results = self.calculate_hwe(vcf_file, output_dir)
+            # HWE testing using PLINK
+            hwe_results = self.calculate_hwe_plink(plink_base, output_dir)
             qc_metrics['hwe'] = hwe_results
             
-            # Sample heterozygosity
-            heterozygosity = self.calculate_heterozygosity(vcf_file)
+            # Sample heterozygosity using PLINK
+            heterozygosity = self.calculate_heterozygosity_plink(plink_base)
             qc_metrics['heterozygosity'] = heterozygosity
             
             # Generate QC plots
             self.plot_genotype_qc(qc_metrics, output_dir)
             
-            # Apply QC filters
-            filtered_vcf = self.apply_genotype_filters(vcf_file, output_dir, qc_metrics)
-            qc_metrics['filtered_file'] = filtered_vcf
+            # Apply QC filters using PLINK
+            filtered_file = self.apply_genotype_filters_plink(plink_base, output_dir, qc_metrics)
+            qc_metrics['filtered_file'] = filtered_file
             
             logger.info("✅ Genotype QC completed")
             return qc_metrics
@@ -98,80 +109,76 @@ class EnhancedQC:
             logger.error(f"❌ Genotype QC failed: {e}")
             return {}
     
-    def calculate_sample_missingness(self, vcf_file):
-        """Calculate sample-level missingness"""
-        logger.info("📊 Calculating sample missingness...")
+    def calculate_sample_missingness_plink(self, plink_base):
+        """Calculate sample-level missingness using PLINK"""
+        logger.info("📊 Calculating sample missingness using PLINK...")
         
         try:
-            # Use bcftools to calculate missingness
-            cmd = f"{self.config['paths']['bcftools']} stats -s - {vcf_file} | grep 'PSC' | head -1000"
+            # Use PLINK to calculate sample missingness
+            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --missing --out {plink_base}_missingness"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
             sample_missingness = {}
-            for line in result.stdout.strip().split('\n'):
-                if line.startswith('PSC'):
-                    parts = line.split('\t')
-                    if len(parts) >= 10:
-                        sample_id = parts[2]
-                        missing_rate = 1 - (int(parts[9]) / (int(parts[9]) + int(parts[8]))) if (int(parts[9]) + int(parts[8])) > 0 else 1.0
+            if result.returncode == 0:
+                # Read PLINK's .imiss file
+                imiss_file = f"{plink_base}_missingness.imiss"
+                if os.path.exists(imiss_file):
+                    df = pd.read_csv(imiss_file, sep='\s+')
+                    for _, row in df.iterrows():
+                        sample_id = row['IID']
+                        missing_rate = row['F_MISS']
                         sample_missingness[sample_id] = missing_rate
             
             return sample_missingness
             
         except Exception as e:
-            logger.warning(f"Could not calculate sample missingness: {e}")
+            logger.warning(f"Could not calculate sample missingness with PLINK: {e}")
             return {}
     
-    def calculate_variant_missingness(self, vcf_file):
-        """Calculate variant-level missingness"""
-        logger.info("📊 Calculating variant missingness...")
+    def calculate_variant_missingness_plink(self, plink_base):
+        """Calculate variant-level missingness using PLINK"""
+        logger.info("📊 Calculating variant missingness using PLINK...")
         
         try:
-            # Use bcftools to get variant statistics
-            cmd = f"{self.config['paths']['bcftools']} query -f '%CHROM:%POS:%REF:%ALT\\t%NS\\n' {vcf_file}"
+            # Use PLINK to calculate variant missingness
+            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --missing --out {plink_base}_missingness"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
-            # Get total samples
-            samples_cmd = f"{self.config['paths']['bcftools']} query -l {vcf_file} | wc -l"
-            samples_result = subprocess.run(samples_cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-            total_samples = int(samples_result.stdout.strip())
-            
             variant_missingness = {}
-            for line in result.stdout.strip().split('\n'):
-                if line:
-                    parts = line.split('\t')
-                    if len(parts) == 2:
-                        variant_id = parts[0]
-                        called_samples = int(parts[1])
-                        missing_rate = 1 - (called_samples / total_samples) if total_samples > 0 else 1.0
+            if result.returncode == 0:
+                # Read PLINK's .lmiss file
+                lmiss_file = f"{plink_base}_missingness.lmiss"
+                if os.path.exists(lmiss_file):
+                    df = pd.read_csv(lmiss_file, sep='\s+')
+                    for _, row in df.iterrows():
+                        variant_id = f"{row['CHR']}:{row['SNP']}"
+                        missing_rate = row['F_MISS']
                         variant_missingness[variant_id] = missing_rate
             
             return variant_missingness
             
         except Exception as e:
-            logger.warning(f"Could not calculate variant missingness: {e}")
+            logger.warning(f"Could not calculate variant missingness with PLINK: {e}")
             return {}
     
-    def calculate_maf_distribution(self, vcf_file):
-        """Calculate MAF distribution"""
-        logger.info("📊 Calculating MAF distribution...")
+    def calculate_maf_distribution_plink(self, plink_base):
+        """Calculate MAF distribution using PLINK"""
+        logger.info("📊 Calculating MAF distribution using PLINK...")
         
         try:
-            # Use bcftools to calculate MAF
-            cmd = f"{self.config['paths']['bcftools']} query -f '%CHROM:%POS:%REF:%ALT\\t%AF\\n' {vcf_file}"
+            # Use PLINK to calculate MAF
+            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --freq --out {plink_base}_maf"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
             maf_values = []
-            for line in result.stdout.strip().split('\n'):
-                if line:
-                    parts = line.split('\t')
-                    if len(parts) == 2:
-                        try:
-                            af = float(parts[1])
-                            maf = min(af, 1-af)
-                            maf_values.append(maf)
-                        except ValueError:
-                            continue
+            if result.returncode == 0:
+                # Read PLINK's .frq file
+                frq_file = f"{plink_base}_maf.frq"
+                if os.path.exists(frq_file):
+                    df = pd.read_csv(frq_file, sep='\s+')
+                    for _, row in df.iterrows():
+                        maf = row['MAF']
+                        maf_values.append(maf)
             
             return {
                 'maf_values': maf_values,
@@ -181,58 +188,68 @@ class EnhancedQC:
             }
             
         except Exception as e:
-            logger.warning(f"Could not calculate MAF distribution: {e}")
+            logger.warning(f"Could not calculate MAF distribution with PLINK: {e}")
             return {'maf_values': [], 'mean_maf': 0, 'median_maf': 0, 'maf_bins': ([], [])}
     
-    def calculate_hwe(self, vcf_file, output_dir):
-        """Calculate Hardy-Weinberg Equilibrium"""
-        logger.info("📊 Calculating HWE...")
+    def calculate_hwe_plink(self, plink_base, output_dir):
+        """Calculate Hardy-Weinberg Equilibrium using PLINK"""
+        logger.info("📊 Calculating HWE using PLINK...")
         
         try:
-            # Use bcftools to filter by HWE
-            temp_file = os.path.join(output_dir, "hwe_temp.vcf")
-            cmd = f"{self.config['paths']['bcftools']} filter -i 'ExcHWE<1e-6' {vcf_file} | {self.config['paths']['bcftools']} view -H | wc -l"
+            # Use PLINK to calculate HWE
+            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --hardy --out {plink_base}_hwe"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
-            hwe_violations = int(result.stdout.strip()) if result.stdout.strip().isdigit() else 0
+            if result.returncode == 0:
+                # Read PLINK's .hwe file
+                hwe_file = f"{plink_base}_hwe.hwe"
+                if os.path.exists(hwe_file):
+                    df = pd.read_csv(hwe_file, sep='\s+')
+                    
+                    # Count violations based on threshold
+                    hwe_threshold = self.qc_config.get('hwe_threshold', 1e-6)
+                    violations = len(df[df['P'] < hwe_threshold])
+                    total_variants = len(df)
+                    
+                    return {
+                        'violations': violations,
+                        'total_variants': total_variants,
+                        'violation_rate': violations / total_variants if total_variants > 0 else 0
+                    }
             
-            # Get total variants
-            total_cmd = f"{self.config['paths']['bcftools']} view -H {vcf_file} | wc -l"
-            total_result = subprocess.run(total_cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-            total_variants = int(total_result.stdout.strip()) if total_result.stdout.strip().isdigit() else 0
-            
-            return {
-                'violations': hwe_violations,
-                'total_variants': total_variants,
-                'violation_rate': hwe_violations / total_variants if total_variants > 0 else 0
-            }
+            return {'violations': 0, 'total_variants': 0, 'violation_rate': 0}
             
         except Exception as e:
-            logger.warning(f"Could not calculate HWE: {e}")
+            logger.warning(f"Could not calculate HWE with PLINK: {e}")
             return {'violations': 0, 'total_variants': 0, 'violation_rate': 0}
     
-    def calculate_heterozygosity(self, vcf_file):
-        """Calculate sample heterozygosity"""
-        logger.info("📊 Calculating heterozygosity...")
+    def calculate_heterozygosity_plink(self, plink_base):
+        """Calculate sample heterozygosity using PLINK"""
+        logger.info("📊 Calculating heterozygosity using PLINK...")
         
         try:
-            # This is a simplified implementation
-            # In practice, you might use PLINK for more accurate heterozygosity calculation
-            cmd = f"{self.config['paths']['bcftools']} query -f '[%GT\\t]\\n' {vcf_file} | head -1000"
+            # Use PLINK to calculate heterozygosity
+            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --het --out {plink_base}_het"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
             heterozygosity = {}
-            samples_cmd = f"{self.config['paths']['bcftools']} query -l {vcf_file}"
-            samples_result = subprocess.run(samples_cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-            samples = [s.strip() for s in samples_result.stdout.split('\n') if s.strip()]
-            
-            for sample in samples:
-                heterozygosity[sample] = np.random.random() * 0.1  # Placeholder
+            if result.returncode == 0:
+                # Read PLINK's .het file
+                het_file = f"{plink_base}_het.het"
+                if os.path.exists(het_file):
+                    df = pd.read_csv(het_file, sep='\s+')
+                    for _, row in df.iterrows():
+                        sample_id = row['IID']
+                        # Calculate heterozygosity rate: (N(NM) - O(HOM)) / N(NM)
+                        hom_count = row['O(HOM)']
+                        nm_count = row['N(NM)']
+                        het_rate = (nm_count - hom_count) / nm_count if nm_count > 0 else 0
+                        heterozygosity[sample_id] = het_rate
             
             return heterozygosity
             
         except Exception as e:
-            logger.warning(f"Could not calculate heterozygosity: {e}")
+            logger.warning(f"Could not calculate heterozygosity with PLINK: {e}")
             return {}
     
     def phenotype_qc(self, pheno_file, pheno_type, output_dir):
@@ -319,13 +336,29 @@ class EnhancedQC:
         concordance_results = {}
         
         try:
-            # Get samples from genotype file
-            samples_cmd = f"{self.config['paths']['bcftools']} query -l {vcf_file}"
-            samples_result = subprocess.run(samples_cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-            geno_samples = set([s.strip() for s in samples_result.stdout.split('\n') if s.strip()])
+            # Get samples from genotype file using PLINK
+            plink_base = os.path.join(output_dir, "concordance_temp")
+            cmd = f"{self.config['paths']['plink']} --vcf {vcf_file} --make-bed --out {plink_base}"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
-            concordance_results['genotype_samples'] = list(geno_samples)
-            concordance_results['genotype_sample_count'] = len(geno_samples)
+            if result.returncode == 0:
+                # Read PLINK fam file to get samples
+                fam_file = f"{plink_base}.fam"
+                if os.path.exists(fam_file):
+                    fam_df = pd.read_csv(fam_file, sep='\s+', header=None)
+                    geno_samples = set(fam_df[1].tolist())  # Column 1 contains sample IDs
+                    
+                    concordance_results['genotype_samples'] = list(geno_samples)
+                    concordance_results['genotype_sample_count'] = len(geno_samples)
+            
+            # If PLINK failed, fall back to bcftools
+            if not concordance_results.get('genotype_samples'):
+                samples_cmd = f"{self.config['paths']['bcftools']} query -l {vcf_file}"
+                samples_result = subprocess.run(samples_cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
+                geno_samples = set([s.strip() for s in samples_result.stdout.split('\n') if s.strip()])
+                
+                concordance_results['genotype_samples'] = list(geno_samples)
+                concordance_results['genotype_sample_count'] = len(geno_samples)
             
             # Get samples from each phenotype file
             sample_overlap = {}
@@ -359,16 +392,14 @@ class EnhancedQC:
             return {}
     
     def run_pca_analysis(self, vcf_file, output_dir):
-        """Run PCA for population stratification"""
-        logger.info("📊 Running PCA analysis...")
+        """Run PCA for population stratification using PLINK"""
+        logger.info("📊 Running PCA analysis using PLINK...")
         
         try:
-            # Convert VCF to numeric format for PCA
-            pca_file = os.path.join(output_dir, "genotype_pca.csv")
-            
-            # Use PLINK for PCA (more efficient for large datasets)
+            # Use PLINK for PCA
             plink_base = os.path.join(output_dir, "pca_input")
             
+            # Convert VCF to PLINK format and run PCA
             cmd = f"{self.config['paths']['plink']} --vcf {vcf_file} --pca 10 --out {plink_base}"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
@@ -406,43 +437,53 @@ class EnhancedQC:
             logger.warning(f"Could not calculate PCA variance: {e}")
         return []
     
-    def apply_genotype_filters(self, vcf_file, output_dir, qc_metrics):
-        """Apply genotype filters based on QC results"""
-        logger.info("🔧 Applying genotype filters...")
+    def apply_genotype_filters_plink(self, plink_base, output_dir, qc_metrics):
+        """Apply genotype filters using PLINK based on QC results"""
+        logger.info("🔧 Applying genotype filters using PLINK...")
         
         try:
-            filtered_file = os.path.join(output_dir, "filtered_genotypes.vcf.gz")
+            filtered_base = os.path.join(output_dir, "filtered_genotypes")
             
-            filter_expressions = []
+            # Build filter arguments
+            filter_args = []
             
             # MAF filter
             maf_threshold = self.qc_config.get('maf_threshold', 0.01)
-            filter_expressions.append(f"MAF > {maf_threshold}")
+            filter_args.append(f"--maf {maf_threshold}")
             
-            # Missingness filter
+            # Variant missingness filter
             missing_threshold = self.qc_config.get('variant_missingness_threshold', 0.1)
-            filter_expressions.append(f"F_MISSING < {missing_threshold}")
+            filter_args.append(f"--geno {missing_threshold}")
             
             # HWE filter
             hwe_threshold = self.qc_config.get('hwe_threshold', 1e-6)
-            filter_expressions.append(f"ExcHWE > {hwe_threshold}")
+            filter_args.append(f"--hwe {hwe_threshold}")
             
-            filter_string = " && ".join(filter_expressions)
+            # Sample missingness filter
+            sample_missing_threshold = self.qc_config.get('sample_missingness_threshold', 0.1)
+            filter_args.append(f"--mind {sample_missing_threshold}")
             
-            cmd = f"{self.config['paths']['bcftools']} view {vcf_file} -i '{filter_string}' -Oz -o {filtered_file}"
+            # Combine all filters
+            filter_string = " ".join(filter_args)
+            
+            # Apply filters and output VCF
+            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} {filter_string} --recode vcf --out {filtered_base}"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
             if result.returncode == 0:
-                # Index the filtered file
-                subprocess.run(f"{self.config['paths']['tabix']} -p vcf {filtered_file}", shell=True, executable='/bin/bash')
-                return filtered_file
+                filtered_vcf = f"{filtered_base}.vcf"
+                # Compress and index the filtered VCF
+                compressed_vcf = f"{filtered_vcf}.gz"
+                subprocess.run(f"{self.config['paths']['bgzip']} -c {filtered_vcf} > {compressed_vcf}", shell=True, executable='/bin/bash')
+                subprocess.run(f"{self.config['paths']['tabix']} -p vcf {compressed_vcf}", shell=True, executable='/bin/bash')
+                return compressed_vcf
             else:
-                logger.warning("Filtering failed, returning original file")
-                return vcf_file
+                logger.warning("PLINK filtering failed, returning original file")
+                return None
                 
         except Exception as e:
-            logger.warning(f"Genotype filtering failed: {e}")
-            return vcf_file
+            logger.warning(f"Genotype filtering with PLINK failed: {e}")
+            return None
     
     def plot_genotype_qc(self, qc_metrics, output_dir):
         """Generate genotype QC plots"""
@@ -473,6 +514,18 @@ class EnhancedQC:
                 plt.legend()
                 plt.tight_layout()
                 plt.savefig(os.path.join(output_dir, 'sample_missingness.png'), dpi=300, bbox_inches='tight')
+                plt.close()
+                
+            # Heterozygosity plot
+            if 'heterozygosity' in qc_metrics and qc_metrics['heterozygosity']:
+                plt.figure(figsize=(10, 6))
+                het_rates = list(qc_metrics['heterozygosity'].values())
+                plt.hist(het_rates, bins=50, alpha=0.7, color='lightgreen', edgecolor='black')
+                plt.xlabel('Heterozygosity Rate')
+                plt.ylabel('Number of Samples')
+                plt.title('Sample Heterozygosity Distribution')
+                plt.tight_layout()
+                plt.savefig(os.path.join(output_dir, 'heterozygosity.png'), dpi=300, bbox_inches='tight')
                 plt.close()
                 
         except Exception as e:
@@ -651,6 +704,11 @@ class EnhancedQC:
             status = "good" if violation_rate < 0.01 else "warning" if violation_rate < 0.05 else "bad"
             summary += f"<tr><td>HWE Violation Rate</td><td>{violation_rate:.4f}</td><td class='{status}'>{'PASS' if status == 'good' else 'WARNING' if status == 'warning' else 'FAIL'}</td></tr>"
         
+        # Heterozygosity
+        if 'heterozygosity' in genotype_qc and genotype_qc['heterozygosity']:
+            mean_het = np.mean(list(genotype_qc['heterozygosity'].values())) if genotype_qc['heterozygosity'] else 0
+            summary += f"<tr><td>Mean Heterozygosity</td><td>{mean_het:.4f}</td><td>-</td></tr>"
+        
         summary += "</table>"
         return summary
     
@@ -701,6 +759,7 @@ class EnhancedQC:
         plot_files = [
             ('maf_distribution.png', 'MAF Distribution'),
             ('sample_missingness.png', 'Sample Missingness'),
+            ('heterozygosity.png', 'Heterozygosity'),
             ('sample_concordance.png', 'Sample Concordance'),
             ('pca_analysis.png', 'PCA Analysis')
         ]

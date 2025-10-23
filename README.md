@@ -179,6 +179,18 @@ python run_QTLPipeline.py --config config/config.yaml --validate-only
 # Debug mode
 python run_QTLPipeline.py --config config/config.yaml --debug
 
+# Run with default normalization (VST for eQTL, log2 for others)
+python run_QTLPipeline.py --config config/config.yaml
+
+# Override normalization methods
+python run_QTLPipeline.py --config config/config.yaml --eqtl-norm vst --pqtl-norm log2 --sqtl-norm log2
+
+# Use quantile normalization for all
+python run_QTLPipeline.py --config config/config.yaml --eqtl-norm quantile --pqtl-norm quantile --sqtl-norm quantile
+
+# Run without normalization
+python run_QTLPipeline.py --config config/config.yaml --eqtl-norm raw --pqtl-norm raw --sqtl-norm raw
+
 
 # 📈 Output Structure
 results/

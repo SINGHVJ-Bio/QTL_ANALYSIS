@@ -252,6 +252,7 @@ def generate_html_report(report_data, output_file):
             {generate_executive_summary(report_data)}
             {generate_analysis_results_section(report_data)}
             {generate_enhanced_qc_section(report_data)}
+            {generate_normalization_comparison_section(report_data)}
             {generate_plot_section(report_data)}
             {generate_advanced_analysis_section(report_data)}
             {generate_configuration_section(report_data)}
@@ -267,6 +268,84 @@ def generate_html_report(report_data, output_file):
         f.write(html_content)
     
     logger.info(f"💾 HTML report generated: {output_file}")
+
+def generate_normalization_comparison_section(report_data):
+    """Generate normalization comparison section in the main report"""
+    normalization_dir = os.path.join(report_data['results_dir'], "normalization_comparison")
+    
+    if not os.path.exists(normalization_dir):
+        return "<div class='section'><h2>🔬 Normalization Comparison</h2><p>Normalization comparison reports were not generated for this analysis.</p></div>"
+    
+    qtl_types = [d for d in os.listdir(normalization_dir) if os.path.isdir(os.path.join(normalization_dir, d))]
+    
+    if not qtl_types:
+        return "<div class='section'><h2>🔬 Normalization Comparison</h2><p>No normalization comparison data available.</p></div>"
+    
+    html = """
+    <div class="section">
+        <h2>🔬 Normalization Comparison</h2>
+        <div class="summary-box">
+            <strong>📊 Before vs After Normalization Analysis</strong>
+            <p>Comprehensive comparison of raw input data vs normalized data used for QTL analysis.</p>
+        </div>
+        
+        <div class="tab-container">
+            <div class="tab-buttons">
+    """
+    
+    # Create tab buttons
+    for i, qtl_type in enumerate(qtl_types):
+        active = "active" if i == 0 else ""
+        html += f'<button class="tab-button {active}" onclick="openTab(event, \'norm-{qtl_type}\')">{qtl_type.upper()}</button>'
+    
+    html += """
+            </div>
+            
+            <div class="tab-content">
+    """
+    
+    # Create tab content
+    for i, qtl_type in enumerate(qtl_types):
+        display = "block" if i == 0 else "none"
+        report_file = os.path.join("normalization_comparison", qtl_type, f"{qtl_type}_normalization_report.html")
+        full_report_path = os.path.join(normalization_dir, qtl_type, f"{qtl_type}_normalization_report.html")
+        
+        if os.path.exists(full_report_path):
+            html += f"""
+                <div id="norm-{qtl_type}" class="tab-pane" style="display: {display};">
+                    <div class="interactive-plot">
+                        <iframe src="{report_file}" style="width: 100%; height: 800px; border: none;"></iframe>
+                    </div>
+                </div>
+            """
+        else:
+            # Fallback: list available plots
+            qtl_type_dir = os.path.join(normalization_dir, qtl_type)
+            plots = [f for f in os.listdir(qtl_type_dir) if f.endswith('.png')]
+            
+            html += f"""
+                <div id="norm-{qtl_type}" class="tab-pane" style="display: {display};">
+                    <h3>{qtl_type.upper()} Normalization Comparison</h3>
+                    <p>Available comparison plots:</p>
+                    <ul>
+            """
+            
+            for plot in plots:
+                plot_path = os.path.join("normalization_comparison", qtl_type, plot)
+                html += f'<li><a href="{plot_path}" target="_blank">{plot}</a></li>'
+            
+            html += """
+                    </ul>
+                </div>
+            """
+    
+    html += """
+            </div>
+        </div>
+    </div>
+    """
+    
+    return html
 
 def generate_executive_summary(report_data):
     """Generate executive summary section"""

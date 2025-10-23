@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Script to create sample NAFLD test data for QTL pipeline testing
+Script to create realistic NAFLD test data for QTL pipeline testing
+Enhanced version with stronger associations for meaningful results
 """
 
 import os
@@ -9,16 +10,16 @@ import numpy as np
 from pathlib import Path
 
 def create_sample_data():
-    """Create all sample data files for testing"""
+    """Create all sample data files for testing with realistic associations"""
     
     # Create data directory
     data_dir = Path("data")
     data_dir.mkdir(exist_ok=True)
     
-    print("🧬 Creating NAFLD sample test data...")
+    print("🧬 Creating realistic NAFLD sample test data...")
     
-    # Sample IDs
-    samples = [f"NAFLD_{i:03d}" for i in range(1, 11)]
+    # Increased sample size for better power
+    samples = [f"NAFLD_{i:03d}" for i in range(1, 101)]  # 100 samples
     
     # Create genotypes.vcf
     create_genotypes_file(data_dir / "genotypes.vcf", samples)
@@ -26,7 +27,7 @@ def create_sample_data():
     # Create covariates.txt
     create_covariates_file(data_dir / "covariates.txt", samples)
     
-    # Create annotations.bed (FIXED: removed # from header)
+    # Create annotations.bed
     create_annotations_file(data_dir / "annotations.bed")
     
     # Create expression.txt
@@ -38,7 +39,7 @@ def create_sample_data():
     # Create splicing.txt
     create_splicing_file(data_dir / "splicing.txt", samples)
     
-    # Create gwas_phenotype.txt (optional)
+    # Create gwas_phenotype.txt
     create_gwas_phenotype_file(data_dir / "gwas_phenotype.txt", samples)
     
     print("✅ All sample data files created successfully!")
@@ -51,7 +52,7 @@ def create_sample_data():
         print(f"  {file.name}: {size_kb:.1f} KB")
 
 def create_genotypes_file(file_path, samples):
-    """Create sample VCF file with NAFLD-related variants"""
+    """Create sample VCF file with NAFLD-related variants and realistic MAF"""
     
     vcf_header = """##fileformat=VCFv4.2
 ##fileDate=20240115
@@ -65,44 +66,46 @@ def create_genotypes_file(file_path, samples):
 ##contig=<ID=chr19,length=58617616>
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	{samples}"""
     
-    # NAFLD-related SNPs on chromosome 19
-    variants = [
-        ("chr19", 1050000, "rs123456", "A", "G", "AF=0.35;MAF=0.35;R2=0.98"),
-        ("chr19", 1050500, "rs234567", "C", "T", "AF=0.42;MAF=0.42;R2=0.97"),
-        ("chr19", 1051000, "rs345678", "G", "A", "AF=0.28;MAF=0.28;R2=0.99"),
-        ("chr19", 1051500, "rs456789", "T", "C", "AF=0.31;MAF=0.31;R2=0.96"),
-        ("chr19", 1052000, "rs567890", "A", "G", "AF=0.25;MAF=0.25;R2=0.98"),
-        ("chr19", 1052500, "rs678901", "C", "T", "AF=0.38;MAF=0.38;R2=0.97"),
-        ("chr19", 1053000, "rs789012", "G", "A", "AF=0.33;MAF=0.33;R2=0.99"),
-        ("chr19", 1053500, "rs890123", "T", "C", "AF=0.29;MAF=0.29;R2=0.98"),
-        ("chr19", 1054000, "rs901234", "A", "G", "AF=0.36;MAF=0.36;R2=0.97"),
-        ("chr19", 1054500, "rs012345", "C", "T", "AF=0.27;MAF=0.27;R2=0.98")
-    ]
+    # Create more variants (50 variants) around NAFLD genes
+    variants = []
+    base_pos = 1040000
+    for i in range(50):
+        chrom = "chr19"
+        pos = base_pos + i * 2000  # Spread variants every 2kb
+        variant_id = f"rs{i+100000}"
+        ref = np.random.choice(["A", "C", "G", "T"])
+        alt = np.random.choice([base for base in ["A", "C", "G", "T"] if base != ref])
+        maf = np.random.uniform(0.1, 0.4)  # Realistic MAF
+        af = max(maf, 1-maf)
+        info = f"AF={af:.3f};MAF={maf:.3f};R2=0.98"
+        variants.append((chrom, pos, variant_id, ref, alt, info, maf))
     
     # Generate realistic genotype data
-    np.random.seed(42)  # For reproducible results
+    np.random.seed(42)
     
     with open(file_path, 'w') as f:
         # Write header
         f.write(vcf_header.format(samples="\t".join(samples)) + "\n")
         
         # Write variants
-        for chrom, pos, variant_id, ref, alt, info in variants:
-            # Generate genotype data for each sample
+        for chrom, pos, variant_id, ref, alt, info, maf in variants:
             genotypes = []
+            dosages = []
+            
+            # Generate genotypes based on MAF
             for i in range(len(samples)):
-                # Create realistic genotype distribution
-                if i % 3 == 0:
-                    gt = "0|0"
-                    ds = np.random.uniform(0.01, 0.05)
-                elif i % 3 == 1:
-                    gt = "0|1" 
-                    ds = np.random.uniform(0.43, 0.53)
-                else:
+                rand_val = np.random.random()
+                if rand_val < maf**2:  # Homozygous minor
                     gt = "1|1"
-                    ds = np.random.uniform(0.96, 0.99)
+                    ds = np.random.uniform(1.8, 2.0)
+                elif rand_val < maf**2 + 2*maf*(1-maf):  # Heterozygous
+                    gt = "0|1"
+                    ds = np.random.uniform(0.8, 1.2)
+                else:  # Homozygous major
+                    gt = "0|0"
+                    ds = np.random.uniform(0.0, 0.2)
                 
-                genotypes.append(f"{gt}:{ds:.2f}")
+                genotypes.append(f"{gt}:{ds:.3f}")
             
             line = f"{chrom}\t{pos}\t{variant_id}\t{ref}\t{alt}\t100\tPASS\t{info}\tGT:DS\t" + "\t".join(genotypes)
             f.write(line + "\n")
@@ -114,122 +117,201 @@ def create_covariates_file(file_path, samples):
     
     np.random.seed(42)
     
-    data = {
-        'ID': ['age', 'sex', 'bmi', 'batch', 'PC1', 'PC2', 'PC3', 'insulin_resistance', 'liver_fat_content', 'fibrosis_stage'],
-        # Age: 35-65 years
-        'age': np.random.randint(35, 66, len(samples)),
-        # Sex: 1=male, 2=female
-        'sex': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
-        # BMI: 25-35 kg/m²
-        'bmi': np.random.uniform(25, 35, len(samples)),
-        # Batch effect
-        'batch': [1, 1, 2, 2, 1, 2, 1, 2, 1, 2],
-        # Principal components
-        'PC1': np.random.uniform(-0.03, 0.03, len(samples)),
-        'PC2': np.random.uniform(-0.03, 0.03, len(samples)),
-        'PC3': np.random.uniform(-0.03, 0.03, len(samples)),
-        # NAFLD-specific covariates
-        'insulin_resistance': np.random.uniform(1.0, 4.5, len(samples)),
-        'liver_fat_content': np.random.uniform(8.0, 23.0, len(samples)),
-        'fibrosis_stage': np.random.randint(0, 4, len(samples))
+    n_samples = len(samples)
+    
+    # Create data with consistent array lengths
+    covariate_data = {
+        'age': np.random.randint(35, 66, n_samples),
+        'sex': [1 if i % 2 == 0 else 2 for i in range(n_samples)],
+        'bmi': np.random.uniform(25, 35, n_samples),
+        'batch': [1 if i < n_samples/2 else 2 for i in range(n_samples)],
+        'PC1': np.random.normal(0, 0.02, n_samples),
+        'PC2': np.random.normal(0, 0.02, n_samples),
+        'PC3': np.random.normal(0, 0.02, n_samples),
+        'insulin_resistance': np.random.normal(2.5, 0.8, n_samples),
+        'liver_fat_content': np.random.normal(15.0, 4.0, n_samples),
+        'fibrosis_stage': np.random.choice([0, 1, 2, 3], n_samples, p=[0.4, 0.3, 0.2, 0.1])
     }
     
-    df = pd.DataFrame(data)
-    df.set_index('ID', inplace=True)
-    df.columns = samples
+    # Create DataFrame with samples as columns and covariates as rows
+    covariate_names = ['age', 'sex', 'bmi', 'batch', 'PC1', 'PC2', 'PC3', 
+                      'insulin_resistance', 'liver_fat_content', 'fibrosis_stage']
+    
+    # Build the data in the correct orientation
+    data_dict = {}
+    for covariate in covariate_names:
+        data_dict[covariate] = covariate_data[covariate]
+    
+    # Create DataFrame with covariates as rows and samples as columns
+    df = pd.DataFrame(data_dict, index=samples).T
     
     # Format to reasonable precision
     for col in df.columns:
         if df[col].dtype == float:
-            df[col] = df[col].round(2)
+            df[col] = df[col].round(3)
     
-    df.to_csv(file_path, sep='\t', float_format='%.2f')
+    df.to_csv(file_path, sep='\t', float_format='%.3f')
     print(f"✅ Created covariates.txt with {len(df)} covariates")
 
 def create_annotations_file(file_path):
     """Create annotations BED file with NAFLD-related genes"""
     
-    # NAFLD-related genes on chromosome 19
-    genes = [
-        ("chr19", 1045000, 1055000, "ENSG00000130032", "+", "PNPLA3", "protein_coding"),
-        ("chr19", 1058000, 1068000, "ENSG00000130024", "-", "TM6SF2", "protein_coding"),
-        ("chr19", 1072000, 1082000, "ENSG00000130018", "+", "MBOAT7", "protein_coding"),
-        ("chr19", 1086000, 1096000, "ENSG00000130011", "-", "HSD17B13", "protein_coding"),
-        ("chr19", 1100000, 1110000, "ENSG00000130005", "+", "GCKR", "protein_coding"),
-        ("chr19", 1114000, 1124000, "ENSG00000129998", "-", "LYPLAL1", "protein_coding"),
-        ("chr19", 1128000, 1138000, "ENSG00000129991", "+", "PPP1R3B", "protein_coding"),
-        ("chr19", 1142000, 1152000, "ENSG00000129984", "-", "FDFT1", "protein_coding"),
-        ("chr19", 1156000, 1166000, "ENSG00000129977", "+", "SAMM50", "protein_coding"),
-        ("chr19", 1170000, 1180000, "ENSG00000129970", "-", "PARVB", "protein_coding")
+    # NAFLD-related genes on chromosome 19 - expanded list
+    genes = []
+    base_start = 1040000
+    
+    gene_names = [
+        "PNPLA3", "TM6SF2", "MBOAT7", "HSD17B13", "GCKR", "LYPLAL1", 
+        "PPP1R3B", "FDFT1", "SAMM50", "PARVB", "SREBF1", "MTOR", "INSIG1",
+        "SCAP", "FASN", "ACACA", "SCD", "DGAT2", "AGPAT2", "LPIN1",
+        "MLXIPL", "NR1H3", "NR1H2", "PPARA", "PPARD", "PPARG", "RXRA",
+        "RXRB", "RXRG", "SREBF2"
     ]
     
+    for i, gene_name in enumerate(gene_names):
+        start = base_start + i * 50000  # 50kb spacing
+        end = start + 10000  # 10kb gene length
+        gene_id = f"ENSG000001{30000 + i:05d}"
+        strand = "+" if i % 2 == 0 else "-"
+        genes.append(("chr19", start, end, gene_id, strand, gene_name, "protein_coding"))
+    
     with open(file_path, 'w') as f:
-        # FIXED: Removed # from header line
         f.write("chr\tstart\tend\tgene_id\tstrand\tgene_name\tgene_type\n")
         for gene in genes:
-            # FIXED: Convert all elements to strings before joining
             gene_str = [str(element) for element in gene]
             f.write("\t".join(gene_str) + "\n")
     
     print(f"✅ Created annotations.bed with {len(genes)} genes")
 
 def create_expression_file(file_path, samples):
-    """Create expression data for NAFLD-related genes with stronger associations"""
+    """Create expression data with strong genetic associations"""
     
     np.random.seed(42)
     
-    gene_ids = [f"ENSG000001300{i:02d}" for i in range(32, 22, -1)]
-    gene_names = ["PNPLA3", "TM6SF2", "MBOAT7", "HSD17B13", "GCKR", "LYPLAL1", "PPP1R3B", "FDFT1", "SAMM50", "PARVB"]
+    # Create gene list matching annotations
+    gene_ids = [f"ENSG000001{30000 + i:05d}" for i in range(30)]
+    gene_names = [
+        "PNPLA3", "TM6SF2", "MBOAT7", "HSD17B13", "GCKR", "LYPLAL1", 
+        "PPP1R3B", "FDFT1", "SAMM50", "PARVB", "SREBF1", "MTOR", "INSIG1",
+        "SCAP", "FASN", "ACACA", "SCD", "DGAT2", "AGPAT2", "LPIN1",
+        "MLXIPL", "NR1H3", "NR1H2", "PPARA", "PPARD", "PPARG", "RXRA",
+        "RXRB", "RXRG", "SREBF2"
+    ]
     
     data = {}
-    for i, gene_id in enumerate(gene_ids):
-        # Create expression values with some structure
-        base_level = np.random.uniform(5, 15)
-        variation = np.random.uniform(2, 4, len(samples))
-        expr_values = base_level + variation
+    
+    # Read genotype data to create realistic associations
+    genotype_patterns = {}
+    try:
+        with open("data/genotypes.vcf", 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                fields = line.strip().split('\t')
+                variant_id = fields[2]
+                # Get genotype data for this variant
+                genotypes = fields[9:]
+                dosage_values = []
+                for gt in genotypes:
+                    dosage = float(gt.split(':')[1])
+                    dosage_values.append(dosage)
+                genotype_patterns[variant_id] = dosage_values
+    except FileNotFoundError:
+        print("⚠️  genotypes.vcf not found, creating expression without genetic effects")
+        # Create random genotype patterns as fallback
+        for i in range(10):
+            variant_id = f"rs{i+100000}"
+            dosage_values = np.random.choice([0, 1, 2], len(samples), p=[0.25, 0.5, 0.25])
+            genotype_patterns[variant_id] = dosage_values
+    
+    for i, (gene_id, gene_name) in enumerate(zip(gene_ids, gene_names)):
+        # Base expression level
+        base_level = np.random.uniform(8, 12)
         
-        # Create strong association for PNPLA3 with genotype to ensure significant results
-        if gene_id == "ENSG00000130032":  # PNPLA3
-            # Make expression correlate strongly with first genotype
-            for j, sample in enumerate(samples):
-                # Use the genotype pattern from our VCF file
-                if j % 3 == 0:  # 0|0 genotypes (samples 0, 3, 6, 9)
-                    expr_values[j] = 8.0 + np.random.normal(0, 0.5)
-                elif j % 3 == 1:  # 0|1 genotypes (samples 1, 4, 7)
-                    expr_values[j] = 10.0 + np.random.normal(0, 0.5)
-                else:  # 1|1 genotypes (samples 2, 5, 8)
-                    expr_values[j] = 12.0 + np.random.normal(0, 0.5)
+        # Add biological noise
+        biological_noise = np.random.normal(0, 1, len(samples))
+        
+        # Create genetic effects for some genes
+        genetic_effect = np.zeros(len(samples))
+        
+        # Strong genetic effect for first 10 genes
+        if i < 10 and genotype_patterns:
+            # Use nearby variants (every 5th variant)
+            variant_idx = min(i * 5, len(genotype_patterns) - 1)
+            variant_key = list(genotype_patterns.keys())[variant_idx]
+            dosage = genotype_patterns[variant_key]
+            
+            # Create strong linear effect
+            effect_size = np.random.uniform(2.0, 4.0)  # Strong effect
+            genetic_effect = np.array(dosage) * effect_size
+            
+            # Add some noise to the genetic effect
+            genetic_effect += np.random.normal(0, 0.5, len(samples))
+        
+        # Combine components
+        expr_values = base_level + biological_noise + genetic_effect
+        
+        # Ensure positive values
+        expr_values = np.maximum(expr_values, 1.0)
         
         data[gene_id] = expr_values
     
     df = pd.DataFrame(data, index=samples).T
     df.index.name = 'gene_id'
-    df = df.round(2)
+    df = df.round(3)
     df.to_csv(file_path, sep='\t')
-    print(f"✅ Created expression.txt with {len(df)} genes")
+    print(f"✅ Created expression.txt with {len(df)} genes and strong genetic effects")
 
 def create_protein_file(file_path, samples):
     """Create protein abundance data with associations"""
     
-    np.random.seed(42)
+    np.random.seed(43)  # Different seed from expression
     
-    protein_ids = ["PNPLA3", "TM6SF2", "MBOAT7", "HSD17B13", "GCKR", "LYPLAL1", "PPP1R3B", "FDFT1", "SAMM50", "PARVB"]
+    protein_ids = [
+        "PNPLA3", "TM6SF2", "MBOAT7", "HSD17B13", "GCKR", "LYPLAL1", 
+        "PPP1R3B", "FDFT1", "SAMM50", "PARVB", "SREBF1", "MTOR", "INSIG1",
+        "SCAP", "FASN", "ACACA", "SCD", "DGAT2", "AGPAT2", "LPIN1"
+    ]
+    
+    # Read genotype data
+    genotype_patterns = {}
+    try:
+        with open("data/genotypes.vcf", 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                fields = line.strip().split('\t')
+                variant_id = fields[2]
+                genotypes = fields[9:]
+                dosage_values = []
+                for gt in genotypes:
+                    dosage = float(gt.split(':')[1])
+                    dosage_values.append(dosage)
+                genotype_patterns[variant_id] = dosage_values
+    except FileNotFoundError:
+        print("⚠️  genotypes.vcf not found, creating protein data without genetic effects")
+        for i in range(10):
+            variant_id = f"rs{i+100000}"
+            dosage_values = np.random.choice([0, 1, 2], len(samples), p=[0.25, 0.5, 0.25])
+            genotype_patterns[variant_id] = dosage_values
     
     data = {}
-    for protein_id in protein_ids:
-        base_level = np.random.uniform(35, 55)
-        variation = np.random.uniform(3, 8, len(samples))
-        protein_values = base_level + variation
+    for i, protein_id in enumerate(protein_ids):
+        base_level = np.random.uniform(40, 60)
+        technical_noise = np.random.normal(0, 3, len(samples))
         
-        # Create association for PNPLA3 protein
-        if protein_id == "PNPLA3":
-            for j, sample in enumerate(samples):
-                if j % 3 == 0:  # 0|0
-                    protein_values[j] = 40.0 + np.random.normal(0, 2)
-                elif j % 3 == 1:  # 0|1
-                    protein_values[j] = 45.0 + np.random.normal(0, 2)
-                else:  # 1|1
-                    protein_values[j] = 50.0 + np.random.normal(0, 2)
+        # Genetic effects for some proteins
+        genetic_effect = np.zeros(len(samples))
+        if i < 8 and genotype_patterns:  # Genetic effects for first 8 proteins
+            variant_idx = min(i * 3, len(genotype_patterns) - 1)
+            variant_key = list(genotype_patterns.keys())[variant_idx]
+            dosage = genotype_patterns[variant_key]
+            
+            effect_size = np.random.uniform(5.0, 8.0)  # Protein effects can be stronger
+            genetic_effect = np.array(dosage) * effect_size
+        
+        protein_values = base_level + technical_noise + genetic_effect
+        protein_values = np.maximum(protein_values, 10.0)  # Ensure positive
         
         data[protein_id] = protein_values
     
@@ -240,40 +322,106 @@ def create_protein_file(file_path, samples):
     print(f"✅ Created protein.txt with {len(df)} proteins")
 
 def create_splicing_file(file_path, samples):
-    """Create splicing data (PSI values)"""
+    """Create splicing data (PSI values) with genetic effects"""
     
-    np.random.seed(42)
+    np.random.seed(44)  # Different seed
     
-    event_ids = [f"{gene}_AS1" for gene in ["PNPLA3", "TM6SF2", "MBOAT7", "HSD17B13", "GCKR", "LYPLAL1", "PPP1R3B", "FDFT1", "SAMM50", "PARVB"]]
+    event_ids = []
+    for gene in ["PNPLA3", "TM6SF2", "MBOAT7", "HSD17B13", "GCKR", "LYPLAL1", 
+                "PPP1R3B", "FDFT1", "SAMM50", "PARVB", "SREBF1", "MTOR"]:
+        for event_type in ["SE", "A5SS", "A3SS"]:
+            event_ids.append(f"{gene}_{event_type}_1")
+    
+    # Read genotype data
+    genotype_patterns = {}
+    try:
+        with open("data/genotypes.vcf", 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                fields = line.strip().split('\t')
+                variant_id = fields[2]
+                genotypes = fields[9:]
+                dosage_values = []
+                for gt in genotypes:
+                    dosage = float(gt.split(':')[1])
+                    dosage_values.append(dosage)
+                genotype_patterns[variant_id] = dosage_values
+    except FileNotFoundError:
+        print("⚠️  genotypes.vcf not found, creating splicing data without genetic effects")
+        for i in range(10):
+            variant_id = f"rs{i+100000}"
+            dosage_values = np.random.choice([0, 1, 2], len(samples), p=[0.25, 0.5, 0.25])
+            genotype_patterns[variant_id] = dosage_values
     
     data = {}
-    for event_id in event_ids:
-        base_level = np.random.uniform(0.6, 0.9)
-        variation = np.random.uniform(0.05, 0.15, len(samples))
-        data[event_id] = base_level + variation
+    for i, event_id in enumerate(event_ids):
+        base_level = np.random.uniform(0.4, 0.8)
+        noise = np.random.normal(0, 0.1, len(samples))
+        
+        # Genetic effects for some splicing events
+        genetic_effect = np.zeros(len(samples))
+        if i < 15 and genotype_patterns:  # Genetic effects for first 15 events
+            variant_idx = min(i * 2, len(genotype_patterns) - 1)
+            variant_key = list(genotype_patterns.keys())[variant_idx]
+            dosage = genotype_patterns[variant_key]
+            
+            effect_size = np.random.uniform(0.1, 0.2)
+            genetic_effect = np.array(dosage) * effect_size
+        
+        psi_values = base_level + noise + genetic_effect
+        # Clamp to [0, 1] range
+        psi_values = np.clip(psi_values, 0.1, 0.9)
+        
+        data[event_id] = psi_values
     
     df = pd.DataFrame(data, index=samples).T
     df.index.name = 'event_id'
-    df = df.round(2)
+    df = df.round(3)
     df.to_csv(file_path, sep='\t')
     print(f"✅ Created splicing.txt with {len(df)} splicing events")
 
 def create_gwas_phenotype_file(file_path, samples):
-    """Create GWAS phenotype data for NAFLD traits"""
+    """Create GWAS phenotype data for NAFLD traits with genetic components"""
     
-    np.random.seed(42)
+    np.random.seed(45)
+    
+    n_samples = len(samples)
+    
+    # Create phenotypes with genetic components
+    liver_fat = np.random.normal(15.0, 4.0, n_samples)
+    alt_levels = np.random.normal(60.0, 15.0, n_samples)
+    
+    # Try to read genotype data for genetic effects
+    try:
+        with open("data/genotypes.vcf", 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                fields = line.strip().split('\t')
+                variant_id = fields[2]
+                genotypes = fields[9:]
+                dosage_values = []
+                for gt in genotypes:
+                    dosage = float(gt.split(':')[1])
+                    dosage_values.append(dosage)
+                # Add genetic effects to liver fat using first variant
+                liver_fat += np.array(dosage_values) * 3.0  # Genetic effect
+                break  # Only use first variant
+    except FileNotFoundError:
+        print("⚠️  genotypes.vcf not found, creating GWAS data without genetic effects")
     
     data = {
         'sample_id': samples,
-        'liver_fat': np.random.uniform(8, 23, len(samples)),
-        'alt_levels': np.random.uniform(30, 90, len(samples)),
-        'ast_levels': np.random.uniform(25, 70, len(samples)),
-        'fibrosis_score': np.random.randint(0, 4, len(samples)),
-        'nafld_activity_score': np.random.randint(2, 8, len(samples))
+        'liver_fat': liver_fat,
+        'alt_levels': alt_levels,
+        'ast_levels': np.random.normal(45.0, 12.0, n_samples),
+        'fibrosis_score': np.random.choice([0, 1, 2, 3], n_samples, p=[0.4, 0.3, 0.2, 0.1]),
+        'nafld_activity_score': np.random.choice([2, 3, 4, 5, 6, 7], n_samples, p=[0.1, 0.2, 0.3, 0.2, 0.1, 0.1])
     }
     
     df = pd.DataFrame(data)
-    df = df.round(1)
+    df = df.round(2)
     df.to_csv(file_path, sep='\t', index=False)
     print(f"✅ Created gwas_phenotype.txt with {len(df)} samples")
 
