@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Comprehensive genotype processing utilities
+Comprehensive genotype processing utilities - Enhanced Version
 Handles VCF, VCF.GZ, BCF, PLINK with advanced filtering and QC
+Author: Dr. Vijay Singh
+Email: vijay.s.gautam@gmail.com
+
 """
 
 import os
@@ -12,6 +15,7 @@ from pathlib import Path
 import logging
 import tempfile
 import re
+import gzip
 
 logger = logging.getLogger('QTLPipeline')
 
@@ -84,14 +88,11 @@ class GenotypeProcessor:
         """Detect file format by examining content"""
         try:
             if input_file.endswith('.gz'):
-                import gzip
                 with gzip.open(input_file, 'rt') as f:
                     first_line = f.readline()
-                    second_line = f.readline()
             else:
                 with open(input_file, 'r') as f:
                     first_line = f.readline()
-                    second_line = f.readline()
             
             if first_line.startswith('##fileformat=VCF'):
                 return 'vcf'

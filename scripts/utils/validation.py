@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-Comprehensive input validation utilities with genotype format detection
+Comprehensive input validation utilities with genotype format detection - Enhanced Version
+Author: Dr. Vijay Singh
+Email: vijay.s.gautam@gmail.com
+
 """
 
 import os
@@ -12,6 +15,8 @@ import subprocess
 import logging
 import gzip
 import tempfile
+import warnings
+warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
 
@@ -62,7 +67,7 @@ def validate_inputs(config):
         if not os.path.exists(file_path):
             errors.append(f"Phenotype file not found: {file_path} (for {analysis_type})")
         else:
-            pheno_errors, pheno_warnings = validate_phenotype_file(file_path, analysis_type)
+            pheno_errors, pheno_warnings = validate_phenotype_file(file_path, analysis_type, config)
             errors.extend(pheno_errors)
             warnings.extend(pheno_warnings)
     
@@ -74,7 +79,7 @@ def validate_inputs(config):
         elif not os.path.exists(gwas_file):
             errors.append(f"GWAS phenotype file not found: {gwas_file}")
         else:
-            gwas_errors, gwas_warnings = validate_gwas_phenotype_file(gwas_file)
+            gwas_errors, gwas_warnings = validate_gwas_phenotype_file(gwas_file, config)
             errors.extend(gwas_errors)
             warnings.extend(gwas_warnings)
     
@@ -94,6 +99,24 @@ def validate_inputs(config):
     errors.extend(config_errors)
     warnings.extend(config_warnings)
     
+    # Check enhanced QC requirements
+    if config.get('enhanced_qc', {}).get('enable', False):
+        qc_errors, qc_warnings = validate_enhanced_qc_requirements(config)
+        errors.extend(qc_errors)
+        warnings.extend(qc_warnings)
+    
+    # Check interaction analysis requirements
+    if config.get('interaction_analysis', {}).get('enable', False):
+        interaction_errors, interaction_warnings = validate_interaction_requirements(config)
+        errors.extend(interaction_errors)
+        warnings.extend(interaction_warnings)
+    
+    # Check fine-mapping requirements
+    if config.get('fine_mapping', {}).get('enable', False):
+        finemap_errors, finemap_warnings = validate_finemap_requirements(config)
+        errors.extend(finemap_errors)
+        warnings.extend(finemap_warnings)
+    
     # Report results
     if warnings:
         print("\n⚠️  WARNINGS:")
@@ -109,6 +132,7 @@ def validate_inputs(config):
         print("\n🎉 All inputs validated successfully!")
         if warnings:
             print("   Some warnings were found but analysis can proceed")
+        return True
 
 def validate_genotype_file(file_path, config):
     """Validate genotype file format and content"""
@@ -243,6 +267,23 @@ def validate_vcf_file(file_path, config):
         else:
             print(f"✅ Found {variant_count} variants in genotype file")
             
+        # Check chromosome naming consistency
+        result = subprocess.run(
+            f"{config['paths']['bcftools']} view -H {file_path} | cut -f1 | sort | uniq | head -10",
+            shell=True, capture_output=True, text=True, check=False
+        )
+        
+        chromosomes = [c.strip() for c in result.stdout.split('\n') if c.strip()]
+        has_chr_prefix = any(c.startswith('chr') for c in chromosomes)
+        no_chr_prefix = any(c in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', 'X', 'Y', 'MT'] for c in chromosomes)
+        
+        if has_chr_prefix and no_chr_prefix:
+            warnings.append("Mixed chromosome naming (some with 'chr' prefix, some without)")
+        elif has_chr_prefix:
+            print("✅ Chromosome naming: with 'chr' prefix")
+        elif no_chr_prefix:
+            print("✅ Chromosome naming: without 'chr' prefix")
+            
     except Exception as e:
         errors.append(f"VCF validation error: {e}")
     
@@ -313,7 +354,24 @@ def validate_covariates_file(file_path, config):
         if constant_covariates:
             warnings.append(f"Constant covariates found: {', '.join(constant_covariates)}")
         
+        # Check for numeric covariates (except for categorical ones that should be encoded)
+        numeric_covariates = []
+        non_numeric_covariates = []
+        
+        for covariate in df.index:
+            try:
+                pd.to_numeric(df.loc[covariate])
+                numeric_covariates.append(covariate)
+            except:
+                non_numeric_covariates.append(covariate)
+        
+        if non_numeric_covariates:
+            warnings.append(f"Non-numeric covariates found: {', '.join(non_numeric_covariates)}")
+        
         print(f"✅ Covariates: {df.shape[0]} covariates, {df.shape[1]} samples")
+        print(f"✅ Numeric covariates: {len(numeric_covariates)}")
+        if non_numeric_covariates:
+            print(f"⚠️  Non-numeric covariates: {len(non_numeric_covariates)}")
         
     except Exception as e:
         errors.append(f"Error reading covariates file {file_path}: {e}")
@@ -354,6 +412,18 @@ def validate_annotations_file(file_path, config):
         if len(duplicate_genes) > 0:
             warnings.append(f"Found {len(duplicate_genes)} duplicate gene IDs")
         
+        # Check chromosome naming consistency
+        chromosomes = df['chr'].unique()
+        has_chr_prefix = any(str(c).startswith('chr') for c in chromosomes)
+        no_chr_prefix = any(str(c) in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', 'X', 'Y', 'MT'] for c in chromosomes)
+        
+        if has_chr_prefix and no_chr_prefix:
+            warnings.append("Mixed chromosome naming in annotations file")
+        elif has_chr_prefix:
+            print("✅ Annotation chromosomes: with 'chr' prefix")
+        elif no_chr_prefix:
+            print("✅ Annotation chromosomes: without 'chr' prefix")
+        
         print(f"✅ Annotations: {len(df)} features")
         
     except Exception as e:
@@ -361,7 +431,7 @@ def validate_annotations_file(file_path, config):
     
     return errors, warnings
 
-def validate_phenotype_file(file_path, qtl_type):
+def validate_phenotype_file(file_path, qtl_type, config):
     """Validate phenotype file structure"""
     errors = []
     warnings = []
@@ -392,14 +462,22 @@ def validate_phenotype_file(file_path, qtl_type):
             if extreme_low > 0 or extreme_high > 0:
                 warnings.append(f"{qtl_type} has extreme values (outside [-10, 10])")
         
-        print(f"✅ {qtl_type}: {df.shape[0]} features, {df.shape[1]} samples")
+        # Check data distribution
+        try:
+            # Calculate basic statistics
+            mean_val = df.mean().mean()
+            std_val = df.std().mean()
+            print(f"✅ {qtl_type}: {df.shape[0]} features, {df.shape[1]} samples")
+            print(f"   Mean expression: {mean_val:.3f}, Std: {std_val:.3f}")
+        except:
+            print(f"✅ {qtl_type}: {df.shape[0]} features, {df.shape[1]} samples")
         
     except Exception as e:
         errors.append(f"Error reading {qtl_type} file {file_path}: {e}")
     
     return errors, warnings
 
-def validate_gwas_phenotype_file(file_path):
+def validate_gwas_phenotype_file(file_path, config):
     """Validate GWAS phenotype file"""
     errors = []
     warnings = []
@@ -420,6 +498,13 @@ def validate_gwas_phenotype_file(file_path):
         missing_samples = df['sample_id'].isna().sum()
         if missing_samples > 0:
             errors.append(f"GWAS phenotype file has {missing_samples} missing sample IDs")
+        
+        # Check phenotype data types
+        for pheno in phenotype_cols:
+            try:
+                pd.to_numeric(df[pheno])
+            except:
+                warnings.append(f"GWAS phenotype '{pheno}' contains non-numeric values")
         
         print(f"✅ GWAS phenotype: {df.shape[0]} samples, {len(phenotype_cols)} phenotypes")
         
@@ -472,6 +557,23 @@ def check_required_tools(config):
             warnings.append(f"Optional tool not found: {tool_name} ({tool_path})")
         else:
             print(f"✅ Found {tool_name}: {tool_path}")
+    
+    # Check for enhanced features
+    if config.get('enhanced_qc', {}).get('enable', False):
+        # Check for Python packages needed for enhanced QC
+        try:
+            import sklearn
+            print("✅ Found sklearn: for PCA analysis")
+        except ImportError:
+            warnings.append("sklearn not found - enhanced QC PCA analysis will be limited")
+    
+    if config.get('plotting', {}).get('plot_types', []):
+        if 'interactive' in config['plotting']['plot_types']:
+            try:
+                import plotly
+                print("✅ Found plotly: for interactive plots")
+            except ImportError:
+                warnings.append("plotly not found - interactive plots will be disabled")
     
     return errors, warnings
 
@@ -538,6 +640,23 @@ def check_sample_concordance(config, input_files):
                         warnings.append(f"Low sample overlap for {analysis_type}: {len(overlap)} samples ({overlap_percent:.1f}%)")
                     else:
                         print(f"✅ {analysis_type} overlap: {len(overlap)} samples ({overlap_percent:.1f}%)")
+        
+        # Check GWAS samples if enabled
+        if config['analysis'].get('run_gwas', False):
+            gwas_file = input_files.get('gwas_phenotype') or config['analysis'].get('gwas_phenotype')
+            if gwas_file and os.path.exists(gwas_file):
+                gwas_df = pd.read_csv(gwas_file, sep='\t')
+                gwas_samples = set(gwas_df['sample_id'])
+                overlap = geno_samples.intersection(gwas_samples)
+                
+                if len(overlap) == 0:
+                    errors.append("No sample overlap between genotypes and GWAS phenotypes")
+                else:
+                    overlap_percent = len(overlap) / min(len(geno_samples), len(gwas_samples)) * 100
+                    if overlap_percent < 80:
+                        warnings.append(f"Low sample overlap for GWAS: {len(overlap)} samples ({overlap_percent:.1f}%)")
+                    else:
+                        print(f"✅ GWAS overlap: {len(overlap)} samples ({overlap_percent:.1f}%)")
                     
     except Exception as e:
         warnings.append(f"Sample concordance check failed: {e}")
@@ -569,6 +688,99 @@ def validate_configuration(config):
     
     if processing_config.get('min_call_rate', 1) > 0.99:
         warnings.append("Very high call rate threshold (>0.99) may be too stringent")
+    
+    # Check memory requirements
+    memory_gb = config.get('performance', {}).get('memory_gb', 8)
+    if memory_gb < 4:
+        warnings.append("Low memory allocation (<4 GB) may cause performance issues")
+    
+    # Check output directory
+    results_dir = config.get('results_dir', 'results')
+    if os.path.exists(results_dir) and len(os.listdir(results_dir)) > 0:
+        warnings.append(f"Results directory {results_dir} already exists and is not empty")
+    
+    return errors, warnings
+
+def validate_enhanced_qc_requirements(config):
+    """Validate requirements for enhanced QC"""
+    errors = []
+    warnings = []
+    
+    qc_config = config.get('enhanced_qc', {})
+    
+    if qc_config.get('run_pca', False):
+        # Check if we have enough samples for meaningful PCA
+        try:
+            geno_file = config['input_files']['genotypes']
+            format_info = detect_genotype_format(geno_file)
+            
+            sample_count = 0
+            if format_info['format'] in ['vcf', 'vcf.gz', 'bcf']:
+                result = subprocess.run(
+                    f"{config['paths']['bcftools']} query -l {geno_file} | wc -l",
+                    shell=True, capture_output=True, text=True, check=False
+                )
+                sample_count = int(result.stdout.strip()) if result.stdout.strip().isdigit() else 0
+            elif format_info['format'] == 'plink_bed':
+                base_name = geno_file.replace('.bed', '')
+                fam_file = f"{base_name}.fam"
+                if os.path.exists(fam_file):
+                    fam_df = pd.read_csv(fam_file, sep='\t', header=None)
+                    sample_count = len(fam_df)
+            
+            if sample_count < 50:
+                warnings.append("PCA analysis may not be meaningful with fewer than 50 samples")
+        except:
+            pass
+    
+    return errors, warnings
+
+def validate_interaction_requirements(config):
+    """Validate requirements for interaction analysis"""
+    errors = []
+    warnings = []
+    
+    interaction_config = config.get('interaction_analysis', {})
+    interaction_covariates = interaction_config.get('interaction_covariates', [])
+    
+    if not interaction_covariates:
+        errors.append("No interaction covariates specified for interaction analysis")
+        return errors, warnings
+    
+    # Check if interaction covariates exist in covariates file
+    try:
+        covariates_file = config['input_files']['covariates']
+        cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0)
+        
+        missing_covariates = [cov for cov in interaction_covariates if cov not in cov_df.index]
+        if missing_covariates:
+            errors.append(f"Interaction covariates not found in covariates file: {', '.join(missing_covariates)}")
+        else:
+            print(f"✅ Found all interaction covariates: {', '.join(interaction_covariates)}")
+            
+    except Exception as e:
+        errors.append(f"Error validating interaction covariates: {e}")
+    
+    return errors, warnings
+
+def validate_finemap_requirements(config):
+    """Validate requirements for fine-mapping"""
+    errors = []
+    warnings = []
+    
+    finemap_config = config.get('fine_mapping', {})
+    method = finemap_config.get('method', 'susie')
+    
+    if method not in ['susie', 'finemap']:
+        errors.append(f"Unknown fine-mapping method: {method}")
+    
+    credible_threshold = finemap_config.get('credible_set_threshold', 0.95)
+    if credible_threshold <= 0 or credible_threshold > 1:
+        errors.append(f"Invalid credible set threshold: {credible_threshold} (must be between 0 and 1)")
+    
+    max_causal = finemap_config.get('max_causal_variants', 5)
+    if max_causal < 1:
+        errors.append(f"Invalid max causal variants: {max_causal} (must be at least 1)")
     
     return errors, warnings
 

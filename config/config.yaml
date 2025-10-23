@@ -98,6 +98,33 @@ gwas:
   maf_threshold: 0.01
   imputation: "mean"  # "mean", "median", "drop"
 
+# Enhanced QC configuration
+enhanced_qc:
+  enable: true
+  sample_missingness_threshold: 0.1
+  variant_missingness_threshold: 0.1
+  hwe_threshold: 1e-6
+  maf_threshold: 0.01
+  run_pca: true
+  num_pcs: 10
+  batch_effect_correction: true
+  expression_normalization: true
+  outlier_detection: true
+
+# Interaction analysis
+interaction_analysis:
+  enable: false
+  interaction_covariates: ["age", "sex", "bmi"]
+  fdr_threshold: 0.1
+  method: "linear"
+
+# Fine-mapping configuration
+fine_mapping:
+  enable: false
+  method: "susie"  # "susie", "finemap"
+  credible_set_threshold: 0.95
+  max_causal_variants: 5
+
 # Paths to tools (use default if in PATH)
 paths:
   qtltools: "qtltools"
@@ -129,6 +156,9 @@ plotting:
     - "volcano"
     - "distribution"
     - "summary"
+    - "locuszoom"
+    - "heatmap"
+    - "interactive"
 
 # Output settings
 output:
@@ -138,6 +168,8 @@ output:
   report_format: "html"
   save_plots: true
   create_summary: true
+  interactive_reports: true
+  generate_methods_section: true
 
 # Quality control settings
 qc:
@@ -162,6 +194,8 @@ performance:
   memory_gb: 8
   temp_dir: "temp"
   cleanup_temp: true
+  parallel_processing: true
+  chunk_size: 1000
 
 # Advanced settings (for experienced users)
 advanced:
@@ -169,3 +203,4 @@ advanced:
   save_logs: true
   validate_outputs: true
   strict_mode: true
+  benchmark: true

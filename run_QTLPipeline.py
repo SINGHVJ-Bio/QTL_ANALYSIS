@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-QTL Analysis Pipeline - Main Runner Script
+QTL Analysis Pipeline - Main Runner Script - Enhanced Version
 Complete pipeline for cis/trans QTL analysis with comprehensive reporting
+Author: Dr. Vijay Singh
+Email: vijay.s.gautam@gmail.com
+
 """
 
 import os
@@ -10,6 +13,8 @@ import argparse
 import logging
 from pathlib import Path
 from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
 
 def setup_logging():
     """Setup basic logging for the runner"""
@@ -22,7 +27,7 @@ def setup_logging():
 def main():
     """Main runner function"""
     parser = argparse.ArgumentParser(
-        description='QTL Analysis Pipeline Runner - Complete cis/trans QTL analysis',
+        description='Enhanced QTL Analysis Pipeline Runner - Complete cis/trans QTL analysis with advanced features',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -41,11 +46,17 @@ Examples:
   # Run both cis and trans
   python run_QTLPipeline.py --config config/config.yaml --qtl-mode both
 
+  # Enable enhanced features
+  python run_QTLPipeline.py --config config/config.yaml --enhanced-qc --interaction-analysis --fine-mapping
+
   # Validate inputs only
   python run_QTLPipeline.py --config config/config.yaml --validate-only
 
   # Run with custom output directory
   python run_QTLPipeline.py --config config/config.yaml --output-dir my_results
+
+  # Run with performance tuning
+  python run_QTLPipeline.py --config config/config.yaml --threads 8 --memory 16
         """
     )
     parser.add_argument('--config', required=True, 
@@ -58,6 +69,16 @@ Examples:
                        help='Override results directory from config')
     parser.add_argument('--run-gwas', action='store_true', 
                        help='Enable GWAS analysis (overrides config setting)')
+    parser.add_argument('--enhanced-qc', action='store_true',
+                       help='Enable enhanced QC (overrides config setting)')
+    parser.add_argument('--interaction-analysis', action='store_true',
+                       help='Enable interaction analysis (overrides config setting)')
+    parser.add_argument('--fine-mapping', action='store_true',
+                       help='Enable fine-mapping (overrides config setting)')
+    parser.add_argument('--threads', type=int,
+                       help='Number of threads for parallel processing')
+    parser.add_argument('--memory', type=int,
+                       help='Memory allocation in GB')
     parser.add_argument('--validate-only', action='store_true',
                        help='Only validate inputs, do not run analysis')
     parser.add_argument('--debug', action='store_true',
@@ -101,6 +122,21 @@ Examples:
         if args.run_gwas:
             pipeline.config['analysis']['run_gwas'] = True
             
+        if args.enhanced_qc:
+            pipeline.config['enhanced_qc'] = {'enable': True}
+            
+        if args.interaction_analysis:
+            pipeline.config['interaction_analysis'] = {'enable': True}
+            
+        if args.fine_mapping:
+            pipeline.config['fine_mapping'] = {'enable': True}
+            
+        if args.threads:
+            pipeline.config['performance']['num_threads'] = args.threads
+            
+        if args.memory:
+            pipeline.config['performance']['memory_gb'] = args.memory
+            
         if args.validate_only:
             from scripts.utils.validation import validate_inputs
             print("🔍 Running comprehensive input validation...")
@@ -109,13 +145,25 @@ Examples:
             return
         
         # Run the complete pipeline
-        print("🚀 Starting QTL Analysis Pipeline...")
+        print("🚀 Starting Enhanced QTL Analysis Pipeline...")
+        print("=" * 60)
+        print("🔧 Features Enabled:")
+        if pipeline.config.get('enhanced_qc', {}).get('enable', False):
+            print("   ✅ Enhanced Quality Control")
+        if pipeline.config.get('interaction_analysis', {}).get('enable', False):
+            print("   ✅ Interaction Analysis")
+        if pipeline.config.get('fine_mapping', {}).get('enable', False):
+            print("   ✅ Fine-mapping")
+        if pipeline.config['analysis'].get('run_gwas', False):
+            print("   ✅ GWAS Analysis")
+        print("=" * 60)
+        
         results = pipeline.run_pipeline()
         
         # Print comprehensive success summary
-        print("\n" + "="*80)
-        print("🎉 QTL ANALYSIS PIPELINE COMPLETED SUCCESSFULLY!")
-        print("="*80)
+        print("\n" + "=" * 80)
+        print("🎉 ENHANCED QTL ANALYSIS PIPELINE COMPLETED SUCCESSFULLY!")
+        print("=" * 80)
         print(f"📁 Results Directory: {pipeline.results_dir}")
         print(f"📊 Analysis Mode:     {pipeline.config['analysis'].get('qtl_mode', 'cis')}")
         print(f"⏱️  Total Runtime:     {datetime.now() - pipeline.start_time}")
@@ -124,17 +172,22 @@ Examples:
         print("\n" + "📈 ANALYSIS SUMMARY")
         print("-" * 80)
         
+        total_significant = 0
         if 'qtl' in results:
             print("QTL Results:")
             for qtl_type, result in results['qtl'].items():
                 if 'cis' in result:
                     cis_status = "✅" if result['cis']['status'] == 'completed' else "❌"
                     cis_count = result['cis'].get('significant_count', 0) if result['cis']['status'] == 'completed' else 'N/A'
+                    if isinstance(cis_count, int):
+                        total_significant += cis_count
                     print(f"  {qtl_type.upper():<8} CIS:  {cis_status} Significant: {cis_count}")
                 
                 if 'trans' in result:
                     trans_status = "✅" if result['trans']['status'] == 'completed' else "❌"  
                     trans_count = result['trans'].get('significant_count', 0) if result['trans']['status'] == 'completed' else 'N/A'
+                    if isinstance(trans_count, int):
+                        total_significant += trans_count
                     print(f"  {qtl_type.upper():<8} TRANS: {trans_status} Significant: {trans_count}")
                 
         if 'gwas' in results:
@@ -142,13 +195,29 @@ Examples:
             status = "✅ COMPLETED" if gwas_result['status'] == 'completed' else "❌ FAILED"
             count = gwas_result.get('significant_count', 0) if gwas_result['status'] == 'completed' else 'N/A'
             method = gwas_result.get('method', 'N/A')
+            if isinstance(count, int):
+                total_significant += count
             print(f"GWAS Analysis: {status} (Method: {method}, Significant: {count})")
             
+        # Advanced analyses summary
+        if 'advanced' in results:
+            print("\nAdvanced Analyses:")
+            for analysis_type, result in results['advanced'].items():
+                if 'interaction' in analysis_type:
+                    print(f"  🤝 Interaction Analysis: {analysis_type}")
+                elif 'fine_mapping' in analysis_type:
+                    print(f"  🎯 Fine-mapping: {analysis_type}")
+        
+        print(f"\n🏆 TOTAL SIGNIFICANT ASSOCIATIONS: {total_significant}")
+        
         print("\n" + "📋 OUTPUT FILES")
         print("-" * 80)
         print(f"📄 HTML Report:      {pipeline.reports_dir}/analysis_report.html")
         print(f"📊 Plots Directory:  {pipeline.plots_dir}/")
         print(f"📈 Results:          {pipeline.qtl_results_dir}/")
+        print(f"🔍 QC Reports:       {pipeline.qc_reports_dir}/")
+        print(f"🤝 Interaction:      {pipeline.interaction_results_dir}/")
+        print(f"🎯 Fine-mapping:     {pipeline.fine_mapping_results_dir}/")
         print(f"📝 Logs:             {pipeline.logs_dir}/")
         print(f"📋 Summary:          {pipeline.results_dir}/pipeline_summary.txt")
         
@@ -156,13 +225,19 @@ Examples:
         print("-" * 80)
         print("1. Review the HTML report for comprehensive results")
         print("2. Check generated plots in the plots directory") 
-        print("3. Examine detailed results in QTL_results directory")
-        print("4. Review logs for any warnings or additional information")
-        print("="*80)
+        print("3. Examine detailed results in respective directories")
+        print("4. Review QC reports for data quality assessment")
+        print("5. Explore advanced analyses results if enabled")
+        print("6. Check logs for any warnings or additional information")
+        print("=" * 80)
         
     except ImportError as e:
         logging.error(f"❌ Import error - make sure all dependencies are installed: {e}")
         print("\n💡 Install required packages: pip install -r requirements.txt")
+        print("   Additional packages for enhanced features:")
+        print("   - scikit-learn: for PCA analysis")
+        print("   - plotly: for interactive plots")
+        print("   - statsmodels: for statistical models")
         sys.exit(1)
     except Exception as e:
         logging.error(f"❌ Pipeline execution failed: {e}")
