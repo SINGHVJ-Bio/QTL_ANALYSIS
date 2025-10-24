@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive input validation utilities for tensorQTL pipeline - Optimized Version
+Comprehensive input validation utilities for tensorQTL pipeline - Enhanced Version
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
@@ -16,16 +16,12 @@ import logging
 import gzip
 import tempfile
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import multiprocessing as mp
-from functools import lru_cache
-import psutil
-
 warnings.filterwarnings('ignore')
+
 logger = logging.getLogger('QTLPipeline')
 
 def validate_inputs(config):
-    """Validate all input files and data consistency with comprehensive checks for tensorQTL - OPTIMIZED"""
+    """Validate all input files and data consistency with comprehensive checks for tensorQTL"""
     input_files = config['input_files']
     
     errors = []
@@ -33,66 +29,47 @@ def validate_inputs(config):
     
     print("🔍 Starting comprehensive input validation for tensorQTL pipeline...")
     
-    # Check mandatory files - parallel file existence checks
+    # Check mandatory files
     mandatory_files = ['genotypes', 'covariates', 'annotations']
-    file_validation_futures = []
+    for file_type in mandatory_files:
+        file_path = input_files.get(file_type)
+        if not file_path:
+            errors.append(f"Missing mandatory input file: {file_type}")
+            continue
+            
+        if not os.path.exists(file_path):
+            errors.append(f"File not found: {file_path} (for {file_type})")
+        else:
+            print(f"✅ Found {file_type} file: {file_path}")
+            
+            # Special validation for each file type
+            if file_type == 'genotypes':
+                genotype_errors, genotype_warnings = validate_genotype_file(file_path, config)
+                errors.extend(genotype_errors)
+                warnings.extend(genotype_warnings)
+            elif file_type == 'covariates':
+                cov_errors, cov_warnings = validate_covariates_file(file_path, config)
+                errors.extend(cov_errors)
+                warnings.extend(cov_warnings)
+            elif file_type == 'annotations':
+                annot_errors, annot_warnings = validate_annotations_file(file_path, config)
+                errors.extend(annot_errors)
+                warnings.extend(annot_warnings)
     
-    with ThreadPoolExecutor(max_workers=min(6, mp.cpu_count())) as executor:
-        for file_type in mandatory_files:
-            file_path = input_files.get(file_type)
-            if not file_path:
-                errors.append(f"Missing mandatory input file: {file_type}")
-                continue
-                
-            if not os.path.exists(file_path):
-                errors.append(f"File not found: {file_path} (for {file_type})")
-            else:
-                print(f"✅ Found {file_type} file: {file_path}")
-                
-                # Submit file-specific validation tasks in parallel
-                if file_type == 'genotypes':
-                    future = executor.submit(validate_genotype_file, file_path, config)
-                    file_validation_futures.append((future, 'genotypes'))
-                elif file_type == 'covariates':
-                    future = executor.submit(validate_covariates_file, file_path, config)
-                    file_validation_futures.append((future, 'covariates'))
-                elif file_type == 'annotations':
-                    future = executor.submit(validate_annotations_file, file_path, config)
-                    file_validation_futures.append((future, 'annotations'))
-        
-        # Process completed file validation tasks
-        for future, file_type in file_validation_futures:
-            try:
-                task_errors, task_warnings = future.result(timeout=300)  # 5 minute timeout
-                errors.extend(task_errors)
-                warnings.extend(task_warnings)
-            except Exception as e:
-                errors.append(f"Validation failed for {file_type}: {e}")
-    
-    # Check phenotype files based on analysis types - parallel processing
+    # Check phenotype files based on analysis types
     analysis_types = get_qtl_types_from_config(config)
-    pheno_futures = []
-    
-    with ThreadPoolExecutor(max_workers=min(4, mp.cpu_count())) as executor:
-        for analysis_type in analysis_types:
-            file_path = input_files.get(analysis_type)
-            if not file_path:
-                errors.append(f"Missing phenotype file for {analysis_type}")
-                continue
-                
-            if not os.path.exists(file_path):
-                errors.append(f"Phenotype file not found: {file_path} (for {analysis_type})")
-            else:
-                future = executor.submit(validate_phenotype_file, file_path, analysis_type, config)
-                pheno_futures.append(future)
-        
-        for future in as_completed(pheno_futures):
-            try:
-                pheno_errors, pheno_warnings = future.result(timeout=300)
-                errors.extend(pheno_errors)
-                warnings.extend(pheno_warnings)
-            except Exception as e:
-                errors.append(f"Phenotype validation failed: {e}")
+    for analysis_type in analysis_types:
+        file_path = input_files.get(analysis_type)
+        if not file_path:
+            errors.append(f"Missing phenotype file for {analysis_type}")
+            continue
+            
+        if not os.path.exists(file_path):
+            errors.append(f"Phenotype file not found: {file_path} (for {analysis_type})")
+        else:
+            pheno_errors, pheno_warnings = validate_phenotype_file(file_path, analysis_type, config)
+            errors.extend(pheno_errors)
+            warnings.extend(pheno_warnings)
     
     # Check GWAS phenotype file if GWAS is enabled
     if config['analysis'].get('run_gwas', False):
@@ -106,48 +83,44 @@ def validate_inputs(config):
             errors.extend(gwas_errors)
             warnings.extend(gwas_warnings)
     
-    # Check required tools for tensorQTL pipeline - parallel tool checking
-    tool_errors, tool_warnings = check_required_tools_parallel(config)
+    # Check required tools for tensorQTL pipeline
+    tool_errors, tool_warnings = check_required_tools(config)
     errors.extend(tool_errors)
     warnings.extend(tool_warnings)
     
     # Check sample concordance
     if config['qc'].get('check_sample_concordance', True):
-        sample_errors, sample_warnings = check_sample_concordance_optimized(config, input_files)
+        sample_errors, sample_warnings = check_sample_concordance(config, input_files)
         errors.extend(sample_errors)
         warnings.extend(sample_warnings)
     
-    # Parallel configuration validations
-    config_validation_tasks = [
-        (validate_configuration, [config]),
-        (validate_tensorqtl_requirements, [config])
-    ]
+    # Check configuration validity for tensorQTL
+    config_errors, config_warnings = validate_configuration(config)
+    errors.extend(config_errors)
+    warnings.extend(config_warnings)
     
-    # Add optional validations if enabled
+    # Check tensorQTL specific requirements
+    tensorqtl_errors, tensorqtl_warnings = validate_tensorqtl_requirements(config)
+    errors.extend(tensorqtl_errors)
+    warnings.extend(tensorqtl_warnings)
+    
+    # Check enhanced QC requirements
     if config.get('enhanced_qc', {}).get('enable', False):
-        config_validation_tasks.append((validate_enhanced_qc_requirements, [config]))
+        qc_errors, qc_warnings = validate_enhanced_qc_requirements(config)
+        errors.extend(qc_errors)
+        warnings.extend(qc_warnings)
     
+    # Check interaction analysis requirements
     if config.get('interaction_analysis', {}).get('enable', False):
-        config_validation_tasks.append((validate_interaction_requirements, [config]))
+        interaction_errors, interaction_warnings = validate_interaction_requirements(config)
+        errors.extend(interaction_errors)
+        warnings.extend(interaction_warnings)
     
+    # Check fine-mapping requirements
     if config.get('fine_mapping', {}).get('enable', False):
-        config_validation_tasks.append((validate_finemap_requirements, [config]))
-    
-    # Execute configuration validations in parallel
-    with ThreadPoolExecutor(max_workers=min(4, mp.cpu_count())) as executor:
-        future_to_task = {}
-        for func, args in config_validation_tasks:
-            future = executor.submit(func, *args)
-            future_to_task[future] = func.__name__
-        
-        for future in as_completed(future_to_task):
-            task_name = future_to_task[future]
-            try:
-                task_errors, task_warnings = future.result(timeout=120)
-                errors.extend(task_errors)
-                warnings.extend(task_warnings)
-            except Exception as e:
-                errors.append(f"Configuration validation {task_name} failed: {e}")
+        finemap_errors, finemap_warnings = validate_finemap_requirements(config)
+        errors.extend(finemap_errors)
+        warnings.extend(finemap_warnings)
     
     # Report results
     if warnings:
@@ -167,7 +140,7 @@ def validate_inputs(config):
         return True
 
 def validate_tensorqtl_requirements(config):
-    """Validate tensorQTL specific requirements - PRESERVED"""
+    """Validate tensorQTL specific requirements"""
     errors = []
     warnings = []
     
@@ -188,6 +161,7 @@ def validate_tensorqtl_requirements(config):
         if not torch.cuda.is_available():
             print("💡 Using CPU for tensorQTL analysis")
             # Check if we have enough memory for CPU analysis
+            import psutil
             memory_gb = psutil.virtual_memory().total / (1024**3)
             if memory_gb < 16:
                 warnings.append(f"Low system memory ({memory_gb:.1f}GB) for CPU-based tensorQTL analysis")
@@ -213,13 +187,8 @@ def validate_tensorqtl_requirements(config):
     
     return errors, warnings
 
-@lru_cache(maxsize=32)
-def detect_genotype_format_cached(file_path):
-    """Cached version of format detection"""
-    return detect_genotype_format(file_path)
-
 def validate_genotype_file(file_path, config):
-    """Validate genotype file format and content for tensorQTL - OPTIMIZED"""
+    """Validate genotype file format and content for tensorQTL"""
     errors = []
     warnings = []
     
@@ -235,17 +204,17 @@ def validate_genotype_file(file_path, config):
     elif file_size > 50:
         warnings.append(f"Genotype file is very large ({file_size:.2f} GB), consider using PLINK format for better performance")
     
-    # Detect format with caching
-    format_info = detect_genotype_format_cached(file_path)
+    # Detect format
+    format_info = detect_genotype_format(file_path)
     print(f"📁 Detected genotype format: {format_info['format']}")
     
     # Validate specific formats
     if format_info['format'] in ['vcf', 'vcf.gz', 'bcf']:
-        vcf_errors, vcf_warnings = validate_vcf_file_optimized(file_path, config)
+        vcf_errors, vcf_warnings = validate_vcf_file(file_path, config)
         errors.extend(vcf_errors)
         warnings.extend(vcf_warnings)
     elif format_info['format'] == 'plink_bed':
-        plink_errors, plink_warnings = validate_plink_file_optimized(file_path, config)
+        plink_errors, plink_warnings = validate_plink_file(file_path, config)
         errors.extend(plink_errors)
         warnings.extend(plink_warnings)
     elif format_info['format'] == 'unknown':
@@ -258,7 +227,7 @@ def validate_genotype_file(file_path, config):
     return errors, warnings
 
 def detect_genotype_format(file_path):
-    """Detect genotype file format - PRESERVED"""
+    """Detect genotype file format"""
     file_ext = file_path.lower()
     
     if file_ext.endswith('.vcf.gz') or file_ext.endswith('.vcf.bgz'):
@@ -276,7 +245,7 @@ def detect_genotype_format(file_path):
         return detect_format_by_content(file_path)
 
 def detect_format_by_content(file_path):
-    """Detect file format by examining content - PRESERVED"""
+    """Detect file format by examining content"""
     try:
         if file_path.endswith('.gz'):
             with gzip.open(file_path, 'rt') as f:
@@ -306,58 +275,64 @@ def detect_format_by_content(file_path):
         logger.warning(f"Format detection failed: {e}")
         return {'format': 'unknown', 'compressed': file_path.endswith('.gz')}
 
-def validate_vcf_file_optimized(file_path, config):
-    """Validate VCF file structure for tensorQTL - OPTIMIZED"""
+def validate_vcf_file(file_path, config):
+    """Validate VCF file structure for tensorQTL"""
     errors = []
     warnings = []
     
     try:
-        # Check if bcftools can read the file - single command for multiple checks
-        cmd = f"""
-        {config['paths']['bcftools']} view -h {file_path} | head -5 && \
-        {config['paths']['bcftools']} query -l {file_path} | head -5 && \
-        {config['paths']['bcftools']} view -H {file_path} | head -10 | grep -o 'GT' | head -1
-        """
+        # Check if bcftools can read the file
+        result = subprocess.run(
+            f"{config['paths']['bcftools']} view -h {file_path} | head -5",
+            shell=True, capture_output=True, text=True, check=False
+        )
         
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
-        
-        if "command not found" in result.stderr:
-            errors.append(f"bcftools not available: {result.stderr}")
+        if result.returncode != 0:
+            errors.append(f"VCF file cannot be read by bcftools: {file_path}")
             return errors, warnings
         
-        # Get sample count quickly
-        result_samples = subprocess.run(
-            f"{config['paths']['bcftools']} query -l {file_path} | wc -l",
+        # Check for GT field in a sample of variants
+        result = subprocess.run(
+            f"{config['paths']['bcftools']} view {file_path} | grep -v '^#' | head -10",
             shell=True, capture_output=True, text=True, check=False
         )
         
-        samples_count = int(result_samples.stdout.strip()) if result_samples.stdout.strip().isdigit() else 0
-        if samples_count == 0:
+        if "GT" not in result.stdout:
+            warnings.append("GT field not found in VCF - ensure genotypes are properly encoded")
+        
+        # Check sample names
+        result = subprocess.run(
+            f"{config['paths']['bcftools']} query -l {file_path}",
+            shell=True, capture_output=True, text=True, check=False
+        )
+        
+        samples = [s.strip() for s in result.stdout.split('\n') if s.strip()]
+        if not samples:
             errors.append("No samples found in VCF file")
         else:
-            print(f"✅ Found {samples_count} samples in genotype file")
+            print(f"✅ Found {len(samples)} samples in genotype file")
             
-        # Get variant count estimate quickly
-        result_variants = subprocess.run(
-            f"{config['paths']['bcftools']} view -H {file_path} | head -1000 | wc -l",
+        # Check variant count
+        result = subprocess.run(
+            f"{config['paths']['bcftools']} view -H {file_path} | wc -l",
             shell=True, capture_output=True, text=True, check=False
         )
         
-        variant_sample = int(result_variants.stdout.strip()) if result_variants.stdout.strip().isdigit() else 0
-        if variant_sample == 0:
+        variant_count = int(result.stdout.strip()) if result.stdout.strip().isdigit() else 0
+        if variant_count == 0:
             errors.append("No variants found in VCF file")
         else:
-            print(f"✅ VCF contains variants (sampled {variant_sample})")
+            print(f"✅ Found {variant_count} variants in genotype file")
             
-        # Check chromosome naming consistency quickly
-        result_chrom = subprocess.run(
-            f"{config['paths']['bcftools']} view -H {file_path} | cut -f1 | head -20 | sort | uniq",
+        # Check chromosome naming consistency
+        result = subprocess.run(
+            f"{config['paths']['bcftools']} view -H {file_path} | cut -f1 | sort | uniq | head -10",
             shell=True, capture_output=True, text=True, check=False
         )
         
-        chromosomes = [c.strip() for c in result_chrom.stdout.split('\n') if c.strip()]
-        has_chr_prefix = any(str(c).startswith('chr') for c in chromosomes)
-        no_chr_prefix = any(str(c) in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', 'X', 'Y', 'MT'] for c in chromosomes)
+        chromosomes = [c.strip() for c in result.stdout.split('\n') if c.strip()]
+        has_chr_prefix = any(c.startswith('chr') for c in chromosomes)
+        no_chr_prefix = any(c in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', 'X', 'Y', 'MT'] for c in chromosomes)
         
         if has_chr_prefix and no_chr_prefix:
             warnings.append("Mixed chromosome naming (some with 'chr' prefix, some without)")
@@ -371,8 +346,8 @@ def validate_vcf_file_optimized(file_path, config):
     
     return errors, warnings
 
-def validate_plink_file_optimized(file_path, config):
-    """Validate PLINK BED file for tensorQTL - OPTIMIZED"""
+def validate_plink_file(file_path, config):
+    """Validate PLINK BED file for tensorQTL"""
     errors = []
     warnings = []
     
@@ -388,31 +363,23 @@ def validate_plink_file_optimized(file_path, config):
         if errors:
             return errors, warnings
             
-        # Fast file reading - just get counts and basic info
+        # Check if we can read the files
         try:
-            # Get sample count quickly
-            if os.path.exists(f'{base_name}.fam'):
-                with open(f'{base_name}.fam', 'r') as f:
-                    sample_count = sum(1 for _ in f)
-                print(f"✅ PLINK samples: {sample_count}")
+            # Try to read BIM file
+            bim_df = pd.read_csv(f'{base_name}.bim', sep='\t', header=None, 
+                               names=['chr', 'variant_id', 'pos_cm', 'pos_bp', 'allele1', 'allele2'])
+            print(f"✅ PLINK BIM: {len(bim_df)} variants")
             
-            # Get variant count quickly  
-            if os.path.exists(f'{base_name}.bim'):
-                with open(f'{base_name}.bim', 'r') as f:
-                    variant_count = sum(1 for _ in f)
-                print(f"✅ PLINK variants: {variant_count}")
+            # Try to read FAM file
+            fam_df = pd.read_csv(f'{base_name}.fam', sep='\t', header=None,
+                               names=['fam_id', 'sample_id', 'father', 'mother', 'sex', 'phenotype'])
+            print(f"✅ PLINK FAM: {len(fam_df)} samples")
             
-            # Quick duplicate check on a sample of variants
-            try:
-                bim_sample = pd.read_csv(f'{base_name}.bim', sep='\t', header=None, 
-                                       names=['chr', 'variant_id', 'pos_cm', 'pos_bp', 'allele1', 'allele2'],
-                                       nrows=1000)
-                duplicate_variants = bim_sample.duplicated('variant_id').sum()
-                if duplicate_variants > 0:
-                    warnings.append(f"Found duplicate variant IDs in BIM file sample")
-            except:
-                pass  # Skip duplicate check if it fails
-                
+            # Check for duplicate variant IDs
+            duplicate_variants = bim_df.duplicated('variant_id').sum()
+            if duplicate_variants > 0:
+                warnings.append(f"Found {duplicate_variants} duplicate variant IDs in BIM file")
+            
         except Exception as e:
             errors.append(f"Error reading PLINK files: {e}")
             
@@ -422,13 +389,12 @@ def validate_plink_file_optimized(file_path, config):
     return errors, warnings
 
 def validate_covariates_file(file_path, config):
-    """Validate covariates file for tensorQTL - OPTIMIZED"""
+    """Validate covariates file for tensorQTL"""
     errors = []
     warnings = []
     
     try:
-        # Read only first 1000 rows for validation
-        df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=1000)
+        df = pd.read_csv(file_path, sep='\t', index_col=0)
         
         # Check dimensions
         if df.shape[0] == 0:
@@ -436,32 +402,33 @@ def validate_covariates_file(file_path, config):
         if df.shape[1] == 0:
             errors.append("Covariates file has no samples")
         
-        # Check for missing values on sample
+        # Check for missing values
         missing_count = df.isna().sum().sum()
         if missing_count > 0:
-            warnings.append(f"Covariates file has missing values (sampled {missing_count})")
+            warnings.append(f"Covariates file has {missing_count} missing values")
         
-        # Check for constant covariates on sample
+        # Check for constant covariates
         constant_covariates = []
         for covariate in df.index:
             if df.loc[covariate].nunique() == 1:
                 constant_covariates.append(covariate)
-                if len(constant_covariates) >= 10:  # Limit check
-                    break
         
         if constant_covariates:
-            warnings.append(f"Constant covariates found (sample): {', '.join(constant_covariates[:5])}")
+            warnings.append(f"Constant covariates found: {', '.join(constant_covariates)}")
         
-        # Check for numeric covariates (sampled)
+        # Check for numeric covariates (except for categorical ones that should be encoded)
+        numeric_covariates = []
         non_numeric_covariates = []
-        for covariate in df.index[:50]:  # Check first 50
+        
+        for covariate in df.index:
             try:
                 pd.to_numeric(df.loc[covariate])
+                numeric_covariates.append(covariate)
             except:
                 non_numeric_covariates.append(covariate)
         
         if non_numeric_covariates:
-            warnings.append(f"Non-numeric covariates found (sample): {', '.join(non_numeric_covariates[:5])}")
+            warnings.append(f"Non-numeric covariates found: {', '.join(non_numeric_covariates)}")
         
         # Check for recommended covariates
         recommended_covariates = ['PC1', 'PC2', 'PC3', 'PC4', 'PC5']
@@ -469,14 +436,10 @@ def validate_covariates_file(file_path, config):
         if missing_recommended:
             warnings.append(f"Recommended covariates missing: {', '.join(missing_recommended)}")
         
-        # Get full dimensions without loading entire file
-        with open(file_path, 'r') as f:
-            total_covariates = sum(1 for _ in f) - 1  # Subtract header
-        
-        print(f"✅ Covariates: {total_covariates} covariates, {df.shape[1]} samples")
-        print(f"✅ Numeric covariates: {len(df.index) - len(non_numeric_covariates)} checked")
+        print(f"✅ Covariates: {df.shape[0]} covariates, {df.shape[1]} samples")
+        print(f"✅ Numeric covariates: {len(numeric_covariates)}")
         if non_numeric_covariates:
-            print(f"⚠️  Non-numeric covariates: {len(non_numeric_covariates)} found in sample")
+            print(f"⚠️  Non-numeric covariates: {len(non_numeric_covariates)}")
         
     except Exception as e:
         errors.append(f"Error reading covariates file {file_path}: {e}")
@@ -484,13 +447,13 @@ def validate_covariates_file(file_path, config):
     return errors, warnings
 
 def validate_annotations_file(file_path, config):
-    """Validate annotations file (BED format) for tensorQTL - OPTIMIZED"""
+    """Validate annotations file (BED format) for tensorQTL"""
     errors = []
     warnings = []
     
     try:
-        # Read only first 1000 rows for validation
-        df = pd.read_csv(file_path, sep='\t', comment='#', nrows=1000)
+        # Try to read as BED file
+        df = pd.read_csv(file_path, sep='\t', comment='#')
         
         # Check required columns
         required_columns = ['chr', 'start', 'end', 'gene_id']
@@ -500,22 +463,22 @@ def validate_annotations_file(file_path, config):
             errors.append(f"Annotations file missing required columns: {', '.join(missing_columns)}")
             return errors, warnings
         
-        # Check data types on sample
+        # Check data types
         try:
             df['start'] = pd.to_numeric(df['start'])
             df['end'] = pd.to_numeric(df['end'])
         except:
             errors.append("Annotation start/end positions must be numeric")
         
-        # Check for invalid ranges on sample
+        # Check for invalid ranges
         invalid_ranges = df[df['start'] >= df['end']]
         if len(invalid_ranges) > 0:
-            warnings.append(f"Found {len(invalid_ranges)} annotations with start >= end (in sample)")
+            errors.append(f"Found {len(invalid_ranges)} annotations with start >= end")
         
-        # Check for duplicate gene IDs on sample
+        # Check for duplicate gene IDs
         duplicate_genes = df[df.duplicated('gene_id')]
         if len(duplicate_genes) > 0:
-            warnings.append(f"Found {len(duplicate_genes)} duplicate gene IDs (in sample)")
+            warnings.append(f"Found {len(duplicate_genes)} duplicate gene IDs")
         
         # Check chromosome naming consistency
         chromosomes = df['chr'].unique()
@@ -529,20 +492,14 @@ def validate_annotations_file(file_path, config):
         elif no_chr_prefix:
             print("✅ Annotation chromosomes: without 'chr' prefix")
         
-        # Get total annotation count without loading entire file
-        with open(file_path, 'r') as f:
-            total_annotations = sum(1 for _ in f)
-            if file_path.endswith('.gz'):
-                # For gzipped files, we can't easily count without reading
-                total_annotations = "many" if total_annotations > 1000 else total_annotations
-        
-        print(f"✅ Annotations: {total_annotations} features (sampled {len(df)})")
+        # Check annotation count
+        print(f"✅ Annotations: {len(df)} features")
         
         # Check if annotations cover expected chromosomes
         expected_chromosomes = [str(i) for i in range(1, 23)] + ['X', 'Y', 'MT']
         missing_chromosomes = [chrom for chrom in expected_chromosomes if chrom not in chromosomes and f"chr{chrom}" not in chromosomes]
         if missing_chromosomes:
-            warnings.append(f"Annotations missing for chromosomes (in sample): {', '.join(missing_chromosomes[:5])}")
+            warnings.append(f"Annotations missing for chromosomes: {', '.join(missing_chromosomes)}")
         
     except Exception as e:
         errors.append(f"Error reading annotations file {file_path}: {e}")
@@ -550,13 +507,12 @@ def validate_annotations_file(file_path, config):
     return errors, warnings
 
 def validate_phenotype_file(file_path, qtl_type, config):
-    """Validate phenotype file structure for tensorQTL - OPTIMIZED"""
+    """Validate phenotype file structure for tensorQTL"""
     errors = []
     warnings = []
     
     try:
-        # Read only first 1000 rows for validation
-        df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=1000)
+        df = pd.read_csv(file_path, sep='\t', index_col=0)
         
         # Check dimensions
         if df.shape[0] == 0:
@@ -564,25 +520,28 @@ def validate_phenotype_file(file_path, qtl_type, config):
         if df.shape[1] == 0:
             errors.append(f"{qtl_type} file has no samples")
         
-        # Check for missing values on sample
+        # Check for missing values
         missing_count = df.isna().sum().sum()
         if missing_count > 0:
-            warnings.append(f"{qtl_type} has missing values (sampled {missing_count})")
+            warnings.append(f"{qtl_type} has {missing_count} missing values")
         
-        # Check for constant features on sample
+        # Check for constant features
         constant_features = (df.nunique() == 1).sum()
         if constant_features > 0:
-            warnings.append(f"{qtl_type} has {constant_features} constant features (in sample)")
+            warnings.append(f"{qtl_type} has {constant_features} constant features")
         
         # Check for extreme values based on phenotype type
         if df.size > 0:
             if qtl_type == 'expression':
+                # Expression data typically log-transformed
                 extreme_low = (df < -10).sum().sum()
                 extreme_high = (df > 10).sum().sum()
             elif qtl_type == 'protein':
+                # Protein data often has wider range
                 extreme_low = (df < -20).sum().sum()
                 extreme_high = (df > 20).sum().sum()
             elif qtl_type == 'splicing':
+                # Splicing data (PSI) typically between 0-1 or logit transformed
                 extreme_low = (df < -10).sum().sum()
                 extreme_high = (df > 10).sum().sum()
             else:
@@ -592,23 +551,20 @@ def validate_phenotype_file(file_path, qtl_type, config):
             if extreme_low > 0 or extreme_high > 0:
                 warnings.append(f"{qtl_type} has extreme values (consider checking normalization)")
         
-        # Get full feature count without loading entire file
-        with open(file_path, 'r') as f:
-            total_features = sum(1 for _ in f) - 1  # Subtract header
-        
-        # Calculate basic statistics on sample
+        # Check data distribution
         try:
+            # Calculate basic statistics
             mean_val = df.mean().mean()
             std_val = df.std().mean()
-            print(f"✅ {qtl_type}: {total_features} features, {df.shape[1]} samples")
-            print(f"   Mean: {mean_val:.3f}, Std: {std_val:.3f} (sampled)")
+            print(f"✅ {qtl_type}: {df.shape[0]} features, {df.shape[1]} samples")
+            print(f"   Mean: {mean_val:.3f}, Std: {std_val:.3f}")
             
             # Check normalization method from config
             norm_method = config['normalization'].get(qtl_type, {}).get('method', 'unknown')
             print(f"   Normalization method: {norm_method}")
             
         except:
-            print(f"✅ {qtl_type}: {total_features} features, {df.shape[1]} samples")
+            print(f"✅ {qtl_type}: {df.shape[0]} features, {df.shape[1]} samples")
         
     except Exception as e:
         errors.append(f"Error reading {qtl_type} file {file_path}: {e}")
@@ -616,13 +572,12 @@ def validate_phenotype_file(file_path, qtl_type, config):
     return errors, warnings
 
 def validate_gwas_phenotype_file(file_path, config):
-    """Validate GWAS phenotype file - OPTIMIZED"""
+    """Validate GWAS phenotype file"""
     errors = []
     warnings = []
     
     try:
-        # Read only first 1000 rows for validation
-        df = pd.read_csv(file_path, sep='\t', nrows=1000)
+        df = pd.read_csv(file_path, sep='\t')
         
         # Check required columns
         if 'sample_id' not in df.columns:
@@ -636,10 +591,10 @@ def validate_gwas_phenotype_file(file_path, config):
         # Check for missing values in sample IDs
         missing_samples = df['sample_id'].isna().sum()
         if missing_samples > 0:
-            errors.append(f"GWAS phenotype file has {missing_samples} missing sample IDs (in sample)")
+            errors.append(f"GWAS phenotype file has {missing_samples} missing sample IDs")
         
-        # Check phenotype data types on sample
-        for pheno in phenotype_cols[:10]:  # Check first 10 phenotypes
+        # Check phenotype data types
+        for pheno in phenotype_cols:
             try:
                 pd.to_numeric(df[pheno])
             except:
@@ -648,29 +603,26 @@ def validate_gwas_phenotype_file(file_path, config):
         # Check for binary phenotypes if logistic regression is specified
         gwas_method = config.get('gwas', {}).get('method', 'linear')
         if gwas_method == 'logistic':
-            for pheno in phenotype_cols[:5]:  # Check first 5 phenotypes
+            for pheno in phenotype_cols:
                 unique_vals = df[pheno].dropna().unique()
                 if len(unique_vals) != 2:
                     warnings.append(f"GWAS phenotype '{pheno}' has {len(unique_vals)} unique values, but logistic regression expects binary outcomes")
         
-        # Get total sample count without loading entire file
-        with open(file_path, 'r') as f:
-            total_samples = sum(1 for _ in f) - 1  # Subtract header
-        
-        print(f"✅ GWAS phenotype: {total_samples} samples, {len(phenotype_cols)} phenotypes")
+        print(f"✅ GWAS phenotype: {df.shape[0]} samples, {len(phenotype_cols)} phenotypes")
         
     except Exception as e:
         errors.append(f"Error reading GWAS phenotype file {file_path}: {e}")
     
     return errors, warnings
 
-def check_required_tools_parallel(config):
-    """Check if all required tools are available - OPTIMIZED with parallel execution"""
+def check_required_tools(config):
+    """Check if all required tools are available for tensorQTL pipeline"""
     errors = []
     warnings = []
     
     tools = config.get('paths', {})
     
+    # Updated required tools for tensorQTL pipeline
     required_tools = [
         'plink',    # For genotype processing
         'bcftools', # For VCF/BCF manipulation
@@ -678,62 +630,42 @@ def check_required_tools_parallel(config):
         'tabix'     # For file indexing
     ]
     
-    optional_tools = ['R']  # For DESeq2 normalization
-    
-    def check_single_tool(tool_name, tool_path):
-        """Check a single tool and return result"""
+    for tool_name in required_tools:
+        tool_path = tools.get(tool_name, tool_name)
+        
         try:
             result = subprocess.run(
                 f"which {tool_path}", 
                 shell=True, capture_output=True, text=True, check=False
             )
             if result.returncode != 0:
-                return tool_name, False, f"Required tool not found: {tool_name} ({tool_path})"
-            
-            # Get version information
-            version_result = subprocess.run(
-                f"{tool_path} --version 2>&1 | head -1", 
-                shell=True, capture_output=True, text=True, check=False
-            )
-            version_info = version_result.stdout.strip() if version_result.returncode == 0 else "version unknown"
-            return tool_name, True, f"Found {tool_name}: {version_info}"
-            
+                errors.append(f"Required tool not found: {tool_name} ({tool_path})")
+            else:
+                # Get version information
+                version_result = subprocess.run(
+                    f"{tool_path} --version", 
+                    shell=True, capture_output=True, text=True, check=False
+                )
+                if version_result.returncode == 0:
+                    version_line = version_result.stdout.split('\n')[0]
+                    print(f"✅ Found {tool_name}: {version_line}")
+                else:
+                    print(f"✅ Found {tool_name}: {tool_path}")
         except Exception as e:
-            return tool_name, False, f"Error checking tool {tool_name}: {e}"
+            errors.append(f"Error checking tool {tool_name}: {e}")
     
-    # Check required tools in parallel
-    with ThreadPoolExecutor(max_workers=min(8, mp.cpu_count())) as executor:
-        # Submit required tools
-        future_to_tool = {}
-        for tool_name in required_tools:
-            tool_path = tools.get(tool_name, tool_name)
-            future = executor.submit(check_single_tool, tool_name, tool_path)
-            future_to_tool[future] = ('required', tool_name)
-        
-        # Submit optional tools
-        for tool_name in optional_tools:
-            tool_path = tools.get(tool_name, tool_name)
-            future = executor.submit(check_single_tool, tool_name, tool_path)
-            future_to_tool[future] = ('optional', tool_name)
-        
-        # Process results
-        for future in as_completed(future_to_tool):
-            tool_type, tool_name = future_to_tool[future]
-            try:
-                name, found, message = future.result(timeout=30)
-                if found:
-                    print(f"✅ {message}")
-                else:
-                    if tool_type == 'required':
-                        errors.append(message)
-                    else:
-                        warnings.append(message)
-            except Exception as e:
-                error_msg = f"Tool check failed for {tool_name}: {e}"
-                if tool_type == 'required':
-                    errors.append(error_msg)
-                else:
-                    warnings.append(error_msg)
+    # Check optional tools
+    optional_tools = ['R']  # For DESeq2 normalization
+    for tool_name in optional_tools:
+        tool_path = tools.get(tool_name, tool_name)
+        result = subprocess.run(
+            f"which {tool_path}", 
+            shell=True, capture_output=True, text=True, check=False
+        )
+        if result.returncode != 0:
+            warnings.append(f"Optional tool not found: {tool_name} ({tool_path})")
+        else:
+            print(f"✅ Found {tool_name}: {tool_path}")
     
     # Check Python packages for enhanced features
     if config.get('enhanced_qc', {}).get('enable', False):
@@ -768,15 +700,15 @@ def check_required_tools_parallel(config):
     
     return errors, warnings
 
-def check_sample_concordance_optimized(config, input_files):
-    """Check sample concordance across all input files - OPTIMIZED"""
+def check_sample_concordance(config, input_files):
+    """Check sample concordance across all input files"""
     errors = []
     warnings = []
     
     try:
         # Get samples from genotype file
         geno_file = input_files['genotypes']
-        format_info = detect_genotype_format_cached(geno_file)
+        format_info = detect_genotype_format(geno_file)
         
         geno_samples = set()
         if format_info['format'] in ['vcf', 'vcf.gz', 'bcf']:
@@ -790,9 +722,8 @@ def check_sample_concordance_optimized(config, input_files):
             base_name = geno_file.replace('.bed', '')
             fam_file = f"{base_name}.fam"
             if os.path.exists(fam_file):
-                # Read only sample IDs from FAM
-                fam_samples = pd.read_csv(fam_file, sep='\t', header=None, usecols=[1])
-                geno_samples = set(fam_samples[1].tolist())
+                fam_df = pd.read_csv(fam_file, sep='\t', header=None)
+                geno_samples = set(fam_df[1].tolist())  # Sample IDs are in second column
         
         if not geno_samples:
             warnings.append("Could not extract samples from genotype file")
@@ -800,15 +731,9 @@ def check_sample_concordance_optimized(config, input_files):
         
         print(f"✅ Genotype samples: {len(geno_samples)}")
         
-        # Get samples from covariate file quickly
-        cov_samples = set()
-        try:
-            cov_df = pd.read_csv(input_files['covariates'], sep='\t', index_col=0, nrows=0)
-            cov_samples = set(cov_df.columns)
-        except Exception as e:
-            warnings.append(f"Could not read covariates samples: {e}")
-            return errors, warnings
-        
+        # Get samples from covariate file
+        cov_df = pd.read_csv(input_files['covariates'], sep='\t', index_col=0)
+        cov_samples = set(cov_df.columns)
         print(f"✅ Covariate samples: {len(cov_samples)}")
         
         # Check genotype-covariate overlap
@@ -826,41 +751,35 @@ def check_sample_concordance_optimized(config, input_files):
         analysis_types = get_qtl_types_from_config(config)
         for analysis_type in analysis_types:
             if analysis_type in input_files and input_files[analysis_type]:
-                try:
-                    pheno_df = pd.read_csv(input_files[analysis_type], sep='\t', index_col=0, nrows=0)
-                    pheno_samples = set(pheno_df.columns)
-                    overlap = geno_samples.intersection(pheno_samples)
-                    
-                    if len(overlap) == 0:
-                        errors.append(f"No sample overlap between genotypes and {analysis_type}")
+                pheno_df = pd.read_csv(input_files[analysis_type], sep='\t', index_col=0)
+                pheno_samples = set(pheno_df.columns)
+                overlap = geno_samples.intersection(pheno_samples)
+                
+                if len(overlap) == 0:
+                    errors.append(f"No sample overlap between genotypes and {analysis_type}")
+                else:
+                    overlap_percent = len(overlap) / min(len(geno_samples), len(pheno_samples)) * 100
+                    if overlap_percent < 80:
+                        warnings.append(f"Low sample overlap for {analysis_type}: {len(overlap)} samples ({overlap_percent:.1f}%)")
                     else:
-                        overlap_percent = len(overlap) / min(len(geno_samples), len(pheno_samples)) * 100
-                        if overlap_percent < 80:
-                            warnings.append(f"Low sample overlap for {analysis_type}: {len(overlap)} samples ({overlap_percent:.1f}%)")
-                        else:
-                            print(f"✅ {analysis_type} overlap: {len(overlap)} samples ({overlap_percent:.1f}%)")
-                except Exception as e:
-                    warnings.append(f"Could not check samples for {analysis_type}: {e}")
+                        print(f"✅ {analysis_type} overlap: {len(overlap)} samples ({overlap_percent:.1f}%)")
         
         # Check GWAS samples if enabled
         if config['analysis'].get('run_gwas', False):
             gwas_file = input_files.get('gwas_phenotype') or config['analysis'].get('gwas_phenotype')
             if gwas_file and os.path.exists(gwas_file):
-                try:
-                    gwas_df = pd.read_csv(gwas_file, sep='\t', usecols=['sample_id'], nrows=1000)
-                    gwas_samples = set(gwas_df['sample_id'])
-                    overlap = geno_samples.intersection(gwas_samples)
-                    
-                    if len(overlap) == 0:
-                        errors.append("No sample overlap between genotypes and GWAS phenotypes")
+                gwas_df = pd.read_csv(gwas_file, sep='\t')
+                gwas_samples = set(gwas_df['sample_id'])
+                overlap = geno_samples.intersection(gwas_samples)
+                
+                if len(overlap) == 0:
+                    errors.append("No sample overlap between genotypes and GWAS phenotypes")
+                else:
+                    overlap_percent = len(overlap) / min(len(geno_samples), len(gwas_samples)) * 100
+                    if overlap_percent < 80:
+                        warnings.append(f"Low sample overlap for GWAS: {len(overlap)} samples ({overlap_percent:.1f}%)")
                     else:
-                        overlap_percent = len(overlap) / min(len(geno_samples), len(gwas_samples)) * 100
-                        if overlap_percent < 80:
-                            warnings.append(f"Low sample overlap for GWAS: {len(overlap)} samples ({overlap_percent:.1f}%)")
-                        else:
-                            print(f"✅ GWAS overlap: {len(overlap)} samples ({overlap_percent:.1f}%)")
-                except Exception as e:
-                    warnings.append(f"Could not check GWAS samples: {e}")
+                        print(f"✅ GWAS overlap: {len(overlap)} samples ({overlap_percent:.1f}%)")
                     
     except Exception as e:
         warnings.append(f"Sample concordance check failed: {e}")
@@ -868,7 +787,7 @@ def check_sample_concordance_optimized(config, input_files):
     return errors, warnings
 
 def validate_configuration(config):
-    """Validate configuration parameters for tensorQTL - PRESERVED"""
+    """Validate configuration parameters for tensorQTL"""
     errors = []
     warnings = []
     
@@ -931,7 +850,7 @@ def validate_configuration(config):
     return errors, warnings
 
 def validate_enhanced_qc_requirements(config):
-    """Validate requirements for enhanced QC - PRESERVED"""
+    """Validate requirements for enhanced QC"""
     errors = []
     warnings = []
     
@@ -941,7 +860,7 @@ def validate_enhanced_qc_requirements(config):
         # Check if we have enough samples for meaningful PCA
         try:
             geno_file = config['input_files']['genotypes']
-            format_info = detect_genotype_format_cached(geno_file)
+            format_info = detect_genotype_format(geno_file)
             
             sample_count = 0
             if format_info['format'] in ['vcf', 'vcf.gz', 'bcf']:
@@ -954,8 +873,8 @@ def validate_enhanced_qc_requirements(config):
                 base_name = geno_file.replace('.bed', '')
                 fam_file = f"{base_name}.fam"
                 if os.path.exists(fam_file):
-                    with open(fam_file, 'r') as f:
-                        sample_count = sum(1 for _ in f)
+                    fam_df = pd.read_csv(fam_file, sep='\t', header=None)
+                    sample_count = len(fam_df)
             
             if sample_count < 50:
                 warnings.append("PCA analysis may not be meaningful with fewer than 50 samples")
@@ -967,7 +886,7 @@ def validate_enhanced_qc_requirements(config):
     return errors, warnings
 
 def validate_interaction_requirements(config):
-    """Validate requirements for interaction analysis - PRESERVED"""
+    """Validate requirements for interaction analysis"""
     errors = []
     warnings = []
     
@@ -981,8 +900,7 @@ def validate_interaction_requirements(config):
     # Check if interaction covariates exist in covariates file
     try:
         covariates_file = config['input_files']['covariates']
-        # Read only the index (covariate names) to check existence
-        cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0, nrows=0)
+        cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0)
         
         missing_covariates = [cov for cov in interaction_covariates if cov not in cov_df.index]
         if missing_covariates:
@@ -996,7 +914,7 @@ def validate_interaction_requirements(config):
     return errors, warnings
 
 def validate_finemap_requirements(config):
-    """Validate requirements for fine-mapping - PRESERVED"""
+    """Validate requirements for fine-mapping"""
     errors = []
     warnings = []
     
@@ -1017,7 +935,7 @@ def validate_finemap_requirements(config):
     return errors, warnings
 
 def get_qtl_types_from_config(config):
-    """Extract QTL types from config - PRESERVED"""
+    """Extract QTL types from config"""
     qtl_types = config['analysis']['qtl_types']
     
     if qtl_types == 'all':
