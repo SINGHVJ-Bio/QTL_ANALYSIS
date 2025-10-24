@@ -2,6 +2,7 @@
 """
 Enhanced QTL Pipeline - Environment Validation Script
 Comprehensive validation of all dependencies, tools, and system requirements
+Optimized for tensorQTL-based pipeline
 
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
@@ -34,6 +35,7 @@ class EnvironmentValidator:
             'bioinformatics_tools': {'status': 'unknown', 'issues': [], 'suggestions': []},
             'file_permissions': {'status': 'unknown', 'issues': [], 'suggestions': []},
             'project_structure': {'status': 'unknown', 'issues': [], 'suggestions': []},
+            'tensorqtl_setup': {'status': 'unknown', 'issues': [], 'suggestions': []},
             'overall': {'status': 'unknown'}
         }
         
@@ -42,6 +44,9 @@ class EnvironmentValidator:
         logging.info("🖥️  Collecting system information...")
         
         try:
+            # Get CPU core count
+            cpu_cores = os.cpu_count()
+            
             self.system_info = {
                 'platform': platform.system(),
                 'platform_release': platform.release(),
@@ -49,6 +54,7 @@ class EnvironmentValidator:
                 'architecture': platform.architecture(),
                 'processor': platform.processor(),
                 'python_version': platform.python_version(),
+                'cpu_cores': cpu_cores,
                 'total_memory_gb': round(psutil.virtual_memory().total / (1024**3), 1),
                 'available_memory_gb': round(psutil.virtual_memory().available / (1024**3), 1),
                 'disk_usage': psutil.disk_usage('/')
@@ -57,6 +63,7 @@ class EnvironmentValidator:
             logging.info(f"   • System: {self.system_info['platform']} {self.system_info['platform_release']}")
             logging.info(f"   • Architecture: {self.system_info['architecture'][0]}")
             logging.info(f"   • Python: {self.system_info['python_version']}")
+            logging.info(f"   • CPU Cores: {self.system_info['cpu_cores']}")
             logging.info(f"   • Memory: {self.system_info['total_memory_gb']} GB total, {self.system_info['available_memory_gb']} GB available")
             logging.info(f"   • Disk: {self.system_info['disk_usage'].free // (1024**3)} GB free")
             
@@ -64,7 +71,7 @@ class EnvironmentValidator:
             logging.warning(f"   ⚠️ Could not collect all system information: {e}")
     
     def validate_system_requirements(self):
-        """Validate system requirements"""
+        """Validate system requirements for tensorQTL pipeline"""
         logging.info("\n🔍 Validating system requirements...")
         issues = []
         suggestions = []
@@ -77,20 +84,29 @@ class EnvironmentValidator:
         else:
             logging.info("   ✅ Python version: OK")
         
-        # Check memory
-        if self.system_info['total_memory_gb'] < 8:
-            issues.append(f"System memory ({self.system_info['total_memory_gb']} GB) is below recommended 8 GB")
-            suggestions.append("Consider running on a system with more RAM or use smaller datasets")
+        # Check memory for tensorQTL
+        if self.system_info['total_memory_gb'] < 16:
+            issues.append(f"System memory ({self.system_info['total_memory_gb']} GB) is below recommended 16 GB for tensorQTL")
+            suggestions.append("Consider running on a system with more RAM (32GB+ recommended for large datasets)")
+        elif self.system_info['total_memory_gb'] < 32:
+            logging.info(f"   ⚠️  System memory: {self.system_info['total_memory_gb']} GB (32GB+ recommended for large datasets)")
         else:
-            logging.info("   ✅ System memory: OK")
+            logging.info(f"   ✅ System memory: {self.system_info['total_memory_gb']} GB (good for large datasets)")
         
         # Check disk space
         free_disk_gb = self.system_info['disk_usage'].free // (1024**3)
-        if free_disk_gb < 10:
-            issues.append(f"Low disk space ({free_disk_gb} GB free)")
+        if free_disk_gb < 50:
+            issues.append(f"Low disk space ({free_disk_gb} GB free) - recommend 50GB+ for QTL analysis")
             suggestions.append("Free up disk space before running large analyses")
         else:
             logging.info(f"   ✅ Disk space: {free_disk_gb} GB free")
+        
+        # Check CPU cores for multi-core optimization
+        if self.system_info['cpu_cores'] < 4:
+            logging.info(f"   ⚠️  Only {self.system_info['cpu_cores']} CPU cores - multi-core optimizations will be limited")
+            suggestions.append("Consider using a system with more cores for faster analysis")
+        else:
+            logging.info(f"   ✅ CPU cores: {self.system_info['cpu_cores']} (good for multi-core processing)")
         
         # Check operating system
         if self.system_info['platform'] not in ['Linux', 'Darwin']:
@@ -105,25 +121,30 @@ class EnvironmentValidator:
         self.validation_results['system']['status'] = 'pass' if not issues else 'fail'
     
     def validate_python_packages(self):
-        """Validate all required Python packages"""
+        """Validate all required Python packages for tensorQTL pipeline"""
         logging.info("\n🐍 Validating Python packages...")
         
+        # Core packages for tensorQTL pipeline
         required_packages = {
-            'pandas': '1.3.0',
-            'numpy': '1.21.0',
-            'scipy': '1.7.0',
-            'matplotlib': '3.5.0',
-            'seaborn': '0.11.0',
-            'PyYAML': '6.0',
-            'scikit-learn': '1.0.0',
-            'statsmodels': '0.13.0',
-            'plotly': '5.0.0'
+            'tensorqtl': '1.0.0',      # Main QTL analysis engine
+            'pandas': '1.3.0',         # Data manipulation
+            'numpy': '1.21.0',         # Numerical computing
+            'scipy': '1.7.0',          # Statistical functions
+            'matplotlib': '3.5.0',     # Plotting
+            'seaborn': '0.11.0',       # Statistical visualization
+            'PyYAML': '6.0',           # Configuration files
+            'scikit-learn': '1.0.0',   # Machine learning utilities
+            'plotly': '5.0.0',         # Interactive plots
+            'torch': '1.9.0',          # PyTorch backend for tensorQTL
         }
         
+        # Enhanced pipeline packages
         optional_packages = {
-            'rpy2': '3.5.0',      # For R integration
-            'pysam': '0.19.0',    # For advanced VCF handling
-            'psutil': ''          # For system monitoring (already imported)
+            'rpy2': '3.5.0',           # For R integration (DESeq2 normalization)
+            'pysam': '0.19.0',         # For advanced VCF handling
+            'statsmodels': '0.13.0',   # Additional statistical tests
+            'dask': '2021.0.0',        # For large dataset handling
+            'jupyter': '1.0.0',        # For interactive analysis
         }
         
         issues = []
@@ -137,20 +158,23 @@ class EnvironmentValidator:
                     actual_version = getattr(module, '__version__', 'unknown')
                     if actual_version != 'unknown':
                         # Simple version comparison
-                        actual_parts = list(map(int, actual_version.split('.')[:3]))
-                        min_parts = list(map(int, min_version.split('.')[:3]))
-                        
-                        if actual_parts < min_parts:
-                            issues.append(f"{package} version {actual_version} is below required {min_version}")
-                            suggestions.append(f"Upgrade {package}: pip install --upgrade {package}")
-                        else:
-                            logging.info(f"   ✅ {package}: {actual_version} (>= {min_version})")
+                        try:
+                            actual_parts = list(map(int, actual_version.split('.')[:3]))
+                            min_parts = list(map(int, min_version.split('.')[:3]))
+                            
+                            if actual_parts < min_parts:
+                                issues.append(f"{package} version {actual_version} is below required {min_version}")
+                                suggestions.append(f"Upgrade {package}: pip install --upgrade {package}")
+                            else:
+                                logging.info(f"   ✅ {package}: {actual_version} (>= {min_version})")
+                        except ValueError:
+                            logging.info(f"   ✅ {package}: {actual_version} (version check skipped)")
                     else:
                         logging.info(f"   ✅ {package}: installed (version unknown)")
                 else:
                     logging.info(f"   ✅ {package}: installed")
                     
-            except ImportError:
+            except ImportError as e:
                 issues.append(f"Required package not found: {package}")
                 suggestions.append(f"Install {package}: pip install {package}>={min_version}")
         
@@ -170,15 +194,64 @@ class EnvironmentValidator:
         self.validation_results['python_packages']['suggestions'] = suggestions
         self.validation_results['python_packages']['status'] = 'pass' if not issues else 'fail'
     
+    def validate_tensorqtl_setup(self):
+        """Validate tensorQTL specific setup and configuration"""
+        logging.info("\n🧬 Validating tensorQTL setup...")
+        
+        issues = []
+        suggestions = []
+        
+        try:
+            import tensorqtl
+            import torch
+            
+            # Check tensorQTL version
+            tqtl_version = getattr(tensorqtl, '__version__', 'unknown')
+            logging.info(f"   ✅ tensorQTL: {tqtl_version}")
+            
+            # Check PyTorch configuration
+            logging.info(f"   ✅ PyTorch: {torch.__version__}")
+            logging.info(f"   ✅ CUDA available: {torch.cuda.is_available()}")
+            logging.info(f"   ✅ Device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}")
+            
+            # Test basic tensorQTL functionality
+            try:
+                # Test if we can import key functions
+                from tensorqtl import cis, trans, genotypeio
+                logging.info("   ✅ tensorQTL modules: imported successfully")
+            except ImportError as e:
+                issues.append(f"tensorQTL module import error: {e}")
+                suggestions.append("Reinstall tensorqtl: pip install --force-reinstall tensorqtl")
+            
+            # Check if we can create tensors (basic functionality test)
+            try:
+                test_tensor = torch.randn(10, 10)
+                logging.info("   ✅ PyTorch tensor operations: working")
+            except Exception as e:
+                issues.append(f"PyTorch tensor creation failed: {e}")
+                suggestions.append("Check PyTorch installation")
+                
+        except ImportError as e:
+            issues.append(f"tensorQTL import failed: {e}")
+            suggestions.append("Install tensorqtl: pip install tensorqtl")
+        except Exception as e:
+            issues.append(f"tensorQTL validation error: {e}")
+            suggestions.append("Check tensorqtl and PyTorch installation")
+        
+        self.validation_results['tensorqtl_setup']['issues'] = issues
+        self.validation_results['tensorqtl_setup']['suggestions'] = suggestions
+        self.validation_results['tensorqtl_setup']['status'] = 'pass' if not issues else 'fail'
+    
     def validate_bioinformatics_tools(self):
         """Validate required bioinformatics tools"""
         logging.info("\n🔧 Validating bioinformatics tools...")
         
+        # Updated tools list for tensorQTL pipeline
         required_tools = {
-            'qtltools': {
-                'test_cmd': 'qtltools --version',
-                'install_url': 'https://qtltools.github.io/qtltools/',
-                'description': 'QTL mapping software'
+            'plink': {
+                'test_cmd': 'plink --version',
+                'install_url': 'https://www.cog-genomics.org/plink/',
+                'description': 'Genotype processing (required for large datasets)'
             },
             'bcftools': {
                 'test_cmd': 'bcftools --version',
@@ -198,15 +271,15 @@ class EnvironmentValidator:
         }
         
         optional_tools = {
-            'plink': {
-                'test_cmd': 'plink --version',
-                'install_url': 'https://www.cog-genomics.org/plink/',
-                'description': 'GWAS analysis'
-            },
             'R': {
                 'test_cmd': 'R --version',
                 'install_url': 'https://www.r-project.org/',
-                'description': 'Statistical computing'
+                'description': 'Statistical computing (required for DESeq2 normalization)'
+            },
+            'qtltools': {
+                'test_cmd': 'qtltools --version',
+                'install_url': 'https://qtltools.github.io/qtltools/',
+                'description': 'Alternative QTL mapper (optional)'
             }
         }
         
@@ -318,29 +391,36 @@ class EnvironmentValidator:
         issues = []
         suggestions = []
         
-        # Check main directory structure
+        # Updated directory structure for your package
         required_dirs = [
             'config',
             'data', 
             'scripts',
             'scripts/analysis',
-            'scripts/utils'
+            'scripts/utils',
+            'documentation'
         ]
         
+        # Main pipeline files
         required_files = [
             'run_QTLPipeline.py',
             'scripts/main.py',
             'config/config.yaml',
-            'requirements.txt'
+            'requirements.txt',
+            'environment.yml',
+            'validate_environment.py',
+            'test_pipeline.py'
         ]
         
+        # Core script files
         required_scripts = [
-            'scripts/utils/genotype_processing.py',
+            'scripts/utils/validation.py',
             'scripts/utils/qtl_analysis.py',
             'scripts/utils/gwas_analysis.py',
             'scripts/utils/enhanced_qc.py',
-            'scripts/utils/validation.py',
-            'scripts/utils/report_generator.py',
+            'scripts/utils/plotting.py',
+            'scripts/utils/normalization_comparison.py',
+            'scripts/utils/advanced_plotting.py',
             'scripts/analysis/fine_mapping.py',
             'scripts/analysis/interaction_analysis.py'
         ]
@@ -369,7 +449,7 @@ class EnvironmentValidator:
             else:
                 logging.info(f"   ✅ {script}: found")
         
-        # Check data files (warn if missing, but don't fail)
+        # Check for sample data files (warn if missing, but don't fail)
         expected_data_files = [
             'data/genotypes.vcf',
             'data/expression.txt', 
@@ -382,7 +462,15 @@ class EnvironmentValidator:
             if not os.path.exists(data_file):
                 missing_data.append(data_file)
             else:
-                logging.info(f"   ✅ {data_file}: found")
+                # Check if file has content
+                try:
+                    file_size = os.path.getsize(data_file)
+                    if file_size > 0:
+                        logging.info(f"   ✅ {data_file}: found ({file_size} bytes)")
+                    else:
+                        logging.info(f"   ⚠️  {data_file}: found but empty")
+                except:
+                    logging.info(f"   ✅ {data_file}: found")
         
         if missing_data:
             logging.info(f"   ⚠️  Expected data files not found: {', '.join(missing_data)}")
@@ -400,6 +488,7 @@ class EnvironmentValidator:
         logging.info("🔬 QTL ANALYSIS PIPELINE - COMPREHENSIVE ENVIRONMENT VALIDATION")
         logging.info("=" * 70)
         logging.info("Author: Dr. Vijay Singh (vijay.s.gautam@gmail.com)")
+        logging.info("Pipeline: tensorQTL-based QTL Analysis")
         logging.info("=" * 70)
         
         # Collect system information
@@ -408,6 +497,7 @@ class EnvironmentValidator:
         # Run all validations
         self.validate_system_requirements()
         self.validate_python_packages()
+        self.validate_tensorqtl_setup()
         self.validate_bioinformatics_tools()
         self.validate_file_permissions()
         structure_ok = self.validate_project_structure()
@@ -416,6 +506,7 @@ class EnvironmentValidator:
         all_checks = [
             self.validation_results['system']['status'],
             self.validation_results['python_packages']['status'],
+            self.validation_results['tensorqtl_setup']['status'],
             self.validation_results['bioinformatics_tools']['status'],
             self.validation_results['file_permissions']['status'],
             self.validation_results['project_structure']['status']
@@ -435,7 +526,8 @@ class EnvironmentValidator:
         # Overall status
         if self.validation_results['overall']['status'] == 'pass':
             logging.info("🎉 ENVIRONMENT VALIDATION: PASSED ✅")
-            logging.info("   Your QTL analysis pipeline is ready to use!")
+            logging.info("   Your tensorQTL analysis pipeline is ready to use!")
+            logging.info("   Multi-core optimizations available for your system")
         else:
             logging.info("❌ ENVIRONMENT VALIDATION: FAILED")
             logging.info("   Please address the issues below before running the pipeline.")
@@ -463,12 +555,25 @@ class EnvironmentValidator:
         if not all_issues:
             logging.info("\n✅ No critical issues found!")
         
+        # Performance recommendations
+        logging.info("\n🚀 PERFORMANCE RECOMMENDATIONS:")
+        if self.system_info['cpu_cores'] >= 8:
+            logging.info(f"   • Use --threads {self.system_info['cpu_cores']} for maximum performance")
+            logging.info("   • Enable --optimize-cpu for multi-core optimizations")
+            logging.info("   • Enable --chromosome-parallel for chromosome-level parallel processing")
+        else:
+            logging.info("   • Use --threads 4 for balanced performance")
+        
+        if self.system_info['total_memory_gb'] >= 32:
+            logging.info("   • Large datasets supported - adjust batch sizes in config")
+        
         # Next steps
         logging.info("\n🎯 NEXT STEPS:")
         if self.validation_results['overall']['status'] == 'pass':
             logging.info("   1. Review configuration: config/config.yaml")
-            logging.info("   2. Run quick test: python quick_test.py")
-            logging.info("   3. Run full analysis: python run_QTLPipeline.py --config config/config.yaml")
+            logging.info("   2. Test pipeline: python test_pipeline.py")
+            logging.info("   3. Run full analysis: python run_QTLPipeline.py --config config/config.yaml --optimize-cpu")
+            logging.info(f"   4. For best performance: python run_QTLPipeline.py --config config/config.yaml --threads {self.system_info['cpu_cores']} --optimize-cpu --chromosome-parallel")
         else:
             logging.info("   1. Address all critical issues listed above")
             logging.info("   2. Re-run validation: python validate_environment.py")
