@@ -3,21 +3,21 @@
 # ==============================================
 
 # MANDATORY: Results directory where all output will be stored
-results_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/results"
+results_dir: "results"
 
 # MANDATORY: Input files section
 input_files:
   # Genotype file - supports VCF, VCF.GZ, BCF, PLINK BED formats
-  genotypes: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/cohort.filtered.samples.vcf.gz"
+  genotypes: "data/genotypes.vcf.gz"
   
   # Covariates file (tab-separated)
-  covariates: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/covariate.tsv"
+  covariates: "data/covariates.tsv"
   
   # Annotation file (BED format)
-  annotations: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/annotations.bed"
+  annotations: "data/annotations.bed"
   
   # Phenotype files
-  expression: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/rnseq_count.tsv"
+  expression: "data/expression.tsv"
   protein: ""
   splicing: ""
 
@@ -99,8 +99,8 @@ tensorqtl:
 # Genotype pre-processing configuration
 genotype_processing:
   # Multi-threading for external tools
-  plink_threads: 8
-  bcftools_threads: 8
+  plink_threads: 16
+  bcftools_threads: 16
   bgzip_threads: 8
 
   # Basic processing
@@ -121,7 +121,8 @@ genotype_processing:
   min_call_rate: 0.95
   max_missing: 0.1
   quality_threshold: 30
-  prefer_plink: true
+  # tensorQTL-specific optimizations
+  prefer_plink: true  # Use PLINK format for better performance with tensorQTL
   
   # Multi-allelic site handling
   handle_multiallelic: true
@@ -136,9 +137,6 @@ genotype_processing:
   remove_phasing: true
   match_samples: true
   sample_matching_method: "exact"
-  
-  # tensorQTL-specific optimizations
-  prefer_plink: true  # Use PLINK format for better performance with tensorQTL
 
 # Analysis configuration
 analysis:
@@ -305,13 +303,13 @@ qc:
 
 # Performance settings optimized for tensorQTL
 performance:
-  num_threads: 8  # Set to your core count (e.g., 16 for 8-core/16-thread CPU)
-  memory_gb: 62    # Adjust based on your RAM
+  num_threads: 16  # Set to your core count (e.g., 16 for 8-core/16-thread CPU)
+  memory_gb: 64    # Adjust based on your RAM
   temp_dir: "temp"
   cleanup_temp: true
   parallel_processing: true
   chunk_size: 1000
-  max_workers: 8   # For Python multiprocessing
+  max_workers: 16   # For Python multiprocessing
   
   # tensorQTL-specific performance
   tensorqtl_batch_size: 20000  # Increased for better CPU utilization
