@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive input validation utilities with genotype format detection - Enhanced Version
+Comprehensive input validation utilities for tensorQTL pipeline - Enhanced Version
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
@@ -21,13 +21,13 @@ warnings.filterwarnings('ignore')
 logger = logging.getLogger('QTLPipeline')
 
 def validate_inputs(config):
-    """Validate all input files and data consistency with comprehensive checks"""
+    """Validate all input files and data consistency with comprehensive checks for tensorQTL"""
     input_files = config['input_files']
     
     errors = []
     warnings = []
     
-    print("🔍 Starting comprehensive input validation...")
+    print("🔍 Starting comprehensive input validation for tensorQTL pipeline...")
     
     # Check mandatory files
     mandatory_files = ['genotypes', 'covariates', 'annotations']
@@ -83,7 +83,7 @@ def validate_inputs(config):
             errors.extend(gwas_errors)
             warnings.extend(gwas_warnings)
     
-    # Check required tools
+    # Check required tools for tensorQTL pipeline
     tool_errors, tool_warnings = check_required_tools(config)
     errors.extend(tool_errors)
     warnings.extend(tool_warnings)
@@ -94,10 +94,15 @@ def validate_inputs(config):
         errors.extend(sample_errors)
         warnings.extend(sample_warnings)
     
-    # Check configuration validity
+    # Check configuration validity for tensorQTL
     config_errors, config_warnings = validate_configuration(config)
     errors.extend(config_errors)
     warnings.extend(config_warnings)
+    
+    # Check tensorQTL specific requirements
+    tensorqtl_errors, tensorqtl_warnings = validate_tensorqtl_requirements(config)
+    errors.extend(tensorqtl_errors)
+    warnings.extend(tensorqtl_warnings)
     
     # Check enhanced QC requirements
     if config.get('enhanced_qc', {}).get('enable', False):
@@ -134,8 +139,56 @@ def validate_inputs(config):
             print("   Some warnings were found but analysis can proceed")
         return True
 
+def validate_tensorqtl_requirements(config):
+    """Validate tensorQTL specific requirements"""
+    errors = []
+    warnings = []
+    
+    print("\n🧬 Validating tensorQTL requirements...")
+    
+    try:
+        import tensorqtl
+        import torch
+        
+        # Check tensorQTL version
+        tqtl_version = getattr(tensorqtl, '__version__', 'unknown')
+        print(f"✅ tensorQTL version: {tqtl_version}")
+        
+        # Check PyTorch configuration
+        print(f"✅ PyTorch version: {torch.__version__}")
+        print(f"✅ CUDA available: {torch.cuda.is_available()}")
+        
+        if not torch.cuda.is_available():
+            print("💡 Using CPU for tensorQTL analysis")
+            # Check if we have enough memory for CPU analysis
+            import psutil
+            memory_gb = psutil.virtual_memory().total / (1024**3)
+            if memory_gb < 16:
+                warnings.append(f"Low system memory ({memory_gb:.1f}GB) for CPU-based tensorQTL analysis")
+        
+        # Test basic tensorQTL functionality
+        try:
+            from tensorqtl import cis, trans, genotypeio
+            print("✅ tensorQTL modules imported successfully")
+        except ImportError as e:
+            errors.append(f"tensorQTL module import error: {e}")
+            
+    except ImportError as e:
+        errors.append(f"tensorQTL import failed: {e}")
+        errors.append("Install tensorqtl: pip install tensorqtl")
+    
+    # Check tensorQTL configuration parameters
+    tensorqtl_config = config.get('tensorqtl', {})
+    if tensorqtl_config.get('batch_size', 10000) < 1000:
+        warnings.append("Very small batch_size may slow down tensorQTL analysis")
+    
+    if tensorqtl_config.get('num_permutations', 1000) < 100:
+        warnings.append("Low number of permutations may affect FDR estimation accuracy")
+    
+    return errors, warnings
+
 def validate_genotype_file(file_path, config):
-    """Validate genotype file format and content"""
+    """Validate genotype file format and content for tensorQTL"""
     errors = []
     warnings = []
     
@@ -149,7 +202,7 @@ def validate_genotype_file(file_path, config):
     if file_size == 0:
         errors.append(f"Genotype file is empty: {file_path}")
     elif file_size > 50:
-        warnings.append(f"Genotype file is very large ({file_size:.2f} GB), analysis may be slow")
+        warnings.append(f"Genotype file is very large ({file_size:.2f} GB), consider using PLINK format for better performance")
     
     # Detect format
     format_info = detect_genotype_format(file_path)
@@ -166,6 +219,10 @@ def validate_genotype_file(file_path, config):
         warnings.extend(plink_warnings)
     elif format_info['format'] == 'unknown':
         warnings.append(f"Could not automatically detect genotype file format: {file_path}")
+    
+    # Check if format is compatible with tensorQTL
+    if format_info['format'] not in ['vcf', 'vcf.gz', 'bcf', 'plink_bed']:
+        warnings.append(f"Format {format_info['format']} may not be directly compatible with tensorQTL")
     
     return errors, warnings
 
@@ -219,7 +276,7 @@ def detect_format_by_content(file_path):
         return {'format': 'unknown', 'compressed': file_path.endswith('.gz')}
 
 def validate_vcf_file(file_path, config):
-    """Validate VCF file structure"""
+    """Validate VCF file structure for tensorQTL"""
     errors = []
     warnings = []
     
@@ -290,7 +347,7 @@ def validate_vcf_file(file_path, config):
     return errors, warnings
 
 def validate_plink_file(file_path, config):
-    """Validate PLINK BED file"""
+    """Validate PLINK BED file for tensorQTL"""
     errors = []
     warnings = []
     
@@ -318,6 +375,11 @@ def validate_plink_file(file_path, config):
                                names=['fam_id', 'sample_id', 'father', 'mother', 'sex', 'phenotype'])
             print(f"✅ PLINK FAM: {len(fam_df)} samples")
             
+            # Check for duplicate variant IDs
+            duplicate_variants = bim_df.duplicated('variant_id').sum()
+            if duplicate_variants > 0:
+                warnings.append(f"Found {duplicate_variants} duplicate variant IDs in BIM file")
+            
         except Exception as e:
             errors.append(f"Error reading PLINK files: {e}")
             
@@ -327,7 +389,7 @@ def validate_plink_file(file_path, config):
     return errors, warnings
 
 def validate_covariates_file(file_path, config):
-    """Validate covariates file"""
+    """Validate covariates file for tensorQTL"""
     errors = []
     warnings = []
     
@@ -368,6 +430,12 @@ def validate_covariates_file(file_path, config):
         if non_numeric_covariates:
             warnings.append(f"Non-numeric covariates found: {', '.join(non_numeric_covariates)}")
         
+        # Check for recommended covariates
+        recommended_covariates = ['PC1', 'PC2', 'PC3', 'PC4', 'PC5']
+        missing_recommended = [cov for cov in recommended_covariates if cov not in df.index]
+        if missing_recommended:
+            warnings.append(f"Recommended covariates missing: {', '.join(missing_recommended)}")
+        
         print(f"✅ Covariates: {df.shape[0]} covariates, {df.shape[1]} samples")
         print(f"✅ Numeric covariates: {len(numeric_covariates)}")
         if non_numeric_covariates:
@@ -379,7 +447,7 @@ def validate_covariates_file(file_path, config):
     return errors, warnings
 
 def validate_annotations_file(file_path, config):
-    """Validate annotations file (BED format)"""
+    """Validate annotations file (BED format) for tensorQTL"""
     errors = []
     warnings = []
     
@@ -424,7 +492,14 @@ def validate_annotations_file(file_path, config):
         elif no_chr_prefix:
             print("✅ Annotation chromosomes: without 'chr' prefix")
         
+        # Check annotation count
         print(f"✅ Annotations: {len(df)} features")
+        
+        # Check if annotations cover expected chromosomes
+        expected_chromosomes = [str(i) for i in range(1, 23)] + ['X', 'Y', 'MT']
+        missing_chromosomes = [chrom for chrom in expected_chromosomes if chrom not in chromosomes and f"chr{chrom}" not in chromosomes]
+        if missing_chromosomes:
+            warnings.append(f"Annotations missing for chromosomes: {', '.join(missing_chromosomes)}")
         
     except Exception as e:
         errors.append(f"Error reading annotations file {file_path}: {e}")
@@ -432,7 +507,7 @@ def validate_annotations_file(file_path, config):
     return errors, warnings
 
 def validate_phenotype_file(file_path, qtl_type, config):
-    """Validate phenotype file structure"""
+    """Validate phenotype file structure for tensorQTL"""
     errors = []
     warnings = []
     
@@ -455,12 +530,26 @@ def validate_phenotype_file(file_path, qtl_type, config):
         if constant_features > 0:
             warnings.append(f"{qtl_type} has {constant_features} constant features")
         
-        # Check for extreme values
+        # Check for extreme values based on phenotype type
         if df.size > 0:
-            extreme_low = (df < -10).sum().sum()
-            extreme_high = (df > 10).sum().sum()
+            if qtl_type == 'expression':
+                # Expression data typically log-transformed
+                extreme_low = (df < -10).sum().sum()
+                extreme_high = (df > 10).sum().sum()
+            elif qtl_type == 'protein':
+                # Protein data often has wider range
+                extreme_low = (df < -20).sum().sum()
+                extreme_high = (df > 20).sum().sum()
+            elif qtl_type == 'splicing':
+                # Splicing data (PSI) typically between 0-1 or logit transformed
+                extreme_low = (df < -10).sum().sum()
+                extreme_high = (df > 10).sum().sum()
+            else:
+                extreme_low = (df < -10).sum().sum()
+                extreme_high = (df > 10).sum().sum()
+                
             if extreme_low > 0 or extreme_high > 0:
-                warnings.append(f"{qtl_type} has extreme values (outside [-10, 10])")
+                warnings.append(f"{qtl_type} has extreme values (consider checking normalization)")
         
         # Check data distribution
         try:
@@ -468,7 +557,12 @@ def validate_phenotype_file(file_path, qtl_type, config):
             mean_val = df.mean().mean()
             std_val = df.std().mean()
             print(f"✅ {qtl_type}: {df.shape[0]} features, {df.shape[1]} samples")
-            print(f"   Mean expression: {mean_val:.3f}, Std: {std_val:.3f}")
+            print(f"   Mean: {mean_val:.3f}, Std: {std_val:.3f}")
+            
+            # Check normalization method from config
+            norm_method = config['normalization'].get(qtl_type, {}).get('method', 'unknown')
+            print(f"   Normalization method: {norm_method}")
+            
         except:
             print(f"✅ {qtl_type}: {df.shape[0]} features, {df.shape[1]} samples")
         
@@ -506,6 +600,14 @@ def validate_gwas_phenotype_file(file_path, config):
             except:
                 warnings.append(f"GWAS phenotype '{pheno}' contains non-numeric values")
         
+        # Check for binary phenotypes if logistic regression is specified
+        gwas_method = config.get('gwas', {}).get('method', 'linear')
+        if gwas_method == 'logistic':
+            for pheno in phenotype_cols:
+                unique_vals = df[pheno].dropna().unique()
+                if len(unique_vals) != 2:
+                    warnings.append(f"GWAS phenotype '{pheno}' has {len(unique_vals)} unique values, but logistic regression expects binary outcomes")
+        
         print(f"✅ GWAS phenotype: {df.shape[0]} samples, {len(phenotype_cols)} phenotypes")
         
     except Exception as e:
@@ -514,12 +616,19 @@ def validate_gwas_phenotype_file(file_path, config):
     return errors, warnings
 
 def check_required_tools(config):
-    """Check if all required tools are available"""
+    """Check if all required tools are available for tensorQTL pipeline"""
     errors = []
     warnings = []
     
     tools = config.get('paths', {})
-    required_tools = ['qtltools', 'bcftools', 'bgzip', 'tabix']
+    
+    # Updated required tools for tensorQTL pipeline
+    required_tools = [
+        'plink',    # For genotype processing
+        'bcftools', # For VCF/BCF manipulation
+        'bgzip',    # For file compression
+        'tabix'     # For file indexing
+    ]
     
     for tool_name in required_tools:
         tool_path = tools.get(tool_name, tool_name)
@@ -546,7 +655,7 @@ def check_required_tools(config):
             errors.append(f"Error checking tool {tool_name}: {e}")
     
     # Check optional tools
-    optional_tools = ['plink', 'R']
+    optional_tools = ['R']  # For DESeq2 normalization
     for tool_name in optional_tools:
         tool_path = tools.get(tool_name, tool_name)
         result = subprocess.run(
@@ -558,9 +667,8 @@ def check_required_tools(config):
         else:
             print(f"✅ Found {tool_name}: {tool_path}")
     
-    # Check for enhanced features
+    # Check Python packages for enhanced features
     if config.get('enhanced_qc', {}).get('enable', False):
-        # Check for Python packages needed for enhanced QC
         try:
             import sklearn
             print("✅ Found sklearn: for PCA analysis")
@@ -574,6 +682,21 @@ def check_required_tools(config):
                 print("✅ Found plotly: for interactive plots")
             except ImportError:
                 warnings.append("plotly not found - interactive plots will be disabled")
+    
+    # Check for R packages if R is available and DESeq2 normalization is used
+    if any(config['normalization'].get(qtl_type, {}).get('use_deseq2', False) 
+           for qtl_type in ['eqtl', 'pqtl', 'sqtl'] if qtl_type in config['normalization']):
+        try:
+            result = subprocess.run(
+                "Rscript -e 'library(DESeq2)'", 
+                shell=True, capture_output=True, text=True, check=False
+            )
+            if result.returncode == 0:
+                print("✅ Found DESeq2 R package")
+            else:
+                warnings.append("DESeq2 R package not found - VST normalization will not be available")
+        except:
+            warnings.append("Could not check for DESeq2 R package")
     
     return errors, warnings
 
@@ -664,17 +787,26 @@ def check_sample_concordance(config, input_files):
     return errors, warnings
 
 def validate_configuration(config):
-    """Validate configuration parameters"""
+    """Validate configuration parameters for tensorQTL"""
     errors = []
     warnings = []
     
-    # Check QTL parameters
-    qtl_config = config.get('qtl', {})
-    if qtl_config.get('permutations', 1000) < 100:
-        warnings.append("Low number of permutations (<100) may affect FDR estimation")
+    print("\n⚙️  Validating configuration parameters...")
     
-    if qtl_config.get('fdr_threshold', 0.05) > 0.1:
+    # Check tensorQTL parameters
+    tensorqtl_config = config.get('tensorqtl', {})
+    if tensorqtl_config.get('num_permutations', 1000) < 100:
+        warnings.append("Low number of permutations (<100) may affect FDR estimation accuracy")
+    
+    if tensorqtl_config.get('fdr_threshold', 0.05) > 0.1:
         warnings.append("High FDR threshold (>0.1) may result in many false positives")
+    
+    # Check cis window size
+    cis_window = tensorqtl_config.get('cis_window', 1000000)
+    if cis_window < 100000:
+        warnings.append("Very small cis window (<100kb) may miss true associations")
+    elif cis_window > 2000000:
+        warnings.append("Very large cis window (>2Mb) may increase multiple testing burden")
     
     # Check analysis mode
     qtl_mode = config['analysis'].get('qtl_mode', 'cis')
@@ -691,13 +823,29 @@ def validate_configuration(config):
     
     # Check memory requirements
     memory_gb = config.get('performance', {}).get('memory_gb', 8)
-    if memory_gb < 4:
-        warnings.append("Low memory allocation (<4 GB) may cause performance issues")
+    if memory_gb < 8:
+        warnings.append("Low memory allocation (<8 GB) may cause performance issues with tensorQTL")
+    elif memory_gb >= 32:
+        print("✅ Sufficient memory allocated for large datasets")
+    
+    # Check CPU thread configuration
+    num_threads = config.get('performance', {}).get('num_threads', 1)
+    if num_threads == 1:
+        warnings.append("Using only 1 thread - consider increasing for better performance")
+    else:
+        print(f"✅ Using {num_threads} threads for parallel processing")
     
     # Check output directory
     results_dir = config.get('results_dir', 'results')
     if os.path.exists(results_dir) and len(os.listdir(results_dir)) > 0:
         warnings.append(f"Results directory {results_dir} already exists and is not empty")
+    
+    # Check normalization settings
+    normalization_config = config.get('normalization', {})
+    for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
+        if qtl_type in normalization_config:
+            method = normalization_config[qtl_type].get('method', 'unknown')
+            print(f"✅ {qtl_type.upper()} normalization: {method}")
     
     return errors, warnings
 
@@ -730,6 +878,8 @@ def validate_enhanced_qc_requirements(config):
             
             if sample_count < 50:
                 warnings.append("PCA analysis may not be meaningful with fewer than 50 samples")
+            else:
+                print(f"✅ Sufficient samples ({sample_count}) for PCA analysis")
         except:
             pass
     
