@@ -191,6 +191,14 @@ python run_QTLPipeline.py --config config/config.yaml --eqtl-norm quantile --pqt
 # Run without normalization
 python run_QTLPipeline.py --config config/config.yaml --eqtl-norm raw --pqtl-norm raw --sqtl-norm raw
 
+# For a 16-core system with 64GB RAM
+python run_QTLPipeline.py --config config.yaml --threads 16 --memory 64 --optimize-cpu --chromosome-parallel
+
+# For maximum performance on a 32-core system
+python run_QTLPipeline.py --config config.yaml --threads 32 --memory 128 --optimize-cpu --chromosome-parallel
+
+# Test with limited resources first
+python run_QTLPipeline.py --config config.yaml --threads 8 --memory 32 --optimize-cpu
 
 # 📈 Output Structure
 results/

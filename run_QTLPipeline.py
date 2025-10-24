@@ -96,6 +96,14 @@ Examples:
     parser.add_argument('--sqtl-norm', choices=['log2', 'arcsinh', 'zscore', 'raw'],
                        help='Override sQTL normalization method')
     
+    # Command line arguments for multi-core optimization
+    parser.add_argument('--optimize-cpu', action='store_true',
+                    help='Enable CPU optimization mode')
+    parser.add_argument('--chromosome-parallel', action='store_true',
+                    help='Process chromosomes in parallel')
+    parser.add_argument('--monitor-performance', action='store_true', default=True,
+                    help='Monitor CPU and memory usage during analysis')
+    
     args = parser.parse_args()
     
     # Validate config file exists
@@ -122,7 +130,7 @@ Examples:
         if args.qtl_types:
             analysis_types = [atype.strip() for atype in args.qtl_types.split(',')]
             pipeline.config['analysis']['qtl_types'] = analysis_types
-        
+
         if args.qtl_mode:
             pipeline.config['analysis']['qtl_mode'] = args.qtl_mode
             
@@ -145,10 +153,38 @@ Examples:
             
         if args.threads:
             pipeline.config['performance']['num_threads'] = args.threads
+            # Also update related thread settings for optimal performance
+            pipeline.config['performance']['max_workers'] = min(args.threads, 16)  # Cap at 16 to avoid overhead
+            pipeline.config['genotype_processing']['plink_threads'] = args.threads
+            pipeline.config['genotype_processing']['bcftools_threads'] = args.threads
+            print(f"✅ Setting CPU threads to {args.threads} for all operations")
             
         if args.memory:
             pipeline.config['performance']['memory_gb'] = args.memory
-        
+            # Adjust batch sizes based on available memory
+            if args.memory >= 64:
+                pipeline.config['performance']['tensorqtl_batch_size'] = 30000
+                pipeline.config['performance']['tensorqtl_chunk_size'] = 300
+            elif args.memory >= 32:
+                pipeline.config['performance']['tensorqtl_batch_size'] = 20000
+                pipeline.config['performance']['tensorqtl_chunk_size'] = 200
+            print(f"✅ Setting memory to {args.memory}GB with optimized batch sizes")
+
+        # New multi-core optimization arguments
+        if hasattr(args, 'optimize_cpu') and args.optimize_cpu:
+            pipeline.config['tensorqtl']['use_gpu'] = False
+            pipeline.config['performance']['process_by_chromosome'] = True
+            pipeline.config['large_data']['force_plink'] = True
+            pipeline.config['performance']['parallel_processing'] = True
+            print("✅ Enabled CPU optimization mode")
+
+        if hasattr(args, 'chromosome_parallel') and args.chromosome_parallel:
+            pipeline.config['performance']['process_by_chromosome'] = True
+            max_chromosomes = min(8, pipeline.config['performance']['num_threads'] // 2)
+            pipeline.config['performance']['max_concurrent_chromosomes'] = max(1, max_chromosomes)
+            pipeline.config['large_data']['max_concurrent_chromosomes'] = max(1, max_chromosomes)
+            print(f"✅ Enabled chromosome-level parallel processing ({max_chromosomes} concurrent chromosomes)")
+
         # Override normalization methods if specified
         if args.eqtl_norm:
             pipeline.config['normalization']['eqtl']['method'] = args.eqtl_norm
@@ -168,7 +204,16 @@ Examples:
             validate_inputs(pipeline.config)
             print("✅ All inputs validated successfully!")
             return
-        
+
+        # Print system configuration
+        print("\n🔧 System Configuration:")
+        print("=" * 50)
+        print(f"   CPU Threads:       {pipeline.config['performance']['num_threads']}")
+        print(f"   Memory Allocation: {pipeline.config['performance']['memory_gb']}GB")
+        print(f"   Chromosome Parallel: {pipeline.config['performance'].get('process_by_chromosome', False)}")
+        print(f"   Max Workers:       {pipeline.config['performance'].get('max_workers', 4)}")
+        print(f"   TensorQTL Batch:   {pipeline.config['performance'].get('tensorqtl_batch_size', 10000)}")
+
         # Print normalization settings
         print("\n🔧 Normalization Configuration:")
         print("=" * 40)
@@ -192,8 +237,29 @@ Examples:
             print("   ✅ GWAS Analysis")
         print("=" * 60)
         
+        # Start performance monitoring
+        performance_monitor = None
+        if not args.validate_only:
+            try:
+                from scripts.utils.performance_monitor import PerformanceMonitor
+                performance_monitor = PerformanceMonitor(
+                    interval=60, 
+                    log_file=os.path.join(pipeline.logs_dir, "performance_metrics.csv")
+                )
+                monitor_data = performance_monitor.start()
+                print("🔍 Started performance monitoring")
+            except ImportError as e:
+                print(f"⚠️  Could not start performance monitoring: {e}")
+
+        # Run the complete pipeline
+        print("🚀 Starting Enhanced QTL Analysis Pipeline...")
         results = pipeline.run_pipeline()
-        
+
+        # Stop performance monitoring
+        if performance_monitor:
+            performance_monitor.stop()
+            print("📈 Performance monitoring completed")
+            
         # Print comprehensive success summary
         print("\n" + "=" * 80)
         print("🎉 ENHANCED QTL ANALYSIS PIPELINE COMPLETED SUCCESSFULLY!")

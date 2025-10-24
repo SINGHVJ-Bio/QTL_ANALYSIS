@@ -23,13 +23,14 @@ input_files:
 
 # Large dataset configuration
 large_data:
-  min_memory_gb: 16
-  min_disk_gb: 50
-  command_timeout: 7200
+  min_memory_gb: 32
+  min_disk_gb: 100
+  command_timeout: 10800  # 3 hours for larger datasets
   process_by_chromosome: true
-  force_plink: true
+  force_plink: true      # Force PLINK format for better performance
   monitor_resources: true
   cache_intermediate: true
+  max_concurrent_chromosomes: 4  # Process multiple chromosomes in parallel
 
 # Normalization configuration per QTL type
 normalization:
@@ -68,8 +69,8 @@ tensorqtl:
   
   # Performance settings
   use_gpu: false
-  batch_size: 10000
-  chunk_size: 100
+  batch_size: 20000
+  chunk_size: 200
   num_permutations: 1000
   
   # Statistical methods
@@ -97,6 +98,11 @@ tensorqtl:
 
 # Genotype pre-processing configuration
 genotype_processing:
+  # Multi-threading for external tools
+  plink_threads: 16
+  bcftools_threads: 16
+  bgzip_threads: 8
+
   # Basic processing
   auto_detect_format: true
   output_format: "plink"  # tensorQTL prefers PLINK format
@@ -115,6 +121,7 @@ genotype_processing:
   min_call_rate: 0.95
   max_missing: 0.1
   quality_threshold: 30
+  prefer_plink: true
   
   # Multi-allelic site handling
   handle_multiallelic: true
@@ -298,22 +305,23 @@ qc:
 
 # Performance settings optimized for tensorQTL
 performance:
-  num_threads: 8
-  memory_gb: 32
+  num_threads: 16  # Set to your core count (e.g., 16 for 8-core/16-thread CPU)
+  memory_gb: 64    # Adjust based on your RAM
   temp_dir: "temp"
   cleanup_temp: true
   parallel_processing: true
   chunk_size: 1000
+  max_workers: 16   # For Python multiprocessing
   
   # tensorQTL-specific performance
-  tensorqtl_batch_size: 10000
-  tensorqtl_chunk_size: 100
+  tensorqtl_batch_size: 20000  # Increased for better CPU utilization
+  tensorqtl_chunk_size: 200    # Larger chunks for fewer overhead
   use_gpu: false
-  gpu_memory_gb: 16
+  gpu_memory_gb: 0
   
   # Multi-processing settings
-  max_workers: 8
-  process_by_chromosome: true
+  process_by_chromosome: true  # Process chromosomes in parallel
+  chromosome_batch_size: 4     # Number of chromosomes to process simultaneously
 
 # Advanced settings (for experienced users)
 advanced:
