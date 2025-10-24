@@ -17,14 +17,23 @@ import statsmodels.formula.api as smf
 
 logger = logging.getLogger('QTLPipeline')
 
+def map_qtl_type_to_config_key(qtl_type):
+    """Map QTL analysis types to config file keys"""
+    mapping = {
+        'eqtl': 'expression',
+        'pqtl': 'protein', 
+        'sqtl': 'splicing'
+    }
+    return mapping.get(qtl_type, qtl_type)
+
 class InteractionAnalysis:
     def __init__(self, config):
         self.config = config
         self.interaction_config = config.get('interaction_analysis', {})
         
-    def run_interaction_analysis(self, vcf_file, phenotype_file, covariates_file, output_dir):
-        """Run interaction QTL analysis"""
-        logger.info("🔍 Running interaction QTL analysis...")
+    def run_interaction_analysis(self, vcf_file, phenotype_file, covariates_file, output_dir, qtl_type):
+        """Run interaction QTL analysis for specific QTL type"""
+        logger.info(f"🔍 Running {qtl_type} interaction QTL analysis...")
         
         if not self.interaction_config.get('enable', False):
             logger.info("ℹ️ Interaction analysis disabled in config")
@@ -53,20 +62,20 @@ class InteractionAnalysis:
             
             for covariate in available_covariates:
                 logger.info(f"🔬 Testing interactions with {covariate}...")
-                cov_results = self.test_covariate_interactions(vcf_file, pheno_df, cov_df, covariate, output_dir)
+                cov_results = self.test_covariate_interactions(vcf_file, pheno_df, cov_df, covariate, output_dir, qtl_type)
                 results[covariate] = cov_results
             
             # Generate summary report
-            self.generate_interaction_summary(results, output_dir)
+            self.generate_interaction_summary(results, output_dir, qtl_type)
             
-            logger.info("✅ Interaction analysis completed")
+            logger.info(f"✅ {qtl_type} interaction analysis completed")
             return results
             
         except Exception as e:
-            logger.error(f"❌ Interaction analysis failed: {e}")
+            logger.error(f"❌ {qtl_type} interaction analysis failed: {e}")
             return {}
     
-    def test_covariate_interactions(self, vcf_file, pheno_df, cov_df, covariate, output_dir):
+    def test_covariate_interactions(self, vcf_file, pheno_df, cov_df, covariate, output_dir, qtl_type):
         """Test interactions for a specific covariate"""
         try:
             # This is a simplified implementation
@@ -74,6 +83,7 @@ class InteractionAnalysis:
             
             results = {
                 'covariate': covariate,
+                'qtl_type': qtl_type,
                 'tested_genes': 0,
                 'significant_interactions': 0,
                 'results_file': None
@@ -97,6 +107,7 @@ class InteractionAnalysis:
                 mock_results.append({
                     'gene_id': gene_id,
                     'covariate': covariate,
+                    'qtl_type': qtl_type,
                     'interaction_pvalue': interaction_p,
                     'interaction_beta': np.random.normal(0, 0.1),
                     'main_effect_pvalue': np.random.beta(1, 10),
@@ -112,17 +123,17 @@ class InteractionAnalysis:
             results['significant_interactions'] = len(significant)
             
             # Save results
-            output_file = os.path.join(output_dir, f"interaction_{covariate}_results.txt")
+            output_file = os.path.join(output_dir, f"interaction_{qtl_type}_{covariate}_results.txt")
             results_df.to_csv(output_file, sep='\t', index=False)
             results['results_file'] = output_file
             
-            logger.info(f"✅ {covariate}: {len(significant)} significant interactions at FDR < {fdr_threshold}")
+            logger.info(f"✅ {qtl_type} {covariate}: {len(significant)} significant interactions at FDR < {fdr_threshold}")
             
             return results
             
         except Exception as e:
-            logger.error(f"❌ Error testing interactions for {covariate}: {e}")
-            return {'covariate': covariate, 'error': str(e)}
+            logger.error(f"❌ Error testing interactions for {qtl_type} {covariate}: {e}")
+            return {'covariate': covariate, 'qtl_type': qtl_type, 'error': str(e)}
     
     def calculate_fdr(self, p_values):
         """Calculate FDR using Benjamini-Hochberg procedure"""
@@ -175,15 +186,15 @@ class InteractionAnalysis:
                 'r_squared': 0
             }
     
-    def generate_interaction_summary(self, results, output_dir):
+    def generate_interaction_summary(self, results, output_dir, qtl_type):
         """Generate summary of interaction analysis"""
-        logger.info("📊 Generating interaction analysis summary...")
+        logger.info(f"📊 Generating {qtl_type} interaction analysis summary...")
         
         try:
-            summary_file = os.path.join(output_dir, "interaction_analysis_summary.txt")
+            summary_file = os.path.join(output_dir, f"interaction_analysis_{qtl_type}_summary.txt")
             
             with open(summary_file, 'w') as f:
-                f.write("Interaction QTL Analysis Summary\n")
+                f.write(f"{qtl_type.upper()} Interaction QTL Analysis Summary\n")
                 f.write("=" * 50 + "\n\n")
                 
                 total_significant = 0
@@ -208,7 +219,7 @@ class InteractionAnalysis:
                 f.write(f"  Total significant interactions: {total_significant}\n")
                 f.write(f"  Overall hit rate: {total_significant/total_tested*100:.2f}%\n" if total_tested > 0 else "  Overall hit rate: 0%\n")
             
-            logger.info(f"💾 Interaction summary saved: {summary_file}")
+            logger.info(f"💾 {qtl_type} interaction summary saved: {summary_file}")
             
         except Exception as e:
-            logger.error(f"❌ Error generating interaction summary: {e}")
+            logger.error(f"❌ Error generating {qtl_type} interaction summary: {e}")

@@ -75,9 +75,12 @@ def validate_inputs(config):
     
     with ThreadPoolExecutor(max_workers=min(4, mp.cpu_count())) as executor:
         for analysis_type in analysis_types:
-            file_path = input_files.get(analysis_type)
+            # Map analysis type to config key
+            config_key = map_qtl_type_to_config_key(analysis_type)
+            file_path = input_files.get(config_key)
+            
             if not file_path:
-                errors.append(f"Missing phenotype file for {analysis_type}")
+                errors.append(f"Missing phenotype file for {analysis_type} (looking for key: {config_key})")
                 continue
                 
             if not os.path.exists(file_path):
@@ -165,6 +168,24 @@ def validate_inputs(config):
         if warnings:
             print("   Some warnings were found but analysis can proceed")
         return True
+
+def map_qtl_type_to_config_key(qtl_type):
+    """Map QTL analysis types to config file keys"""
+    mapping = {
+        'eqtl': 'expression',
+        'pqtl': 'protein', 
+        'sqtl': 'splicing'
+    }
+    return mapping.get(qtl_type, qtl_type)
+
+def map_qtl_type_to_data_type(qtl_type):
+    """Map QTL analysis types to data types for validation logic"""
+    mapping = {
+        'eqtl': 'expression',
+        'pqtl': 'protein',
+        'sqtl': 'splicing'
+    }
+    return mapping.get(qtl_type, qtl_type)
 
 def validate_tensorqtl_requirements(config):
     """Validate tensorQTL specific requirements - PRESERVED"""
@@ -550,7 +571,7 @@ def validate_annotations_file(file_path, config):
     return errors, warnings
 
 def validate_phenotype_file(file_path, qtl_type, config):
-    """Validate phenotype file structure for tensorQTL - OPTIMIZED"""
+    """Validate phenotype file structure for tensorQTL - OPTIMIZED with naming mapping"""
     errors = []
     warnings = []
     
@@ -574,15 +595,18 @@ def validate_phenotype_file(file_path, qtl_type, config):
         if constant_features > 0:
             warnings.append(f"{qtl_type} has {constant_features} constant features (in sample)")
         
-        # Check for extreme values based on phenotype type
+        # Check for extreme values based on phenotype type using mapping
         if df.size > 0:
-            if qtl_type == 'expression':
+            # Map qtl_type to data type for extreme value checks
+            data_type = map_qtl_type_to_data_type(qtl_type)
+            
+            if data_type == 'expression':
                 extreme_low = (df < -10).sum().sum()
                 extreme_high = (df > 10).sum().sum()
-            elif qtl_type == 'protein':
+            elif data_type == 'protein':
                 extreme_low = (df < -20).sum().sum()
                 extreme_high = (df > 20).sum().sum()
-            elif qtl_type == 'splicing':
+            elif data_type == 'splicing':
                 extreme_low = (df < -10).sum().sum()
                 extreme_high = (df > 10).sum().sum()
             else:
@@ -603,7 +627,7 @@ def validate_phenotype_file(file_path, qtl_type, config):
             print(f"✅ {qtl_type}: {total_features} features, {df.shape[1]} samples")
             print(f"   Mean: {mean_val:.3f}, Std: {std_val:.3f} (sampled)")
             
-            # Check normalization method from config
+            # Check normalization method from config - handles new naming
             norm_method = config['normalization'].get(qtl_type, {}).get('method', 'unknown')
             print(f"   Normalization method: {norm_method}")
             
@@ -769,7 +793,7 @@ def check_required_tools_parallel(config):
     return errors, warnings
 
 def check_sample_concordance_optimized(config, input_files):
-    """Check sample concordance across all input files - OPTIMIZED"""
+    """Check sample concordance across all input files - OPTIMIZED with naming mapping"""
     errors = []
     warnings = []
     
@@ -822,12 +846,14 @@ def check_sample_concordance_optimized(config, input_files):
             else:
                 print(f"✅ Genotype-covariate overlap: {len(overlap)} samples ({overlap_percent:.1f}%)")
         
-        # Check phenotype files
+        # Check phenotype files using naming mapping
         analysis_types = get_qtl_types_from_config(config)
         for analysis_type in analysis_types:
-            if analysis_type in input_files and input_files[analysis_type]:
+            # Map analysis type to config key
+            config_key = map_qtl_type_to_config_key(analysis_type)
+            if config_key in input_files and input_files[config_key]:
                 try:
-                    pheno_df = pd.read_csv(input_files[analysis_type], sep='\t', index_col=0, nrows=0)
+                    pheno_df = pd.read_csv(input_files[config_key], sep='\t', index_col=0, nrows=0)
                     pheno_samples = set(pheno_df.columns)
                     overlap = geno_samples.intersection(pheno_samples)
                     
@@ -1017,15 +1043,17 @@ def validate_finemap_requirements(config):
     return errors, warnings
 
 def get_qtl_types_from_config(config):
-    """Extract QTL types from config - PRESERVED"""
+    """Extract QTL types from config - UPDATED for naming mapping"""
     qtl_types = config['analysis']['qtl_types']
     
     if qtl_types == 'all':
         available_types = []
+        # Check for each QTL type using the config key mapping
         for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
-            if (qtl_type in config['input_files'] and 
-                config['input_files'][qtl_type] and 
-                os.path.exists(config['input_files'][qtl_type])):
+            config_key = map_qtl_type_to_config_key(qtl_type)
+            if (config_key in config['input_files'] and 
+                config['input_files'][config_key] and 
+                os.path.exists(config['input_files'][config_key])):
                 available_types.append(qtl_type)
         return available_types
     elif isinstance(qtl_types, str):

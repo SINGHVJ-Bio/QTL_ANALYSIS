@@ -17,14 +17,23 @@ warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
 
+def map_qtl_type_to_config_key(qtl_type):
+    """Map QTL analysis types to config file keys"""
+    mapping = {
+        'eqtl': 'expression',
+        'pqtl': 'protein', 
+        'sqtl': 'splicing'
+    }
+    return mapping.get(qtl_type, qtl_type)
+
 class FineMapping:
     def __init__(self, config):
         self.config = config
         self.finemap_config = config.get('fine_mapping', {})
         
-    def run_fine_mapping(self, qtl_results_file, vcf_file, output_dir):
-        """Run fine-mapping for significant QTL regions"""
-        logger.info("🔍 Running fine-mapping analysis...")
+    def run_fine_mapping(self, qtl_results_file, vcf_file, output_dir, qtl_type):
+        """Run fine-mapping for significant QTL regions for specific QTL type"""
+        logger.info(f"🔍 Running {qtl_type} fine-mapping analysis...")
         
         if not self.finemap_config.get('enable', False):
             logger.info("ℹ️ Fine-mapping disabled in config")
@@ -35,7 +44,7 @@ class FineMapping:
             qtl_df = pd.read_csv(qtl_results_file, sep='\t')
             
             if qtl_df.empty:
-                logger.warning("No QTL results for fine-mapping")
+                logger.warning(f"No {qtl_type} results for fine-mapping")
                 return {}
             
             # Filter significant associations
@@ -48,10 +57,10 @@ class FineMapping:
                 significant_qtls = qtl_df[qtl_df['p_value'] < p_threshold]
             
             if significant_qtls.empty:
-                logger.warning("No significant QTLs for fine-mapping")
+                logger.warning(f"No significant {qtl_type} for fine-mapping")
                 return {}
             
-            logger.info(f"🔧 Fine-mapping {len(significant_qtls)} significant QTLs")
+            logger.info(f"🔧 Fine-mapping {len(significant_qtls)} significant {qtl_type}")
             
             # Group by gene
             results = {}
@@ -59,21 +68,21 @@ class FineMapping:
                 if len(gene_qtls) < 2:  # Need multiple variants for fine-mapping
                     continue
                 
-                logger.info(f"🔬 Fine-mapping gene: {gene_id}")
-                gene_results = self.fine_map_gene(gene_qtls, vcf_file, output_dir, gene_id)
+                logger.info(f"🔬 Fine-mapping {qtl_type} gene: {gene_id}")
+                gene_results = self.fine_map_gene(gene_qtls, vcf_file, output_dir, gene_id, qtl_type)
                 results[gene_id] = gene_results
             
             # Generate summary
-            self.generate_finemap_summary(results, output_dir)
+            self.generate_finemap_summary(results, output_dir, qtl_type)
             
-            logger.info("✅ Fine-mapping completed")
+            logger.info(f"✅ {qtl_type} fine-mapping completed")
             return results
             
         except Exception as e:
-            logger.error(f"❌ Fine-mapping failed: {e}")
+            logger.error(f"❌ {qtl_type} fine-mapping failed: {e}")
             return {}
     
-    def fine_map_gene(self, gene_qtls, vcf_file, output_dir, gene_id):
+    def fine_map_gene(self, gene_qtls, vcf_file, output_dir, gene_id, qtl_type):
         """Run fine-mapping for a single gene"""
         try:
             method = self.finemap_config.get('method', 'susie')
@@ -81,18 +90,18 @@ class FineMapping:
             max_causal = self.finemap_config.get('max_causal_variants', 5)
             
             if method == 'susie':
-                return self.run_susie_finemap(gene_qtls, credible_threshold, max_causal, gene_id, output_dir)
+                return self.run_susie_finemap(gene_qtls, credible_threshold, max_causal, gene_id, output_dir, qtl_type)
             elif method == 'finemap':
-                return self.run_finemap(gene_qtls, credible_threshold, max_causal, gene_id, output_dir)
+                return self.run_finemap(gene_qtls, credible_threshold, max_causal, gene_id, output_dir, qtl_type)
             else:
                 logger.warning(f"Unknown fine-mapping method: {method}")
                 return {'error': f'Unknown method: {method}'}
                 
         except Exception as e:
-            logger.error(f"❌ Fine-mapping failed for {gene_id}: {e}")
+            logger.error(f"❌ {qtl_type} fine-mapping failed for {gene_id}: {e}")
             return {'error': str(e)}
     
-    def run_susie_finemap(self, gene_qtls, credible_threshold, max_causal, gene_id, output_dir):
+    def run_susie_finemap(self, gene_qtls, credible_threshold, max_causal, gene_id, output_dir, qtl_type):
         """Run SuSiE fine-mapping (simplified implementation)"""
         try:
             # This is a simplified mock implementation
@@ -123,13 +132,15 @@ class FineMapping:
                     'posterior_prob': posterior_probs[idx],
                     'p_value': p_values[idx],
                     'beta': betas[idx],
-                    'se': ses[idx]
+                    'se': ses[idx],
+                    'qtl_type': qtl_type
                 })
                 if cumulative_prob >= credible_threshold:
                     break
             
             results = {
                 'gene_id': gene_id,
+                'qtl_type': qtl_type,
                 'method': 'susie',
                 'credible_set_threshold': credible_threshold,
                 'credible_set_size': len(credible_set),
@@ -139,19 +150,19 @@ class FineMapping:
             }
             
             # Save results
-            output_file = os.path.join(output_dir, f"finemap_susie_{gene_id}.txt")
+            output_file = os.path.join(output_dir, f"finemap_{qtl_type}_susie_{gene_id}.txt")
             self.save_finemap_results(results, output_file)
             results['results_file'] = output_file
             
-            logger.info(f"✅ {gene_id}: Credible set size = {len(credible_set)}")
+            logger.info(f"✅ {qtl_type} {gene_id}: Credible set size = {len(credible_set)}")
             
             return results
             
         except Exception as e:
-            logger.error(f"❌ SuSiE fine-mapping failed for {gene_id}: {e}")
+            logger.error(f"❌ {qtl_type} SuSiE fine-mapping failed for {gene_id}: {e}")
             return {'error': str(e)}
     
-    def run_finemap(self, gene_qtls, credible_threshold, max_causal, gene_id, output_dir):
+    def run_finemap(self, gene_qtls, credible_threshold, max_causal, gene_id, output_dir, qtl_type):
         """Run FINEMAP (simplified implementation)"""
         try:
             # Mock implementation - similar to SuSiE but with different assumptions
@@ -177,13 +188,15 @@ class FineMapping:
                 credible_set.append({
                     'variant_id': variants[idx],
                     'posterior_prob': posterior_probs[idx],
-                    'p_value': p_values[idx]
+                    'p_value': p_values[idx],
+                    'qtl_type': qtl_type
                 })
                 if cumulative_prob >= credible_threshold:
                     break
             
             results = {
                 'gene_id': gene_id,
+                'qtl_type': qtl_type,
                 'method': 'finemap',
                 'credible_set_threshold': credible_threshold,
                 'credible_set_size': len(credible_set),
@@ -193,16 +206,16 @@ class FineMapping:
             }
             
             # Save results
-            output_file = os.path.join(output_dir, f"finemap_finemap_{gene_id}.txt")
+            output_file = os.path.join(output_dir, f"finemap_{qtl_type}_finemap_{gene_id}.txt")
             self.save_finemap_results(results, output_file)
             results['results_file'] = output_file
             
-            logger.info(f"✅ {gene_id}: Credible set size = {len(credible_set)}")
+            logger.info(f"✅ {qtl_type} {gene_id}: Credible set size = {len(credible_set)}")
             
             return results
             
         except Exception as e:
-            logger.error(f"❌ FINEMAP failed for {gene_id}: {e}")
+            logger.error(f"❌ {qtl_type} FINEMAP failed for {gene_id}: {e}")
             return {'error': str(e)}
     
     def save_finemap_results(self, results, output_file):
@@ -210,29 +223,30 @@ class FineMapping:
         try:
             with open(output_file, 'w') as f:
                 f.write(f"# Fine-mapping results for {results['gene_id']}\n")
+                f.write(f"# QTL Type: {results['qtl_type']}\n")
                 f.write(f"# Method: {results['method']}\n")
                 f.write(f"# Credible set threshold: {results['credible_set_threshold']}\n")
                 f.write(f"# Credible set size: {results['credible_set_size']}\n")
                 f.write(f"# Total variants: {results['total_variants']}\n")
                 f.write(f"# Max posterior probability: {results['max_posterior_prob']:.4f}\n\n")
                 
-                f.write("variant_id\tposterior_prob\tp_value\tbeta\tse\n")
+                f.write("variant_id\tposterior_prob\tp_value\tbeta\tse\tqtl_type\n")
                 for variant in results['credible_set_variants']:
                     f.write(f"{variant['variant_id']}\t{variant['posterior_prob']:.6f}\t")
-                    f.write(f"{variant['p_value']:.2e}\t{variant.get('beta', 'NA')}\t{variant.get('se', 'NA')}\n")
+                    f.write(f"{variant['p_value']:.2e}\t{variant.get('beta', 'NA')}\t{variant.get('se', 'NA')}\t{variant.get('qtl_type', 'NA')}\n")
                     
         except Exception as e:
             logger.error(f"❌ Error saving fine-mapping results: {e}")
     
-    def generate_finemap_summary(self, results, output_dir):
+    def generate_finemap_summary(self, results, output_dir, qtl_type):
         """Generate summary of fine-mapping results"""
-        logger.info("📊 Generating fine-mapping summary...")
+        logger.info(f"📊 Generating {qtl_type} fine-mapping summary...")
         
         try:
-            summary_file = os.path.join(output_dir, "fine_mapping_summary.txt")
+            summary_file = os.path.join(output_dir, f"{qtl_type}_fine_mapping_summary.txt")
             
             with open(summary_file, 'w') as f:
-                f.write("Fine-mapping Analysis Summary\n")
+                f.write(f"{qtl_type.upper()} Fine-mapping Analysis Summary\n")
                 f.write("=" * 50 + "\n\n")
                 
                 successful_genes = 0
@@ -266,7 +280,7 @@ class FineMapping:
                     f.write(f"  Min credible set size: {min(credible_set_sizes)}\n")
                     f.write(f"  Max credible set size: {max(credible_set_sizes)}\n")
             
-            logger.info(f"💾 Fine-mapping summary saved: {summary_file}")
+            logger.info(f"💾 {qtl_type} fine-mapping summary saved: {summary_file}")
             
         except Exception as e:
-            logger.error(f"❌ Error generating fine-mapping summary: {e}")
+            logger.error(f"❌ Error generating {qtl_type} fine-mapping summary: {e}")

@@ -21,12 +21,21 @@ warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
 
+def map_qtl_type_to_config_key(qtl_type):
+    """Map QTL analysis types to config file keys"""
+    mapping = {
+        'eqtl': 'expression',
+        'pqtl': 'protein', 
+        'sqtl': 'splicing'
+    }
+    return mapping.get(qtl_type, qtl_type)
+
 class EnhancedQC:
     def __init__(self, config):
         self.config = config
         self.qc_config = config.get('enhanced_qc', {})
         
-    def run_comprehensive_qc(self, vcf_file, phenotype_files, output_dir):
+    def run_comprehensive_qc(self, vcf_file, qtl_types, output_dir):
         """Run comprehensive QC on all data types"""
         logger.info("🔍 Running comprehensive quality control...")
         
@@ -36,13 +45,19 @@ class EnhancedQC:
         qc_dir = os.path.join(output_dir, "QC_reports")
         os.makedirs(qc_dir, exist_ok=True)
         
+        # Get phenotype files using proper mapping
+        phenotype_files = {}
+        for qtl_type in qtl_types:
+            config_key = map_qtl_type_to_config_key(qtl_type)
+            phenotype_files[qtl_type] = self.config['input_files'].get(config_key)
+        
         # Genotype QC
         qc_results['genotype'] = self.genotype_qc(vcf_file, qc_dir)
         
         # Phenotype QC
-        for pheno_type, pheno_file in phenotype_files.items():
+        for qtl_type, pheno_file in phenotype_files.items():
             if pheno_file and os.path.exists(pheno_file):
-                qc_results[pheno_type] = self.phenotype_qc(pheno_file, pheno_type, qc_dir)
+                qc_results[qtl_type] = self.phenotype_qc(pheno_file, qtl_type, qc_dir)
         
         # Sample concordance
         qc_results['concordance'] = self.sample_concordance_qc(vcf_file, phenotype_files, qc_dir)

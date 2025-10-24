@@ -8,18 +8,18 @@ results_dir: "results"
 # MANDATORY: Input files section
 input_files:
   # Genotype file - supports VCF, VCF.GZ, BCF, PLINK BED formats
-  genotypes: "data/genotypes.vcf"
+  genotypes: "data/genotypes.vcf.gz"
   
   # Covariates file (tab-separated)
-  covariates: "data/covariates.txt"
+  covariates: "data/covariates.tsv"
   
   # Annotation file (BED format)
   annotations: "data/annotations.bed"
   
   # Phenotype files
-  expression: "data/expression.txt"
-  protein: "data/protein.txt"
-  splicing: "data/splicing.txt"
+  expression: "data/expression.tsv"
+  protein: ""
+  splicing: ""
 
 # Large dataset configuration
 large_data:
@@ -121,7 +121,8 @@ genotype_processing:
   min_call_rate: 0.95
   max_missing: 0.1
   quality_threshold: 30
-  prefer_plink: true
+  # tensorQTL-specific optimizations
+  prefer_plink: true  # Use PLINK format for better performance with tensorQTL
   
   # Multi-allelic site handling
   handle_multiallelic: true
@@ -136,21 +137,18 @@ genotype_processing:
   remove_phasing: true
   match_samples: true
   sample_matching_method: "exact"
-  
-  # tensorQTL-specific optimizations
-  prefer_plink: true  # Use PLINK format for better performance with tensorQTL
 
 # Analysis configuration
 analysis:
   # QTL analysis types
-  qtl_types: "all"  # "all", "eqtl", "pqtl", "sqtl" or comma-separated list
+  qtl_types: "eqtl"  # "all", "eqtl", "pqtl", "sqtl" or comma-separated list
   
   # QTL mapping mode
   qtl_mode: "cis"  # "cis", "trans", "both"
   
   # GWAS analysis
   run_gwas: false
-  gwas_phenotype: "data/gwas_phenotype.txt"
+  gwas_phenotype: ""
 
 # QTL analysis parameters (for backward compatibility - tensorQTL uses its own section)
 qtl:
