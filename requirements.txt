@@ -11,6 +11,12 @@ scikit-learn>=1.0.0
 statsmodels>=0.13.0
 plotly>=5.0.0
 
+# tensorQTL and dependencies
+tensorqtl>=1.0.8
+torch>=1.9.0
+pyarrow>=3.0.0  # For parquet support
+pandas-plink>=2.0.0
+
 # Optional for specific features
 # rpy2>=3.5.0  # For R integration if needed
 # pysam>=0.19.0  # For advanced VCF handling

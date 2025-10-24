@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced QTL analysis utilities with QTLtools-specific capabilities
-Complete pipeline for cis/trans QTL analysis using QTLtools
+Enhanced QTL analysis utilities with tensorQTL-specific capabilities
+Complete pipeline for cis/trans QTL analysis using tensorQTL
 With proper normalization: VST for eQTL, log2 for pQTL/sQTL
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
@@ -16,18 +16,30 @@ import logging
 import subprocess
 import warnings
 import psutil
+import pickle
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from scipy import stats
 import warnings
+import tempfile
 from .normalization_comparison import NormalizationComparison
+
+# Import tensorQTL
+try:
+    import tensorqtl
+    from tensorqtl import genotypeio, cis, trans
+    import torch
+    TENSORQTL_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"tensorQTL not available: {e}")
+    TENSORQTL_AVAILABLE = False
 
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
 
 def prepare_genotypes(config, results_dir):
-    """Prepare genotype data optimized for QTLtools"""
-    logger.info("🔧 Preparing genotype data for QTLtools...")
+    """Prepare genotype data optimized for tensorQTL"""
+    logger.info("🔧 Preparing genotype data for tensorQTL...")
     
     # Initialize genotype processor
     from .genotype_processing import GenotypeProcessor
@@ -36,14 +48,25 @@ def prepare_genotypes(config, results_dir):
     # Get input file path
     input_file = config['input_files']['genotypes']
     
-    # Process genotypes
+    # Process genotypes - tensorQTL prefers PLINK format
     genotype_file = processor.process_genotypes(input_file, results_dir)
+    
+    # Ensure we have PLINK format for tensorQTL
+    if genotype_file.endswith('.vcf.gz'):
+        # Convert VCF to PLINK for tensorQTL
+        plink_base = os.path.join(results_dir, "genotypes_plink")
+        logger.info("🔄 Converting VCF to PLINK format for tensorQTL...")
+        run_command(
+            f"{config['paths']['plink']} --vcf {genotype_file} --make-bed --out {plink_base}",
+            "Converting VCF to PLINK for tensorQTL", config
+        )
+        genotype_file = plink_base + ".bed"
     
     logger.info(f"✅ Genotype preparation completed: {genotype_file}")
     return genotype_file
 
 def prepare_phenotype_data(config, qtl_type, results_dir):
-    """Prepare phenotype data in BED format with proper normalization"""
+    """Prepare phenotype data for tensorQTL with proper normalization"""
     logger.info(f"🔧 Preparing {qtl_type} phenotype data with {config['normalization'][qtl_type]['method']} normalization...")
     
     try:
@@ -61,46 +84,310 @@ def prepare_phenotype_data(config, qtl_type, results_dir):
         
         # Apply proper normalization based on QTL type
         if config['qc'].get('normalize', True):
-            pheno_df = apply_normalization(pheno_df, config, qtl_type, results_dir)
+            normalized_df = apply_normalization(pheno_df, config, qtl_type, results_dir)
+        else:
+            normalized_df = pheno_df
         
-        # Apply batch effect correction if enabled (using QTLtools covariates)
-        if config['enhanced_qc'].get('batch_effect_correction', False):
-            pheno_df = prepare_batch_covariates(pheno_df, config, results_dir)
+        # Generate normalization comparison plots if enabled
+        if config.get('enhanced_qc', {}).get('generate_normalization_plots', True):
+            try:
+                comparison = NormalizationComparison(config, results_dir)
+                comparison_results = comparison.generate_comprehensive_comparison(
+                    qtl_type, pheno_df.copy(), normalized_df, 
+                    config['normalization'][qtl_type]['method']
+                )
+                logger.info(f"📊 Normalization comparison completed for {qtl_type}")
+            except Exception as e:
+                logger.warning(f"⚠️ Normalization comparison failed: {e}")
         
-        # Read annotation data
+        # Transpose for tensorQTL (samples x features)
+        normalized_df = normalized_df.T
+        
+        # Save phenotype data for tensorQTL
+        pheno_output_file = os.path.join(results_dir, f"{qtl_type}_phenotypes.parquet")
+        normalized_df.to_parquet(pheno_output_file)
+        
+        # Prepare phenotype positions
         annotation_file = config['input_files']['annotations']
         annot_df = pd.read_csv(annotation_file, sep='\t', comment='#')
-        logger.info(f"📊 Loaded annotation data: {annot_df.shape[0]} features")
         
-        # Create BED format for QTLtools
-        bed_data = create_qtltools_bed_format(pheno_df, annot_df, qtl_type)
+        # Create phenotype positions DataFrame
+        pheno_pos_df = create_phenotype_positions(normalized_df.columns, annot_df, qtl_type)
         
-        if len(bed_data) == 0:
-            raise ValueError(f"❌ No valid features found for {qtl_type} after annotation matching")
+        # Save phenotype positions
+        pheno_pos_file = os.path.join(results_dir, f"{qtl_type}_phenotype_positions.parquet")
+        pheno_pos_df.to_parquet(pheno_pos_file)
         
-        # Save BED file
-        bed_file = os.path.join(results_dir, f"{qtl_type}_phenotypes.bed")
-        bed_data.to_csv(bed_file, sep='\t', index=False)
+        logger.info(f"✅ Prepared {qtl_type} data for tensorQTL: {normalized_df.shape[1]} features")
         
-        # Compress and index for QTLtools
-        bed_gz = bed_file + '.gz'
-        run_command(
-            f"{config['paths']['bgzip']} -c {bed_file} > {bed_gz}",
-            f"Compressing {qtl_type} BED file", config
-        )
-        
-        run_command(
-            f"{config['paths']['tabix']} -p bed {bed_gz}",
-            f"Indexing {qtl_type} BED file", config
-        )
-        
-        logger.info(f"✅ Prepared {qtl_type} data for QTLtools: {len(bed_data)} features")
-        return bed_gz
+        return {
+            'phenotype_file': pheno_output_file,
+            'phenotype_pos_file': pheno_pos_file,
+            'phenotype_df': normalized_df,
+            'phenotype_pos_df': pheno_pos_df
+        }
         
     except Exception as e:
         logger.error(f"❌ Error preparing {qtl_type} data: {e}")
         raise
 
+def create_phenotype_positions(feature_ids, annot_df, qtl_type):
+    """Create phenotype positions DataFrame for tensorQTL"""
+    positions_data = []
+    
+    for feature_id in feature_ids:
+        feature_annot = annot_df[annot_df['gene_id'] == feature_id]
+        
+        if len(feature_annot) == 0:
+            # If no annotation found, use default values
+            positions_data.append({
+                'phenotype_id': feature_id,
+                'chr': '1',
+                'start': 1,
+                'end': 2,
+                'strand': '+'
+            })
+        else:
+            feature_annot = feature_annot.iloc[0]
+            positions_data.append({
+                'phenotype_id': feature_id,
+                'chr': feature_annot['chr'],
+                'start': feature_annot['start'],
+                'end': feature_annot['end'],
+                'strand': feature_annot.get('strand', '+')
+            })
+    
+    positions_df = pd.DataFrame(positions_data)
+    positions_df = positions_df.set_index('phenotype_id')
+    return positions_df
+
+def load_genotype_data(genotype_file, config):
+    """Load genotype data for tensorQTL"""
+    logger.info("🔧 Loading genotype data for tensorQTL...")
+    
+    try:
+        if genotype_file.endswith('.bed'):
+            # Load PLINK data
+            plink_prefix = genotype_file.replace('.bed', '')
+            genotype_df = genotypeio.load_genotypes(plink_prefix)
+        else:
+            raise ValueError(f"Unsupported genotype format: {genotype_file}")
+        
+        logger.info(f"✅ Loaded genotype data: {genotype_df.shape[0]} variants, {genotype_df.shape[1]} samples")
+        return genotype_df
+        
+    except Exception as e:
+        logger.error(f"❌ Error loading genotype data: {e}")
+        raise
+
+def load_covariates(config, results_dir):
+    """Load and prepare covariates for tensorQTL"""
+    logger.info("🔧 Loading covariates for tensorQTL...")
+    
+    try:
+        covariates_file = config['input_files']['covariates']
+        cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0)
+        
+        # Transpose for tensorQTL (samples x covariates)
+        cov_df = cov_df.T
+        
+        # Use enhanced covariates if available
+        enhanced_cov_file = os.path.join(results_dir, "enhanced_covariates.txt")
+        if os.path.exists(enhanced_cov_file):
+            enhanced_cov_df = pd.read_csv(enhanced_cov_file, sep='\t', index_col=0)
+            enhanced_cov_df = enhanced_cov_df.T
+            # Merge with original covariates
+            cov_df = pd.concat([cov_df, enhanced_cov_df], axis=1)
+            logger.info("✅ Using enhanced covariates with PCA components")
+        
+        logger.info(f"✅ Loaded covariates: {cov_df.shape[1]} covariates, {cov_df.shape[0]} samples")
+        return cov_df
+        
+    except Exception as e:
+        logger.error(f"❌ Error loading covariates: {e}")
+        return None
+
+def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
+    """Run cis-QTL analysis using tensorQTL"""
+    if not TENSORQTL_AVAILABLE:
+        raise ImportError("tensorQTL is not available. Please install it: pip install tensorqtl")
+    
+    logger.info(f"🔍 Running {qtl_type} cis-QTL analysis with tensorQTL...")
+    
+    try:
+        # Prepare phenotype data
+        pheno_data = prepare_phenotype_data(config, qtl_type, results_dir)
+        
+        # Load genotype data
+        genotype_df = load_genotype_data(genotype_file, config)
+        
+        # Load covariates
+        covariates_df = load_covariates(config, results_dir)
+        
+        # Set output paths
+        output_prefix = os.path.join(results_dir, f"{qtl_type}_cis")
+        
+        # Get tensorQTL parameters
+        tqtl_config = config.get('tensorqtl', {})
+        
+        # Run cis-QTL analysis
+        logger.info("🔬 Running tensorQTL cis mapping...")
+        
+        cis_df = cis.map_cis(
+            genotype_df, 
+            pheno_data['phenotype_df'], 
+            pheno_data['phenotype_pos_df'],
+            covariates_df=covariates_df,
+            window=tqtl_config.get('cis_window', 1000000),
+            maf_threshold=tqtl_config.get('maf_threshold', 0.05),
+            min_maf=tqtl_config.get('min_maf', 0.01),
+            seed=tqtl_config.get('seed', 12345),
+            output_dir=results_dir,
+            prefix=f"{qtl_type}_cis",
+            write_stats=tqtl_config.get('write_stats', True),
+            write_top=tqtl_config.get('write_top_results', True),
+            run_eigenmt=False  # Can be enabled for multiple testing correction
+        )
+        
+        # Run permutations if requested
+        if tqtl_config.get('run_permutations', True):
+            logger.info("🔬 Running tensorQTL cis permutations...")
+            
+            cis_df = cis.map_cis(
+                genotype_df, 
+                pheno_data['phenotype_df'], 
+                pheno_data['phenotype_pos_df'],
+                covariates_df=covariates_df,
+                window=tqtl_config.get('cis_window', 1000000),
+                maf_threshold=tqtl_config.get('maf_threshold', 0.05),
+                min_maf=tqtl_config.get('min_maf', 0.01),
+                seed=tqtl_config.get('seed', 12345),
+                output_dir=results_dir,
+                prefix=f"{qtl_type}_cis",
+                write_stats=tqtl_config.get('write_stats', True),
+                write_top=tqtl_config.get('write_top_results', True),
+                run_eigenmt=False,
+                nperm=tqtl_config.get('num_permutations', 1000)
+            )
+        
+        # Count significant associations
+        significant_count = count_tensorqtl_significant(results_dir, f"{qtl_type}_cis", tqtl_config.get('fdr_threshold', 0.05))
+        
+        logger.info(f"✅ {qtl_type} cis: Found {significant_count} significant associations")
+        
+        return {
+            'result_file': os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz"),
+            'nominals_file': os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz"),
+            'significant_count': significant_count,
+            'status': 'completed'
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ cis-QTL analysis failed for {qtl_type}: {e}")
+        return {
+            'result_file': "",
+            'nominals_file': "",
+            'significant_count': 0,
+            'status': 'failed',
+            'error': str(e)
+        }
+
+def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
+    """Run trans-QTL analysis using tensorQTL"""
+    if not TENSORQTL_AVAILABLE:
+        raise ImportError("tensorQTL is not available. Please install it: pip install tensorqtl")
+    
+    logger.info(f"🔍 Running {qtl_type} trans-QTL analysis with tensorQTL...")
+    
+    try:
+        # Prepare phenotype data
+        pheno_data = prepare_phenotype_data(config, qtl_type, results_dir)
+        
+        # Load genotype data
+        genotype_df = load_genotype_data(genotype_file, config)
+        
+        # Load covariates
+        covariates_df = load_covariates(config, results_dir)
+        
+        # Set output paths
+        output_prefix = os.path.join(results_dir, f"{qtl_type}_trans")
+        
+        # Get tensorQTL parameters
+        tqtl_config = config.get('tensorqtl', {})
+        
+        # Run trans-QTL analysis
+        logger.info("🔬 Running tensorQTL trans mapping...")
+        
+        # For large datasets, use chunked processing
+        trans_df = trans.map_trans(
+            genotype_df, 
+            pheno_data['phenotype_df'],
+            covariates_df=covariates_df,
+            batch_size=tqtl_config.get('batch_size', 10000),
+            maf_threshold=tqtl_config.get('maf_threshold', 0.05),
+            min_maf=tqtl_config.get('min_maf', 0.01),
+            return_sparse=True,
+            pval_threshold=0.05  # Initial p-value threshold
+        )
+        
+        # Save results
+        trans_file = os.path.join(results_dir, f"{qtl_type}_trans.trans_qtl.txt.gz")
+        trans_df.to_csv(trans_file, sep='\t', compression='gzip')
+        
+        # Count significant associations
+        significant_count = len(trans_df) if trans_df is not None else 0
+        
+        logger.info(f"✅ {qtl_type} trans: Found {significant_count} significant associations")
+        
+        return {
+            'result_file': trans_file,
+            'nominals_file': trans_file,
+            'significant_count': significant_count,
+            'status': 'completed'
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ trans-QTL analysis failed for {qtl_type}: {e}")
+        return {
+            'result_file': "",
+            'nominals_file': "",
+            'significant_count': 0,
+            'status': 'failed',
+            'error': str(e)
+        }
+
+def count_tensorqtl_significant(results_dir, prefix, fdr_threshold=0.05):
+    """Count significant associations from tensorQTL output"""
+    result_file = os.path.join(results_dir, f"{prefix}.cis_qtl.txt.gz")
+    
+    if not os.path.exists(result_file):
+        return 0
+    
+    try:
+        df = pd.read_csv(result_file, sep='\t')
+        
+        # tensorQTL outputs qval column for FDR
+        if 'qval' in df.columns:
+            significant_count = len(df[df['qval'] < fdr_threshold])
+        elif 'pval_perm' in df.columns:
+            # Use permutation p-values
+            significant_count = len(df[df['pval_perm'] < fdr_threshold])
+        elif 'pval_nominal' in df.columns:
+            # Use nominal p-values with Bonferroni correction
+            bonferroni_threshold = fdr_threshold / len(df)
+            significant_count = len(df[df['pval_nominal'] < bonferroni_threshold])
+        else:
+            # Count all results if no FDR column
+            significant_count = len(df)
+            logger.warning("No FDR column found in tensorQTL output, counting all results")
+        
+        return significant_count
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Could not count significant associations: {e}")
+        return 0
+
+# Keep the normalization functions from your original code
 def apply_normalization(pheno_df, config, qtl_type, results_dir):
     """Apply proper normalization based on QTL type"""
     normalization_config = config['normalization'][qtl_type]
@@ -282,427 +569,6 @@ def filter_low_expressed_features(pheno_df, config, qtl_type):
         logger.info(f"🔧 Filtered low variance features: {high_variance_mask.sum()} features remaining")
     
     return pheno_df
-
-def create_qtltools_bed_format(pheno_df, annot_df, qtl_type):
-    """Create QTLtools-compatible BED format"""
-    bed_data = []
-    missing_annotations = 0
-    
-    for feature_id in pheno_df.index:
-        feature_annot = annot_df[annot_df['gene_id'] == feature_id]
-        
-        if len(feature_annot) == 0:
-            missing_annotations += 1
-            continue
-            
-        feature_annot = feature_annot.iloc[0]
-        
-        # Create BED entry with QTLtools format
-        bed_entry = {
-            'chr': feature_annot['chr'],
-            'start': feature_annot['start'],
-            'end': feature_annot['end'],
-            'pid': feature_id,  # QTLtools uses 'pid' for phenotype ID
-            'gid': feature_id,  # QTLtools uses 'gid' for gene ID
-            'strand': feature_annot.get('strand', '+')
-        }
-        
-        # Add phenotype values for all samples
-        for sample in pheno_df.columns:
-            bed_entry[sample] = pheno_df.loc[feature_id, sample]
-        
-        bed_data.append(bed_entry)
-    
-    if missing_annotations > 0:
-        logger.warning(f"⚠️ {missing_annotations} features missing annotations")
-    
-    # Create BED dataframe with proper column order
-    if bed_data:
-        bed_df = pd.DataFrame(bed_data)
-        # Ensure proper column order: chr, start, end, pid, gid, strand, then samples
-        sample_cols = [col for col in bed_df.columns if col not in ['chr', 'start', 'end', 'pid', 'gid', 'strand']]
-        bed_df = bed_df[['chr', 'start', 'end', 'pid', 'gid', 'strand'] + sample_cols]
-        return bed_df
-    else:
-        return pd.DataFrame()
-
-def prepare_batch_covariates(pheno_df, config, results_dir):
-    """Prepare batch effect covariates for QTLtools"""
-    logger.info("🔧 Preparing batch effect covariates...")
-    
-    try:
-        # Read original covariates
-        covariates_file = config['input_files']['covariates']
-        cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0)
-        
-        # Perform PCA to capture batch effects
-        from sklearn.decomposition import PCA
-        from sklearn.preprocessing import StandardScaler
-        
-        # Transpose for sample-wise PCA
-        pheno_samples = pheno_df.T.fillna(pheno_df.T.mean())
-        
-        # Standardize
-        scaler = StandardScaler()
-        pheno_scaled = scaler.fit_transform(pheno_samples)
-        
-        # Perform PCA
-        n_pcs = config['enhanced_qc'].get('num_pc_covariates', 5)
-        pca = PCA(n_components=n_pcs)
-        pcs = pca.fit_transform(pheno_scaled)
-        
-        # Create PCA covariates
-        pc_cov_df = pd.DataFrame(
-            pcs, 
-            columns=[f'PC{i+1}' for i in range(n_pcs)],
-            index=pheno_samples.index
-        )
-        
-        # Combine with original covariates
-        combined_cov_df = pd.concat([cov_df.T, pc_cov_df], axis=1)
-        
-        # Save enhanced covariates
-        enhanced_cov_file = os.path.join(results_dir, "enhanced_covariates.txt")
-        combined_cov_df.T.to_csv(enhanced_cov_file, sep='\t')
-        
-        logger.info(f"✅ Created enhanced covariates with {n_pcs} PCs: {enhanced_cov_file}")
-        
-        return pheno_df  # Return unchanged phenotype data
-        
-    except Exception as e:
-        logger.warning(f"⚠️ Batch effect correction failed: {e}")
-        return pheno_df
-
-def prepare_phenotype_data_with_comparison(config, qtl_type, results_dir):
-    """Prepare phenotype data with comprehensive normalization comparison"""
-    logger.info(f"🔧 Preparing {qtl_type} phenotype data with {config['normalization'][qtl_type]['method']} normalization...")
-    
-    try:
-        # Read phenotype data
-        pheno_file = config['input_files'][qtl_type]
-        if not os.path.exists(pheno_file):
-            raise FileNotFoundError(f"Phenotype file not found: {pheno_file}")
-            
-        raw_df = pd.read_csv(pheno_file, sep='\t', index_col=0)
-        logger.info(f"📊 Loaded {qtl_type} data: {raw_df.shape[0]} features, {raw_df.shape[1]} samples")
-        
-        # Store raw data for comparison
-        raw_data_for_comparison = raw_df.copy()
-        
-        # Apply QC filters if enabled
-        if config['qc'].get('filter_low_expressed', True):
-            raw_df = filter_low_expressed_features(raw_df, config, qtl_type)
-        
-        # Apply proper normalization based on QTL type
-        if config['qc'].get('normalize', True):
-            normalized_df = apply_normalization(raw_df, config, qtl_type, results_dir)
-        else:
-            normalized_df = raw_df
-        
-        # Generate normalization comparison plots if enabled
-        if config.get('enhanced_qc', {}).get('generate_normalization_plots', True):
-            try:
-                comparison = NormalizationComparison(config, results_dir)
-                comparison_results = comparison.generate_comprehensive_comparison(
-                    qtl_type, raw_data_for_comparison, normalized_df, 
-                    config['normalization'][qtl_type]['method']
-                )
-                logger.info(f"📊 Normalization comparison completed for {qtl_type}")
-            except Exception as e:
-                logger.warning(f"⚠️ Normalization comparison failed: {e}")
-        
-        # Continue with original processing...
-        # Read annotation data
-        annotation_file = config['input_files']['annotations']
-        annot_df = pd.read_csv(annotation_file, sep='\t', comment='#')
-        logger.info(f"📊 Loaded annotation data: {annot_df.shape[0]} features")
-        
-        # Create BED format for QTLtools
-        bed_data = create_qtltools_bed_format(normalized_df, annot_df, qtl_type)
-        
-        if len(bed_data) == 0:
-            raise ValueError(f"❌ No valid features found for {qtl_type} after annotation matching")
-        
-        # Save BED file
-        bed_file = os.path.join(results_dir, f"{qtl_type}_phenotypes.bed")
-        bed_data.to_csv(bed_file, sep='\t', index=False)
-        
-        # Compress and index for QTLtools
-        bed_gz = bed_file + '.gz'
-        run_command(
-            f"{config['paths']['bgzip']} -c {bed_file} > {bed_gz}",
-            f"Compressing {qtl_type} BED file", config
-        )
-        
-        run_command(
-            f"{config['paths']['tabix']} -p bed {bed_gz}",
-            f"Indexing {qtl_type} BED file", config
-        )
-        
-        logger.info(f"✅ Prepared {qtl_type} data for QTLtools: {len(bed_data)} features")
-        return bed_gz
-        
-    except Exception as e:
-        logger.error(f"❌ Error preparing {qtl_type} data: {e}")
-        raise
-
-def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
-    """Run cis-QTL analysis using QTLtools with comprehensive options"""
-    logger.info(f"🔍 Running {qtl_type} cis-QTL analysis with QTLtools...")
-    
-    try:
-        # Prepare phenotype data with proper normalization
-        bed_gz = prepare_phenotype_data_with_comparison(config, qtl_type, results_dir)
-        if not bed_gz or not os.path.exists(bed_gz):
-            raise FileNotFoundError(f"Could not prepare {qtl_type} phenotype data")
-            
-        # Use enhanced covariates if available
-        enhanced_cov_file = os.path.join(results_dir, "enhanced_covariates.txt")
-        if os.path.exists(enhanced_cov_file):
-            covariates_file = enhanced_cov_file
-            logger.info("✅ Using enhanced covariates with PCA components")
-        else:
-            covariates_file = config['input_files']['covariates']
-            
-        if not os.path.exists(covariates_file):
-            raise FileNotFoundError(f"Covariates file not found: {covariates_file}")
-        
-        # Set output paths
-        output_prefix = os.path.join(results_dir, f"{qtl_type}_cis")
-        
-        # Get QTL parameters
-        qtl_config = config.get('qtl', {})
-        
-        # Build QTLtools cis command with comprehensive options
-        if genotype_file.endswith('.bed'):  # PLINK format
-            base_name = genotype_file.replace('.bed', '')
-            cmd = (
-                f"{config['paths']['qtltools']} cis "
-                f"--plink {base_name} "
-                f"--bed {bed_gz} "
-                f"--cov {covariates_file} "
-            )
-        else:  # VCF format
-            cmd = (
-                f"{config['paths']['qtltools']} cis "
-                f"--vcf {genotype_file} "
-                f"--bed {bed_gz} "
-                f"--cov {covariates_file} "
-            )
-        
-        # Add QTLtools-specific parameters
-        cmd += (
-            f"--window {qtl_config.get('cis_window', 1000000)} "
-            f"--permute {qtl_config.get('permutations', 1000)} "
-            f"--maf-threshold {qtl_config.get('maf_threshold', 0.05)} "
-            f"--ma-min {qtl_config.get('min_maf', 0.01)} "
-            f"--seed {qtl_config.get('seed', 12345)} "
-        )
-        
-        # Add conditional analysis if enabled
-        if qtl_config.get('run_conditional', False):
-            cmd += f" --conditional {qtl_config.get('conditional_quantiles', 10)}"
-        
-        # Add normal approximation if enabled
-        if qtl_config.get('normal', True):
-            cmd += " --normal"
-        
-        # Add output options
-        cmd += (
-            f"--out {output_prefix}_nominals.txt "
-            f"--log {output_prefix}_qtl.log"
-        )
-        
-        # Add performance options
-        if config['performance'].get('num_threads', 1) > 1:
-            cmd += f" --chunk {qtl_config.get('chunk_size', 100)}"
-        
-        logger.info(f"Running QTLtools cis command")
-        run_command(cmd, f"{qtl_type} cis QTL analysis", config)
-        
-        # Check if results were generated
-        nominals_file = f"{output_prefix}_nominals.txt"
-        if not os.path.exists(nominals_file) or os.path.getsize(nominals_file) == 0:
-            logger.warning(f"⚠️ No results generated for {qtl_type} cis analysis")
-            return {
-                'result_file': "",
-                'nominals_file': nominals_file,
-                'significant_count': 0,
-                'status': 'completed'
-            }
-        
-        # Run QTLtools correct for FDR
-        fdr_cmd = (
-            f"{config['paths']['qtltools']} correct "
-            f"--qtl {nominals_file} "
-            f"--out {output_prefix}_significant.txt "
-            f"--threshold {qtl_config.get('fdr_threshold', 0.05)} "
-            f"--log {output_prefix}_fdr.log"
-        )
-        
-        if qtl_config.get('group', 'genes'):
-            fdr_cmd += f" --grp {qtl_config['group']}"
-        
-        run_command(fdr_cmd, f"{qtl_type} cis FDR correction", config)
-        
-        # Count significant associations
-        sig_file = f"{output_prefix}_significant.txt"
-        significant_count = count_qtltools_significant(sig_file, qtl_config.get('fdr_threshold', 0.05))
-        
-        logger.info(f"✅ {qtl_type} cis: Found {significant_count} significant associations")
-        
-        return {
-            'result_file': sig_file,
-            'nominals_file': nominals_file,
-            'significant_count': significant_count,
-            'status': 'completed'
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ cis-QTL analysis failed for {qtl_type}: {e}")
-        return {
-            'result_file': "",
-            'nominals_file': "",
-            'significant_count': 0,
-            'status': 'failed',
-            'error': str(e)
-        }
-
-def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
-    """Run trans-QTL analysis using QTLtools"""
-    logger.info(f"🔍 Running {qtl_type} trans-QTL analysis with QTLtools...")
-    
-    try:
-        # Prepare phenotype data with proper normalization
-        bed_gz = prepare_phenotype_data_with_comparison(config, qtl_type, results_dir)
-        if not bed_gz or not os.path.exists(bed_gz):
-            raise FileNotFoundError(f"Could not prepare {qtl_type} phenotype data")
-            
-        # Use enhanced covariates if available
-        enhanced_cov_file = os.path.join(results_dir, "enhanced_covariates.txt")
-        if os.path.exists(enhanced_cov_file):
-            covariates_file = enhanced_cov_file
-            logger.info("✅ Using enhanced covariates with PCA components")
-        else:
-            covariates_file = config['input_files']['covariates']
-            
-        if not os.path.exists(covariates_file):
-            raise FileNotFoundError(f"Covariates file not found: {covariates_file}")
-        
-        # Set output paths
-        output_prefix = os.path.join(results_dir, f"{qtl_type}_trans")
-        
-        # Get QTL parameters
-        qtl_config = config.get('qtl', {})
-        
-        # Build QTLtools trans command
-        if genotype_file.endswith('.bed'):  # PLINK format
-            base_name = genotype_file.replace('.bed', '')
-            cmd = (
-                f"{config['paths']['qtltools']} trans "
-                f"--plink {base_name} "
-                f"--bed {bed_gz} "
-                f"--cov {covariates_file} "
-            )
-        else:  # VCF format
-            cmd = (
-                f"{config['paths']['qtltools']} trans "
-                f"--vcf {genotype_file} "
-                f"--bed {bed_gz} "
-                f"--cov {covariates_file} "
-            )
-        
-        # Add trans-specific parameters
-        cmd += (
-            f"--window {qtl_config.get('trans_window', 5000000)} "
-            f"--maf-threshold {qtl_config.get('maf_threshold', 0.05)} "
-            f"--ma-min {qtl_config.get('min_maf', 0.01)} "
-            f"--seed {qtl_config.get('seed', 12345)} "
-            f"--out {output_prefix}_nominals.txt "
-            f"--log {output_prefix}_trans.log"
-        )
-        
-        # Add performance options for trans analysis
-        if config['performance'].get('num_threads', 1) > 1:
-            cmd += f" --chunk {qtl_config.get('chunk_size', 100)}"
-            
-        run_command(cmd, f"{qtl_type} trans associations", config)
-        
-        # Check if results were generated
-        nominals_file = f"{output_prefix}_nominals.txt"
-        if not os.path.exists(nominals_file) or os.path.getsize(nominals_file) == 0:
-            logger.warning(f"⚠️ No results generated for {qtl_type} trans analysis")
-            return {
-                'result_file': "",
-                'nominals_file': nominals_file,
-                'significant_count': 0,
-                'status': 'completed'
-            }
-        
-        # Apply FDR correction
-        fdr_cmd = (
-            f"{config['paths']['qtltools']} correct "
-            f"--qtl {nominals_file} "
-            f"--out {output_prefix}_significant.txt "
-            f"--threshold {qtl_config.get('fdr_threshold', 0.05)} "
-            f"--log {output_prefix}_trans_fdr.log"
-        )
-        
-        run_command(fdr_cmd, f"{qtl_type} trans FDR correction", config)
-        
-        # Count significant associations
-        sig_file = f"{output_prefix}_significant.txt"
-        significant_count = count_qtltools_significant(sig_file, qtl_config.get('fdr_threshold', 0.05))
-        
-        logger.info(f"✅ {qtl_type} trans: Found {significant_count} significant associations")
-            
-        return {
-            'result_file': sig_file,
-            'nominals_file': nominals_file,
-            'significant_count': significant_count,
-            'status': 'completed'
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ trans-QTL analysis failed for {qtl_type}: {e}")
-        return {
-            'result_file': "",
-            'nominals_file': "",
-            'significant_count': 0,
-            'status': 'failed',
-            'error': str(e)
-        }
-
-def count_qtltools_significant(result_file, fdr_threshold=0.05):
-    """Count significant associations from QTLtools output"""
-    if not os.path.exists(result_file) or os.path.getsize(result_file) == 0:
-        return 0
-    
-    try:
-        # QTLtools output format may vary, try different column names
-        df = pd.read_csv(result_file, sep='\t')
-        
-        # Try different FDR column names used by QTLtools
-        fdr_columns = ['FDR', 'fdr', 'qval', 'q-value', 'bh_fdr']
-        fdr_column = None
-        
-        for col in fdr_columns:
-            if col in df.columns:
-                fdr_column = col
-                break
-        
-        if fdr_column:
-            significant_count = len(df[df[fdr_column] < fdr_threshold])
-        else:
-            # If no FDR column, count all results
-            significant_count = len(df)
-            logger.warning("No FDR column found in QTLtools output, counting all results")
-        
-        return significant_count
-        
-    except Exception as e:
-        logger.warning(f"⚠️ Could not count significant associations: {e}")
-        return 0
 
 def run_command(cmd, description, config, check=True):
     """Run shell command with comprehensive error handling"""

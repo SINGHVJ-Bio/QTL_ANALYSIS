@@ -67,18 +67,16 @@ class GenotypeProcessor:
     
     def should_use_plink(self, input_file, input_format):
         """Determine if we should use PLINK format for efficiency"""
-        # Check file size
-        file_size_gb = os.path.getsize(input_file) / (1024**3)
-        
-        # Use PLINK if file is large OR explicitly configured
+        # For tensorQTL, always prefer PLINK format
         use_plink = (
-            file_size_gb > 10 or  # Large file threshold
-            self.large_data_config.get('force_plink', False) or
-            self.processing_config.get('prefer_plink', True)
+            self.large_data_config.get('force_plink', True) or  # Changed default to True
+            self.processing_config.get('prefer_plink', True) or
+            True  # Always use PLINK for tensorQTL
         )
         
         if use_plink:
-            logger.info(f"📊 Large file detected ({file_size_gb:.1f} GB) - using PLINK format")
+            file_size_gb = os.path.getsize(input_file) / (1024**3)
+            logger.info(f"📊 Using PLINK format for tensorQTL compatibility ({file_size_gb:.1f} GB)")
         
         return use_plink
     
