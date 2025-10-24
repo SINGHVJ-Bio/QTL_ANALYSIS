@@ -26,7 +26,7 @@ out_dir = "/home/ubuntu/DATA_DRIVE/qtl_data/input"
 count_output = os.path.join(out_dir, "rnseq_count.tsv")
 covar_output = os.path.join(out_dir, "covariate.tsv")
 samples_list = os.path.join(out_dir, "samples_to_keep.txt")
-vcf_output = os.path.join(out_dir, "cohort.filtered.samples.vcf.gz")
+vcf_output = os.path.join(out_dir, "cohort.filtered.samples_split.vcf.gz")
 bed_output = os.path.join(out_dir, "annotations.bed")
 chrom_map_chr_output = os.path.join(out_dir, "chromosome_map_chr.tsv")
 chrom_map_nochr_output = os.path.join(out_dir, "chromosome_map_nochr.txt")
@@ -101,7 +101,7 @@ covar_matrix.index.name = "ID"
 covar_matrix.to_csv(covar_output, sep="\t")
 
 # -------------------------------------------------------------------
-# Step 3: VCF filtering (autosomes only)
+# Step 3: VCF filtering (autosomes only) with multiallelic handling
 # -------------------------------------------------------------------
 # Write sample list
 with open(samples_list, "w") as f:
@@ -111,21 +111,48 @@ with open(samples_list, "w") as f:
 # Filter VCF with bcftools if available
 bcftools_path = shutil.which("bcftools")
 if bcftools_path:
-    # Restrict to chr1–chr22 only
+    # Restrict to chr1–chr22 only and split multiallelic variants
     regions = [f"chr{i}" for i in range(1, 23)]
+    
+    # Split multiallelic variants first, then filter samples and regions
+    temp_vcf = os.path.join(out_dir, "temp_split_multiallelics.vcf.gz")
+    
+    # Step 1: Split multiallelic variants
+    cmd_split = [
+        bcftools_path, "norm",
+        "-m", "-any",  # Split multiallelic sites
+        vcf_input,
+        "-Oz", "-o", temp_vcf
+    ]
+    print("Splitting multiallelic variants:", " ".join(cmd_split))
+    subprocess.run(cmd_split, check=True)
+    
+    # Step 2: Index the split VCF
+    cmd_index_temp = [bcftools_path, "index", "-t", temp_vcf]
+    subprocess.run(cmd_index_temp, check=True)
+    
+    # Step 3: Filter to samples and regions
     cmd_view = [
         bcftools_path, "view",
         "-S", samples_list,
+        "-r", ",".join(regions),
         "-Oz", "-o", vcf_output,
-        vcf_input,
-        "-r", ",".join(regions)
+        temp_vcf
     ]
-    print("Running:", " ".join(cmd_view))
+    print("Filtering to samples and regions:", " ".join(cmd_view))
     subprocess.run(cmd_view, check=True)
+    
+    # Step 4: Index final VCF
     cmd_index = [bcftools_path, "index", "-t", vcf_output]
-    print("Running:", " ".join(cmd_index))
+    print("Indexing final VCF:", " ".join(cmd_index))
     subprocess.run(cmd_index, check=True)
-    vcf_status = "VCF filtered to autosomes (chr1–chr22) and indexed."
+    
+    # Clean up temporary file
+    if os.path.exists(temp_vcf):
+        os.remove(temp_vcf)
+        os.remove(temp_vcf + ".tbi")
+    
+    vcf_status = "VCF filtered to autosomes (chr1–chr22), multiallelic variants split, and indexed."
 else:
     vcf_status = f"bcftools not found. Use {samples_list} and restrict to chr1–chr22 manually."
 
