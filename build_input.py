@@ -51,7 +51,8 @@ class InputBuilder:
         os.makedirs(self.out_dir, exist_ok=True)
         
         # Output files - using tensorQTL standard naming
-        self.expression_output = os.path.join(self.out_dir, "expression.bed")
+        self.expression_bed_output = os.path.join(self.out_dir, "expression.bed")
+        self.expression_counts_output = os.path.join(self.out_dir, "expression_counts.tsv")
         self.covar_output = os.path.join(self.out_dir, "covariates.txt")
         self.phenotype_output = os.path.join(self.out_dir, "phenotypes.txt")
         self.samples_output = os.path.join(self.out_dir, "samples.txt")
@@ -112,8 +113,8 @@ class InputBuilder:
         logger.info("✅ All input files validated")
     
     def process_expression_data(self):
-        """Process expression data to BED format for tensorQTL"""
-        logger.info("Step 1: Processing expression data to BED format...")
+        """Process expression data to create both BED format for tensorQTL and count matrix"""
+        logger.info("Step 1: Processing expression data...")
         
         # Load count data
         count_df = pd.read_csv(self.count_file, sep="\t")
@@ -125,6 +126,18 @@ class InputBuilder:
         
         count_samples = [c for c in count_df.columns if c != "gene_id"]
         logger.info(f"Count matrix: {count_df.shape[0]} genes, {len(count_samples)} samples")
+        
+        # Check data types - ensure counts are integers
+        logger.info("Checking count data types...")
+        sample_cols = [col for col in count_df.columns if col != 'gene_id']
+        for col in sample_cols:
+            if count_df[col].dtype == float:
+                # Check if all values are integers (but stored as float)
+                if (count_df[col] % 1 == 0).all():
+                    count_df[col] = count_df[col].astype(int)
+                    logger.info(f"Converted float column '{col}' to integer (count data)")
+                else:
+                    logger.warning(f"Column '{col}' contains non-integer values - this may not be raw counts")
         
         # Normalize IDs in metadata
         metadata_config = self.config['metadata_columns']
@@ -172,8 +185,13 @@ class InputBuilder:
         filtered_gene_count = filtered_count_df.shape[0]
         logger.info(f"Filtered genes: {filtered_gene_count}/{original_gene_count} retained")
         
-        # Convert to BED format for tensorQTL
-        logger.info("Converting to BED format...")
+        # Save the raw count matrix (gene_id + samples only)
+        logger.info("Saving raw count matrix...")
+        filtered_count_df.to_csv(self.expression_counts_output, sep="\t", index=False)
+        logger.info(f"✅ Raw count matrix saved: {self.expression_counts_output}")
+        
+        # Now create BED format for tensorQTL with genomic coordinates
+        logger.info("Creating BED format expression file for tensorQTL...")
         
         # Load gene annotations to get positions
         try:
@@ -186,7 +204,7 @@ class InputBuilder:
             if gene_types:
                 genes = genes[genes["gene_type"].isin(gene_types)]
             
-            # Merge with expression data
+            # Merge with expression data to get genomic coordinates
             expression_bed = filtered_count_df.merge(
                 genes[['gene_id', 'chr', 'start', 'end', 'strand']], 
                 on='gene_id', 
@@ -222,6 +240,10 @@ class InputBuilder:
         sample_cols = [col for col in expression_bed.columns if col not in ['chr', 'start', 'end', 'gene_id', 'score', 'strand']]
         expression_bed['score'] = 0  # Required BED column
         
+        # Ensure start and end are integers
+        expression_bed['start'] = expression_bed['start'].astype(int)
+        expression_bed['end'] = expression_bed['end'].astype(int)
+        
         # Create final BED dataframe in correct order
         bed_columns = ['chr', 'start', 'end', 'gene_id', 'score', 'strand'] + sample_cols
         expression_bed = expression_bed[bed_columns]
@@ -230,7 +252,7 @@ class InputBuilder:
         expression_bed = expression_bed.sort_values(['chr', 'start'])
         
         # Save BED file
-        expression_bed.to_csv(self.expression_output, sep="\t", index=False)
+        expression_bed.to_csv(self.expression_bed_output, sep="\t", index=False)
         logger.info(f"✅ Expression BED created: {expression_bed.shape[0]} genes, {len(sample_cols)} samples")
         
         self.expression_samples = sample_cols
@@ -580,6 +602,10 @@ class InputBuilder:
             if 'strand' not in bed_df.columns:
                 bed_df['strand'] = '+'
             
+            # Ensure start and end are integers
+            bed_df['start'] = bed_df['start'].astype(int)
+            bed_df['end'] = bed_df['end'].astype(int)
+            
             # Filter to genes present in expression data
             count_genes = set(self.filtered_count_df['gene_id'])
             bed_df = bed_df[bed_df['gene_id'].isin(count_genes)]
@@ -631,8 +657,8 @@ class InputBuilder:
         logger.info("="*60)
         
         logger.info(f"📊 EXPRESSION DATA")
-        logger.info(f"  File: {self.expression_output}")
-        logger.info(f"  Format: BED (genes × samples)")
+        logger.info(f"  BED file (for tensorQTL): {self.expression_bed_output}")
+        logger.info(f"  Count matrix (raw counts): {self.expression_counts_output}")
         logger.info(f"  Genes: {self.filtered_count_df.shape[0]}")
         logger.info(f"  Samples: {len(self.expression_samples)}")
         
@@ -663,7 +689,7 @@ class InputBuilder:
         logger.info("=== TENSORQTL USAGE ===")
         logger.info("python3 -m tensorqtl \\")
         logger.info(f"  {self.genotype_vcf_output} \\")
-        logger.info(f"  {self.expression_output} \\")
+        logger.info(f"  {self.expression_bed_output} \\")
         logger.info(f"  output_prefix \\")
         logger.info(f"  --covariates {self.covar_output} \\")
         logger.info(f"  --mode cis")
