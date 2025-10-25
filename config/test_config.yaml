@@ -1,32 +1,111 @@
 # QTL Analysis Pipeline - Complete Configuration
+# Optimized for tensorQTL with proper normalization strategies
 # ==============================================
-# This configuration file controls all aspects of the QTL analysis pipeline.
-# All paths can be absolute or relative to the project root.
 
 # MANDATORY: Results directory where all output will be stored
-results_dir: "test_results"
+results_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/results"
 
 # MANDATORY: Input files section
 input_files:
   # Genotype file - supports VCF, VCF.GZ, BCF, PLINK BED formats
-  genotypes: "data/genotypes.vcf"
+  genotypes: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/cohort.filtered.samples.vcf.gz"
   
   # Covariates file (tab-separated)
-  covariates: "data/covariates.txt"
+  covariates: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/covariate.tsv"
   
   # Annotation file (BED format)
-  annotations: "data/annotations.bed"
+  annotations: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/annotations.bed"
   
   # Phenotype files
-  expression: "data/expression.txt"
-  protein: "data/protein.txt"
-  splicing: "data/splicing.txt"
+  expression: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/rnseq_count.tsv"
+  protein: ""
+  splicing: ""
+
+# Large dataset configuration
+large_data:
+  min_memory_gb: 32
+  min_disk_gb: 100
+  command_timeout: 10800  # 3 hours for larger datasets
+  process_by_chromosome: true
+  force_plink: true      # Force PLINK format for better performance
+  monitor_resources: true
+  cache_intermediate: true
+  max_concurrent_chromosomes: 4  # Process multiple chromosomes in parallel
+
+# Normalization configuration per QTL type
+normalization:
+  # eQTL normalization options
+  eqtl:
+    method: "vst"  # "vst", "log2", "quantile", "tpm", "raw"
+    vst_blind: true
+    fit_type: "parametric"
+    use_deseq2: true
+    
+  # pQTL normalization options  
+  pqtl:
+    method: "log2"  # "log2", "quantile", "zscore", "raw"
+    log2_pseudocount: 1
+    remove_zeros: true
+    
+  # sQTL normalization options
+  sqtl:
+    method: "log2"  # "log2", "arcsinh", "zscore", "raw"
+    log2_pseudocount: 1
+    psi_range: [0, 1]  # PSI values range
+    
+  # Global normalization settings
+  global:
+    remove_constant_features: true
+    constant_threshold: 0.95
+    missing_value_threshold: 0.2
+
+# tensorQTL-specific configuration
+tensorqtl:
+  # Basic parameters
+  cis_window: 1000000
+  maf_threshold: 0.05
+  min_maf: 0.01
+  fdr_threshold: 0.05
+  
+  # Performance settings
+  use_gpu: false
+  batch_size: 20000
+  chunk_size: 200
+  num_permutations: 1000
+  
+  # Statistical methods
+  run_permutations: true
+  run_eigenmt: false
+  seed: 12345
+  
+  # Output options
+  write_stats: true
+  write_top_results: true
+  output_format: "parquet"  # "parquet", "csv"
+  write_sparse: true
+  
+  # Advanced options
+  impute_missing: true
+  center_features: true
+  standardize_features: true
+  return_sparse: true
+  
+  # Interaction analysis (if enabled)
+  interaction_method: "linear"
+  
+  # Fine-mapping (if enabled)
+  finemap_method: "susie"
 
 # Genotype pre-processing configuration
 genotype_processing:
+  # Multi-threading for external tools
+  plink_threads: 8
+  bcftools_threads: 8
+  bgzip_threads: 8
+
   # Basic processing
   auto_detect_format: true
-  output_format: "vcf.gz"
+  output_format: "plink"  # tensorQTL prefers PLINK format
   
   # Reference genome configuration
   reference_genome: ""  # Path to reference genome FASTA file
@@ -42,6 +121,7 @@ genotype_processing:
   min_call_rate: 0.95
   max_missing: 0.1
   quality_threshold: 30
+  prefer_plink: true
   
   # Multi-allelic site handling
   handle_multiallelic: true
@@ -56,25 +136,28 @@ genotype_processing:
   remove_phasing: true
   match_samples: true
   sample_matching_method: "exact"
+  
+  # tensorQTL-specific optimizations
+  prefer_plink: true  # Use PLINK format for better performance with tensorQTL
 
 # Analysis configuration
 analysis:
   # QTL analysis types
-  qtl_types: "all"  # "all", "eqtl", "pqtl", "sqtl" or comma-separated list
+  qtl_types: "eqtl"  # "all", "eqtl", "pqtl", "sqtl" or comma-separated list
   
   # QTL mapping mode
   qtl_mode: "cis"  # "cis", "trans", "both"
   
   # GWAS analysis
   run_gwas: false
-  gwas_phenotype: "data/gwas_phenotype.txt"
+  gwas_phenotype: ""
 
-# QTL analysis parameters
+# QTL analysis parameters (for backward compatibility - tensorQTL uses its own section)
 qtl:
-  # Cis-window size (for cis-QTL)
+  # cis-window size (kept for reference, tensorQTL uses tensorqtl.cis_window)
   cis_window: 1000000
   
-  # Trans analysis parameters (if mode is trans or both)
+  # Trans analysis parameters
   trans_chunk_size: 100
   trans_window: 5000000
   
@@ -88,8 +171,18 @@ qtl:
   # Performance tuning
   chunk_size: 100
   num_permutations: 1000
-  run_nominal: true
-  run_permutations: true
+  
+  # Specific options
+  seed: 12345
+  group: "genes"
+  
+  # Conditional analysis
+  run_conditional: false
+  conditional_method: "nominal"
+  
+  # Interaction analysis
+  run_interaction: false
+  interaction_covariate: ""
 
 # GWAS analysis parameters (only used if analysis.run_gwas is true)
 gwas:
@@ -98,9 +191,10 @@ gwas:
   maf_threshold: 0.01
   imputation: "mean"  # "mean", "median", "drop"
 
-# Enhanced QC configuration
+# Enhanced QC configuration with tensorQTL compatibility
 enhanced_qc:
   enable: true
+  generate_normalization_plots: true 
   sample_missingness_threshold: 0.1
   variant_missingness_threshold: 0.1
   hwe_threshold: 1e-6
@@ -110,13 +204,18 @@ enhanced_qc:
   batch_effect_correction: true
   expression_normalization: true
   outlier_detection: true
+  
+  # PCA options for covariates
+  pca_covariates: true
+  num_pc_covariates: 5
 
-# Interaction analysis
+# Interaction analysis using tensorQTL
 interaction_analysis:
   enable: false
   interaction_covariates: ["age", "sex", "bmi"]
   fdr_threshold: 0.1
   method: "linear"
+  window: 1000000
 
 # Fine-mapping configuration
 fine_mapping:
@@ -127,13 +226,20 @@ fine_mapping:
 
 # Paths to tools (use default if in PATH)
 paths:
-  qtltools: "qtltools"
+  # Primary analysis tool (now tensorQTL)
+  tensorqtl: "python"   # tensorQTL is a Python package
+  
+  # Legacy tool (for reference)
+  qtltools: "QTLtools"
+  
+  # Supporting tools
   bcftools: "bcftools"
   bgzip: "bgzip"
   tabix: "tabix"
   python: "python3"
   plink: "plink"
   R: "R"
+  r_script_deseq2: "scripts/utils/deseq2_vst.R"
 
 # Plotting configuration
 plotting:
@@ -158,7 +264,6 @@ plotting:
     - "summary"
     - "locuszoom"
     - "heatmap"
-    - "interactive"
 
 # Output settings
 output:
@@ -170,6 +275,16 @@ output:
   create_summary: true
   interactive_reports: true
   generate_methods_section: true
+  
+  # tensorQTL output options
+  save_nominal: true
+  save_permutations: true
+  save_interactions: false
+  save_conditional: false
+  
+  # File formats
+  phenotype_format: "parquet"  # "parquet", "csv"
+  result_format: "parquet"     # "parquet", "csv"
 
 # Quality control settings
 qc:
@@ -188,14 +303,25 @@ qc:
   variant_missingness_threshold: 0.1
   hwe_threshold: 1e-6
 
-# Performance settings
+# Performance settings optimized for tensorQTL
 performance:
-  num_threads: 4
-  memory_gb: 8
+  num_threads: 8  # Set to your core count (e.g., 16 for 8-core/16-thread CPU)
+  memory_gb: 62    # Adjust based on your RAM
   temp_dir: "temp"
   cleanup_temp: true
   parallel_processing: true
   chunk_size: 1000
+  max_workers: 8   # For Python multiprocessing
+  
+  # tensorQTL-specific performance
+  tensorqtl_batch_size: 20000  # Increased for better CPU utilization
+  tensorqtl_chunk_size: 200    # Larger chunks for fewer overhead
+  use_gpu: false
+  gpu_memory_gb: 0
+  
+  # Multi-processing settings
+  process_by_chromosome: true  # Process chromosomes in parallel
+  chromosome_batch_size: 4     # Number of chromosomes to process simultaneously
 
 # Advanced settings (for experienced users)
 advanced:
@@ -204,3 +330,17 @@ advanced:
   validate_outputs: true
   strict_mode: true
   benchmark: true
+  
+  # tensorQTL advanced options
+  tensorqtl_debug: false
+  dry_run: false
+  resume: false
+  
+  # Data handling
+  use_dask: false  # For very large datasets
+  cache_intermediate: true
+  compression_level: 6
+  
+  # Statistical options
+  adjust_for_genomic_inflation: true
+  store_full_results: false
