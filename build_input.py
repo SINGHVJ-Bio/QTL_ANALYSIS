@@ -127,17 +127,36 @@ class InputBuilder:
         count_samples = [c for c in count_df.columns if c != "gene_id"]
         logger.info(f"Count matrix: {count_df.shape[0]} genes, {len(count_samples)} samples")
         
-        # Check data types - ensure counts are integers
-        logger.info("Checking count data types...")
+        # Convert all count values to integers
+        logger.info("Converting count data to integers...")
         sample_cols = [col for col in count_df.columns if col != 'gene_id']
+        
         for col in sample_cols:
+            original_dtype = count_df[col].dtype
+            # First, fill any NaN values with 0
+            count_df[col] = count_df[col].fillna(0)
+            
+            # Convert to integer, handling any non-integer values by rounding
             if count_df[col].dtype == float:
-                # Check if all values are integers (but stored as float)
-                if (count_df[col] % 1 == 0).all():
-                    count_df[col] = count_df[col].astype(int)
-                    logger.info(f"Converted float column '{col}' to integer (count data)")
+                # Check if there are any non-integer values
+                non_integer_mask = (count_df[col] % 1 != 0) & (~count_df[col].isna())
+                if non_integer_mask.any():
+                    non_integer_count = non_integer_mask.sum()
+                    logger.warning(f"Column '{col}' has {non_integer_count} non-integer values - rounding to nearest integer")
+                    # Round to nearest integer
+                    count_df[col] = np.round(count_df[col]).astype(int)
                 else:
-                    logger.warning(f"Column '{col}' contains non-integer values - this may not be raw counts")
+                    # All values are integers stored as float, convert directly
+                    count_df[col] = count_df[col].astype(int)
+            elif count_df[col].dtype != int:
+                # For any other non-integer type, try to convert
+                try:
+                    count_df[col] = pd.to_numeric(count_df[col], errors='coerce').fillna(0).astype(int)
+                except:
+                    logger.error(f"Could not convert column '{col}' to integer")
+                    raise
+        
+        logger.info("✅ All count values converted to integers")
         
         # Normalize IDs in metadata
         metadata_config = self.config['metadata_columns']
@@ -175,7 +194,9 @@ class InputBuilder:
         original_gene_count = filtered_count_df.shape[0]
         
         if self.config['expression_processing'].get('remove_zero_genes', True):
-            filtered_count_df = filtered_count_df[filtered_count_df.iloc[:, 1:].sum(axis=1) > 0]
+            # Sum across samples (excluding gene_id column)
+            gene_sums = filtered_count_df.iloc[:, 1:].sum(axis=1)
+            filtered_count_df = filtered_count_df[gene_sums > 0]
         
         expression_threshold = self.config['expression_processing'].get('expression_threshold', 0.1)
         if expression_threshold > 0:
@@ -185,7 +206,14 @@ class InputBuilder:
         filtered_gene_count = filtered_count_df.shape[0]
         logger.info(f"Filtered genes: {filtered_gene_count}/{original_gene_count} retained")
         
-        # Save the raw count matrix (gene_id + samples only)
+        # Verify all counts are integers
+        sample_cols_final = [col for col in filtered_count_df.columns if col != 'gene_id']
+        for col in sample_cols_final:
+            if filtered_count_df[col].dtype != int:
+                logger.warning(f"Column '{col}' is not integer after filtering, converting...")
+                filtered_count_df[col] = filtered_count_df[col].astype(int)
+        
+        # Save the raw count matrix (gene_id + samples only) - ensure integers
         logger.info("Saving raw count matrix...")
         filtered_count_df.to_csv(self.expression_counts_output, sep="\t", index=False)
         logger.info(f"✅ Raw count matrix saved: {self.expression_counts_output}")
@@ -232,20 +260,25 @@ class InputBuilder:
                 'strand': ['+'] * len(filtered_count_df)
             })
             # Add expression data
-            sample_cols = [col for col in filtered_count_df.columns if col != 'gene_id']
-            for col in sample_cols:
+            sample_cols_final = [col for col in filtered_count_df.columns if col != 'gene_id']
+            for col in sample_cols_final:
                 expression_bed[col] = filtered_count_df[col]
         
         # Reorder columns for proper BED format
-        sample_cols = [col for col in expression_bed.columns if col not in ['chr', 'start', 'end', 'gene_id', 'score', 'strand']]
+        sample_cols_final = [col for col in expression_bed.columns if col not in ['chr', 'start', 'end', 'gene_id', 'score', 'strand']]
         expression_bed['score'] = 0  # Required BED column
         
         # Ensure start and end are integers
         expression_bed['start'] = expression_bed['start'].astype(int)
         expression_bed['end'] = expression_bed['end'].astype(int)
         
+        # Ensure all expression values are integers in the BED file too
+        for col in sample_cols_final:
+            if expression_bed[col].dtype != int:
+                expression_bed[col] = expression_bed[col].astype(int)
+        
         # Create final BED dataframe in correct order
-        bed_columns = ['chr', 'start', 'end', 'gene_id', 'score', 'strand'] + sample_cols
+        bed_columns = ['chr', 'start', 'end', 'gene_id', 'score', 'strand'] + sample_cols_final
         expression_bed = expression_bed[bed_columns]
         
         # Sort by chromosome and position
@@ -253,9 +286,9 @@ class InputBuilder:
         
         # Save BED file
         expression_bed.to_csv(self.expression_bed_output, sep="\t", index=False)
-        logger.info(f"✅ Expression BED created: {expression_bed.shape[0]} genes, {len(sample_cols)} samples")
+        logger.info(f"✅ Expression BED created: {expression_bed.shape[0]} genes, {len(sample_cols_final)} samples")
         
-        self.expression_samples = sample_cols
+        self.expression_samples = sample_cols_final
         self.filtered_count_df = filtered_count_df
         return expression_bed
     
