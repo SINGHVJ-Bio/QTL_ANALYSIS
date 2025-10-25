@@ -4,7 +4,7 @@ Enhanced GWAS analysis utilities with comprehensive error handling and performan
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
-Enhanced with parallel processing, memory optimization, and comprehensive reporting.
+Enhanced with parallel processing, memory optimization, comprehensive reporting, and dynamic data handling.
 """
 
 import os
@@ -24,6 +24,199 @@ warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
 
+class DynamicDataHandler:
+    """Enhanced handler for dynamic covariate and phenotype data"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.data_config = config.get('data_handling', {})
+        
+    def validate_and_prepare_data(self, genotype_samples, phenotype_file, covariate_file):
+        """Validate and prepare phenotype and covariate data with dynamic handling"""
+        logger.info("🔍 Validating and preparing dynamic data...")
+        
+        # Load and validate phenotype data
+        pheno_data = self._load_phenotype_data(phenotype_file)
+        if pheno_data.empty:
+            raise ValueError("Phenotype data is empty or invalid")
+        
+        # Load and validate covariate data
+        cov_data = self._load_covariate_data(covariate_file)
+        
+        # Align samples across all datasets
+        aligned_data = self._align_samples(genotype_samples, pheno_data, cov_data)
+        
+        # Generate enhanced covariates if needed
+        if self.data_config.get('generate_enhanced_covariates', True):
+            aligned_data['enhanced_covariates'] = self._generate_enhanced_covariates(
+                aligned_data['phenotype'], aligned_data['covariates']
+            )
+        
+        logger.info(f"✅ Data prepared: {aligned_data['phenotype'].shape[1]} phenotypes, "
+                   f"{aligned_data['covariates'].shape[1]} covariates, "
+                   f"{len(aligned_data['common_samples'])} common samples")
+        
+        return aligned_data
+    
+    def _load_phenotype_data(self, phenotype_file):
+        """Load phenotype data with flexible format handling"""
+        logger.info(f"📊 Loading phenotype data: {phenotype_file}")
+        
+        if not os.path.exists(phenotype_file):
+            raise FileNotFoundError(f"Phenotype file not found: {phenotype_file}")
+        
+        try:
+            # Try different formats and separators
+            for sep in ['\t', ',', ' ']:
+                try:
+                    df = pd.read_csv(phenotype_file, sep=sep, index_col=0)
+                    if not df.empty:
+                        logger.info(f"✅ Phenotype data loaded with separator '{sep}': {df.shape}")
+                        return df
+                except Exception as e:
+                    continue
+            
+            # If standard separators fail, try with header detection
+            df = pd.read_csv(phenotype_file, index_col=0)
+            if df.empty:
+                raise ValueError("Could not load phenotype data with any standard separator")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"❌ Error loading phenotype data: {e}")
+            raise
+    
+    def _load_covariate_data(self, covariate_file):
+        """Load covariate data with dynamic column handling"""
+        logger.info(f"📊 Loading covariate data: {covariate_file}")
+        
+        if not os.path.exists(covariate_file):
+            logger.warning(f"⚠️ Covariate file not found: {covariate_file}")
+            return pd.DataFrame()
+        
+        try:
+            # Try different formats and separators
+            for sep in ['\t', ',', ' ']:
+                try:
+                    df = pd.read_csv(covariate_file, sep=sep, index_col=0)
+                    if not df.empty:
+                        logger.info(f"✅ Covariate data loaded with separator '{sep}': {df.shape}")
+                        return df
+                except Exception as e:
+                    continue
+            
+            # If standard separators fail, try with header detection
+            df = pd.read_csv(covariate_file, index_col=0)
+            if df.empty:
+                logger.warning("⚠️ Covariate data is empty")
+                return pd.DataFrame()
+            
+            return df
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error loading covariate data: {e}")
+            return pd.DataFrame()
+    
+    def _align_samples(self, genotype_samples, phenotype_df, covariate_df):
+        """Align samples across genotype, phenotype, and covariate data"""
+        # Convert genotype samples to set for fast lookup
+        genotype_sample_set = set(genotype_samples)
+        
+        # Get phenotype samples
+        phenotype_samples = set(phenotype_df.columns)
+        
+        # Get covariate samples
+        if not covariate_df.empty:
+            covariate_samples = set(covariate_df.columns)
+        else:
+            covariate_samples = set()
+        
+        # Find common samples
+        if covariate_samples:
+            common_samples = genotype_sample_set & phenotype_samples & covariate_samples
+        else:
+            common_samples = genotype_sample_set & phenotype_samples
+        
+        if len(common_samples) == 0:
+            raise ValueError("No common samples found between genotype, phenotype, and covariate data")
+        
+        common_samples = sorted(common_samples)
+        
+        # Subset data to common samples
+        aligned_phenotype = phenotype_df[common_samples]
+        
+        if not covariate_df.empty:
+            aligned_covariates = covariate_df[common_samples]
+        else:
+            aligned_covariates = pd.DataFrame()
+        
+        logger.info(f"🔧 Sample alignment: {len(common_samples)} common samples "
+                   f"(genotype: {len(genotype_samples)}, "
+                   f"phenotype: {len(phenotype_samples)}, "
+                   f"covariates: {len(covariate_samples) if covariate_samples else 0})")
+        
+        return {
+            'phenotype': aligned_phenotype,
+            'covariates': aligned_covariates,
+            'common_samples': common_samples
+        }
+    
+    def _generate_enhanced_covariates(self, phenotype_df, existing_covariates):
+        """Generate enhanced covariates including PCA and other derived features"""
+        try:
+            from sklearn.decomposition import PCA
+            from sklearn.preprocessing import StandardScaler
+            
+            logger.info("🔧 Generating enhanced covariates...")
+            
+            # Prepare phenotype data for PCA (transpose to samples x features)
+            pheno_for_pca = phenotype_df.T.fillna(phenotype_df.T.mean())
+            
+            # Remove constant features
+            constant_mask = pheno_for_pca.std() == 0
+            if constant_mask.any():
+                pheno_for_pca = pheno_for_pca.loc[:, ~constant_mask]
+            
+            if pheno_for_pca.shape[1] < 2:
+                logger.warning("⚠️ Insufficient features for PCA")
+                return existing_covariates
+            
+            # Standardize data
+            scaler = StandardScaler()
+            pheno_scaled = scaler.fit_transform(pheno_for_pca)
+            
+            # Determine number of PC components
+            n_components = min(10, pheno_scaled.shape[1], pheno_scaled.shape[0] - 1)
+            if n_components < 1:
+                return existing_covariates
+            
+            # Perform PCA
+            pca = PCA(n_components=n_components)
+            pc_components = pca.fit_transform(pheno_scaled)
+            
+            # Create PCA covariate DataFrame
+            pc_columns = [f'PC{i+1}' for i in range(n_components)]
+            pc_df = pd.DataFrame(pc_components, index=pheno_for_pca.index, columns=pc_columns)
+            pc_df = pc_df.T  # Transpose to covariates x samples
+            
+            # Combine with existing covariates
+            if not existing_covariates.empty:
+                enhanced_covariates = pd.concat([existing_covariates, pc_df])
+            else:
+                enhanced_covariates = pc_df
+            
+            # Log explained variance
+            explained_variance = pca.explained_variance_ratio_.sum()
+            logger.info(f"✅ Enhanced covariates: {n_components} PC components "
+                       f"(explained variance: {explained_variance:.3f})")
+            
+            return enhanced_covariates
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Enhanced covariate generation failed: {e}")
+            return existing_covariates
+
 class GWASAnalyzer:
     """Enhanced GWAS analysis with performance optimizations and comprehensive reporting"""
     
@@ -33,14 +226,20 @@ class GWASAnalyzer:
         self.performance_config = config.get('performance', {})
         self.parallel_processing = self.performance_config.get('parallel_gwas', True)
         self.num_workers = min(4, self.performance_config.get('num_threads', 4))
+        self.data_handler = DynamicDataHandler(config)
         
     def run_gwas_analysis(self, genotype_file, results_dir):
         """Run comprehensive GWAS analysis with enhanced performance"""
         logger.info("📊 Running enhanced GWAS analysis...")
         
         try:
-            # Prepare GWAS data
-            gwas_data = self.prepare_gwas_data(results_dir)
+            # Get genotype samples
+            genotype_samples = self._get_genotype_samples(genotype_file)
+            if not genotype_samples:
+                raise ValueError("Could not extract genotype samples")
+            
+            # Prepare GWAS data with dynamic handling
+            gwas_data = self.prepare_gwas_data(results_dir, genotype_samples)
             if not gwas_data:
                 raise ValueError("GWAS data preparation failed")
             
@@ -66,6 +265,9 @@ class GWASAnalyzer:
                 'manhattan_plot': gwas_results.get('manhattan_plot'),
                 'qq_plot': gwas_results.get('qq_plot'),
                 'summary_stats': gwas_results.get('summary_stats', {}),
+                'phenotype_count': len(gwas_data['phenotype_cols']),
+                'covariate_count': gwas_data.get('covariate_count', 0),
+                'sample_count': len(gwas_data['common_samples']),
                 'status': 'completed'
             }
             
@@ -80,7 +282,36 @@ class GWASAnalyzer:
                 'error': str(e)
             }
     
-    def prepare_gwas_data(self, results_dir):
+    def _get_genotype_samples(self, genotype_file):
+        """Extract sample IDs from genotype file"""
+        logger.info("🔍 Extracting genotype samples...")
+        
+        try:
+            if genotype_file.endswith('.vcf.gz') or genotype_file.endswith('.vcf'):
+                # Use bcftools to get samples from VCF
+                cmd = f"bcftools query -l {genotype_file}"
+                result = self.run_command(cmd, "Extracting VCF samples", check=False)
+                if result.returncode == 0:
+                    samples = [s.strip() for s in result.stdout.split('\n') if s.strip()]
+                    logger.info(f"✅ Extracted {len(samples)} samples from VCF")
+                    return samples
+            elif genotype_file.endswith('.bed'):
+                # Read PLINK fam file
+                fam_file = genotype_file.replace('.bed', '.fam')
+                if os.path.exists(fam_file):
+                    fam_df = pd.read_csv(fam_file, sep='\s+', header=None)
+                    samples = fam_df[1].tolist()  # Second column is sample ID
+                    logger.info(f"✅ Extracted {len(samples)} samples from PLINK")
+                    return samples
+            
+            logger.warning("⚠️ Could not extract genotype samples, will rely on file alignment")
+            return None
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error extracting genotype samples: {e}")
+            return None
+    
+    def prepare_gwas_data(self, results_dir, genotype_samples=None):
         """Prepare GWAS phenotype and covariate data with enhanced handling and validation"""
         logger.info("🔧 Preparing enhanced GWAS data...")
         
@@ -92,70 +323,88 @@ class GWASAnalyzer:
             logger.error(f"GWAS phenotype file not found: {gwas_file}")
             return None
         
+        # Read covariates
+        covariates_file = self.config['input_files'].get('covariates')
+        if not covariates_file or not os.path.exists(covariates_file):
+            logger.warning("⚠️ Covariate file not found or not specified, proceeding without covariates")
+            covariates_file = None
+        
         try:
-            gwas_df = pd.read_csv(gwas_file, sep='\t')
-            logger.info(f"📊 Loaded GWAS phenotype data: {gwas_df.shape[0]} samples, {gwas_df.shape[1]-1} phenotypes")
+            # Use dynamic data handler
+            if genotype_samples is not None:
+                aligned_data = self.data_handler.validate_and_prepare_data(
+                    genotype_samples, gwas_file, covariates_file
+                )
+                phenotype_df = aligned_data['phenotype']
+                covariates_df = aligned_data['covariates']
+                common_samples = aligned_data['common_samples']
+            else:
+                # Load data without alignment
+                phenotype_df = self.data_handler._load_phenotype_data(gwas_file)
+                covariates_df = self.data_handler._load_covariate_data(covariates_file) if covariates_file else pd.DataFrame()
+                common_samples = phenotype_df.columns.tolist()
             
-            # Enhanced validation
-            if 'sample_id' not in gwas_df.columns:
-                raise ValueError("GWAS phenotype file must contain 'sample_id' column")
-            
-            # Read covariates
-            covariates_file = self.config['input_files']['covariates']
-            cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0)
-            logger.info(f"📊 Loaded covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+            logger.info(f"📊 Loaded GWAS data: {phenotype_df.shape[0]} features, {len(common_samples)} samples")
+            logger.info(f"📊 Covariates: {covariates_df.shape[0]} covariates" if not covariates_df.empty else "📊 No covariates used")
             
             # Identify phenotype columns
-            phenotype_cols = [col for col in gwas_df.columns if col != 'sample_id']
+            phenotype_cols = phenotype_df.index.tolist()
             if not phenotype_cols:
-                raise ValueError("No phenotype columns found in GWAS file")
+                raise ValueError("No phenotype features found in GWAS file")
             
             # Apply enhanced phenotype QC
-            gwas_df = self.apply_enhanced_phenotype_qc(gwas_df, phenotype_cols)
+            phenotype_df = self.apply_enhanced_phenotype_qc(phenotype_df, phenotype_cols)
             
             # Create PLINK compatible files
             plink_pheno_file = os.path.join(results_dir, "gwas_phenotype.txt")
             plink_cov_file = os.path.join(results_dir, "gwas_covariates.txt")
             
             # Prepare phenotype file for PLINK
-            pheno_output = gwas_df[['sample_id'] + phenotype_cols]
+            pheno_output = phenotype_df.T.reset_index()
+            pheno_output.columns = ['sample_id'] + phenotype_cols
             pheno_output.to_csv(plink_pheno_file, sep='\t', index=False)
             logger.info(f"💾 Saved PLINK phenotype file: {plink_pheno_file}")
             
-            # Prepare covariate file for PLINK
-            cov_output = cov_df.T.reset_index()
-            cov_output.columns = ['sample_id'] + list(cov_df.index)
-            cov_output.to_csv(plink_cov_file, sep='\t', index=False)
-            logger.info(f"💾 Saved PLINK covariate file: {plink_cov_file}")
+            # Prepare covariate file for PLINK if covariates exist
+            if not covariates_df.empty:
+                cov_output = covariates_df.T.reset_index()
+                cov_output.columns = ['sample_id'] + covariates_df.index.tolist()
+                cov_output.to_csv(plink_cov_file, sep='\t', index=False)
+                logger.info(f"💾 Saved PLINK covariate file: {plink_cov_file}")
+            else:
+                plink_cov_file = None
+                logger.info("ℹ️ No covariate file created")
             
             return {
                 'phenotype_file': plink_pheno_file,
                 'covariate_file': plink_cov_file,
                 'phenotype_cols': phenotype_cols,
-                'sample_count': len(gwas_df),
+                'sample_count': len(common_samples),
                 'phenotype_count': len(phenotype_cols),
-                'original_sample_count': len(gwas_df)
+                'covariate_count': covariates_df.shape[0] if not covariates_df.empty else 0,
+                'common_samples': common_samples,
+                'original_sample_count': phenotype_df.shape[1]
             }
             
         except Exception as e:
             logger.error(f"❌ Error preparing GWAS data: {e}")
             return None
     
-    def apply_enhanced_phenotype_qc(self, gwas_df, phenotype_cols):
+    def apply_enhanced_phenotype_qc(self, pheno_df, phenotype_cols):
         """Apply comprehensive quality control to GWAS phenotypes"""
         logger.info("🔧 Applying enhanced GWAS phenotype QC...")
         
-        original_shape = gwas_df.shape
+        original_shape = pheno_df.shape
         samples_removed = 0
         
         # Remove samples with missing sample IDs
-        gwas_df = gwas_df.dropna(subset=['sample_id'])
-        samples_removed += original_shape[0] - gwas_df.shape[0]
+        pheno_df = pheno_df.dropna(subset=['sample_id'])
+        samples_removed += original_shape[0] - pheno_df.shape[0]
         
         # Check for missing values in phenotypes
         missing_report = {}
         for pheno in phenotype_cols:
-            missing_count = gwas_df[pheno].isna().sum()
+            missing_count = pheno_df[pheno].isna().sum()
             if missing_count > 0:
                 missing_report[pheno] = missing_count
                 logger.warning(f"⚠️ Phenotype {pheno} has {missing_count} missing values")
@@ -163,26 +412,26 @@ class GWASAnalyzer:
         # Remove extreme outliers using multiple methods
         outlier_report = {}
         for pheno in phenotype_cols:
-            if gwas_df[pheno].dtype in [np.float64, np.int64]:
+            if pheno_df[pheno].dtype in [np.float64, np.int64]:
                 # Method 1: Z-score outliers
-                z_scores = np.abs((gwas_df[pheno] - gwas_df[pheno].mean()) / gwas_df[pheno].std())
+                z_scores = np.abs((pheno_df[pheno] - pheno_df[pheno].mean()) / pheno_df[pheno].std())
                 z_outliers = z_scores > 5
                 
                 # Method 2: IQR outliers
-                Q1 = gwas_df[pheno].quantile(0.25)
-                Q3 = gwas_df[pheno].quantile(0.75)
+                Q1 = pheno_df[pheno].quantile(0.25)
+                Q3 = pheno_df[pheno].quantile(0.75)
                 IQR = Q3 - Q1
-                iqr_outliers = (gwas_df[pheno] < (Q1 - 3 * IQR)) | (gwas_df[pheno] > (Q3 + 3 * IQR))
+                iqr_outliers = (pheno_df[pheno] < (Q1 - 3 * IQR)) | (pheno_df[pheno] > (Q3 + 3 * IQR))
                 
                 # Combine methods
                 extreme_outliers = z_outliers | iqr_outliers
                 if extreme_outliers.sum() > 0:
                     outlier_report[pheno] = extreme_outliers.sum()
-                    gwas_df = gwas_df[~extreme_outliers]
+                    pheno_df = pheno_df[~extreme_outliers]
         
-        samples_removed += original_shape[0] - gwas_df.shape[0] - samples_removed
+        samples_removed += original_shape[0] - pheno_df.shape[0] - samples_removed
         
-        logger.info(f"🔧 Phenotype QC: {original_shape[0]} → {gwas_df.shape[0]} samples "
+        logger.info(f"🔧 Phenotype QC: {original_shape[0]} → {pheno_df.shape[0]} samples "
                    f"({samples_removed} removed)")
         
         if missing_report:
@@ -190,7 +439,7 @@ class GWASAnalyzer:
         if outlier_report:
             logger.info(f"🔧 Outliers removed: {outlier_report}")
         
-        return gwas_df
+        return pheno_df
     
     def run_plink_gwas_optimized(self, genotype_file, gwas_data, results_dir):
         """Run optimized GWAS using PLINK with parallel processing"""
@@ -269,7 +518,7 @@ class GWASAnalyzer:
         # Build optimized PLINK command
         cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --pheno {gwas_data['phenotype_file']} --mpheno {pheno_index + 1}"
         
-        if self.gwas_config.get('covariates', True):
+        if self.gwas_config.get('covariates', True) and gwas_data.get('covariate_file'):
             cmd += f" --covar {gwas_data['covariate_file']}"
         
         if method == 'linear':

@@ -1,0 +1,77 @@
+# Input Build Configuration for tensorQTL Pipeline
+# ================================================
+
+# Input file paths
+input_files:
+  count_file: "/home/ubuntu/DATA_DRIVE/qtl_data/Merge_Pre_EMULSION_ENABL150_ENABL300_count_protein_coding.tsv"
+  meta_file: "/home/ubuntu/DATA_DRIVE/qtl_data/meta_wgs_rnaseq.csv"
+  pca_file: "/home/ubuntu/DATA_DRIVE/qtl_data/pca_result_cohort.eigenvec"  # Optional
+  vcf_input: "/home/ubuntu/DATA_DRIVE/qtl_data/ENABL_merged_280_cohort.snp.recalibrated.vcf.gz"
+  gtf_table: "/home/ubuntu/DATA_DRIVE/qtl_data/gencode.v38.annotation.gtf.full.table.txt"
+
+# Output directory
+output:
+  output_dir: "/home/ubuntu/DATA_DRIVE/qtl_data/input"
+
+# Metadata column mappings
+metadata_columns:
+  rnaseq_library: "RNASeq_Library"  # Column in metadata matching count matrix column names
+  wgs_library: "WGS_Library"        # Column in metadata matching VCF sample IDs
+  # Additional columns that can be used as covariates or phenotypes:
+  age: "Age"
+  sex: "Sex" 
+  rin: "RNASeq_RIN"
+  batch: "RNASeq_Batch"
+
+# Expression data processing
+expression_processing:
+  remove_zero_genes: true           # Remove genes with all zero counts
+  expression_threshold: 0.1         # Remove genes with mean expression below this threshold
+  normalization: "none"             # "none", "tpm", "log2" - applied during QTL analysis
+
+# Covariate configuration
+covariates:
+  include: ["age", "sex", "rin", "batch", "PC1", "PC2", "PC3", "PC4", "PC5"]
+  categorical_columns: ["sex", "batch"]  # Columns to convert to categorical codes
+  pca_count: 5                     # Number of PCA components to include
+  add_intercept: true              # Add intercept term (recommended for tensorQTL)
+  missing_value_strategy: "drop"   # "drop", "mean", "median"
+
+# Phenotype configuration (for GWAS analysis)
+phenotypes:
+  include: ["age", "sex", "bmi", "height", "weight", "blood_pressure"]  # Add your phenotype columns here
+  categorical_phenotypes:
+    sex: true  # Convert to numeric codes (0/1)
+    # Add other categorical phenotypes
+  missing_value_strategy: "drop"   # "drop", "mean", "median"
+  normalization: "standardize"     # "standardize", "quantile", "none"
+
+# VCF processing configuration
+vcf_processing:
+  regions: ["chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10",
+            "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19",
+            "chr20", "chr21", "chr22"]
+  biallelic_only: true             # Keep only biallelic variants
+  variant_type: "snps"             # "snps", "indels", "all"
+  min_quality: 30                  # Minimum QUAL score (optional)
+  convert_to_plink: true           # Convert to PLINK format for better performance
+  
+  # PLINK conversion settings
+  plink_settings:
+    memory: 4000                   # Memory in MB
+    threads: 2                     # Number of threads
+    maf_threshold: 0.01            # Minor allele frequency threshold
+    geno_threshold: 0.1            # Maximum missing genotype rate
+    mind_threshold: 0.1            # Maximum missing sample rate
+
+# Annotation BED configuration
+annotations:
+  feature_type: "gene"             # GTF feature type to include
+  gene_types: ["protein_coding"]   # Gene types to include
+  additional_columns: ["gene_name", "gene_type"]  # Additional columns to include
+
+# Advanced options
+advanced:
+  validate_chromosome_consistency: true
+  create_sample_qc_report: true
+  generate_plots: false

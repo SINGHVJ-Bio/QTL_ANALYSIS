@@ -7,7 +7,7 @@ and optimized CPU/GPU utilization
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
-Enhanced with comprehensive CPU/GPU optimization, memory management, and performance tuning.
+Enhanced with comprehensive CPU/GPU optimization, memory management, performance tuning, and dynamic data handling.
 """
 
 import os
@@ -75,6 +75,143 @@ except ImportError:
         GenotypeProcessor = None
 
 warnings.filterwarnings('ignore')
+
+class DynamicDataHandler:
+    """Enhanced handler for dynamic QTL data alignment and processing"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.data_config = config.get('data_handling', {})
+        
+    def align_qtl_data(self, genotype_samples, phenotype_df, covariate_df=None):
+        """Align genotype, phenotype, and covariate data with comprehensive validation"""
+        logger.info("🔍 Aligning QTL data across all datasets...")
+        
+        # Convert to sets for fast operations
+        genotype_set = set(genotype_samples)
+        phenotype_set = set(phenotype_df.columns)
+        
+        if covariate_df is not None and not covariate_df.empty:
+            covariate_set = set(covariate_df.columns)
+        else:
+            covariate_set = set()
+        
+        # Find common samples
+        if covariate_set:
+            common_samples = genotype_set & phenotype_set & covariate_set
+        else:
+            common_samples = genotype_set & phenotype_set
+        
+        if len(common_samples) == 0:
+            raise ValueError("No common samples found across genotype, phenotype, and covariate data")
+        
+        common_samples = sorted(common_samples)
+        
+        # Subset data to common samples
+        aligned_phenotype = phenotype_df[common_samples]
+        
+        if covariate_set:
+            aligned_covariates = covariate_df[common_samples]
+        else:
+            aligned_covariates = pd.DataFrame()
+        
+        # Log alignment results
+        logger.info(f"✅ Data alignment completed: {len(common_samples)} common samples "
+                   f"(genotype: {len(genotype_set)}, phenotype: {len(phenotype_set)}, "
+                   f"covariates: {len(covariate_set) if covariate_set else 0})")
+        
+        return {
+            'phenotype': aligned_phenotype,
+            'covariates': aligned_covariates,
+            'common_samples': common_samples
+        }
+    
+    def validate_phenotype_data(self, phenotype_df, qtl_type):
+        """Validate phenotype data with QTL-type specific checks"""
+        logger.info(f"🔍 Validating {qtl_type} phenotype data...")
+        
+        if phenotype_df.empty:
+            raise ValueError(f"{qtl_type} phenotype data is empty")
+        
+        # Check for numeric data
+        non_numeric = phenotype_df.select_dtypes(exclude=[np.number])
+        if not non_numeric.empty:
+            logger.warning(f"⚠️ Found {non_numeric.shape[1]} non-numeric columns in {qtl_type} data, attempting conversion")
+            try:
+                phenotype_df = phenotype_df.astype(np.float64)
+            except Exception as e:
+                logger.error(f"❌ Could not convert non-numeric columns to numeric: {e}")
+                raise
+        
+        # Check for constant features
+        constant_features = phenotype_df.std(axis=1) == 0
+        if constant_features.any():
+            logger.warning(f"⚠️ Removing {constant_features.sum()} constant features from {qtl_type} data")
+            phenotype_df = phenotype_df[~constant_features]
+        
+        # Check for excessive missingness
+        missing_threshold = self.data_config.get('missing_value_threshold', 0.2)
+        missing_rates = phenotype_df.isna().sum(axis=1) / phenotype_df.shape[1]
+        high_missing = missing_rates > missing_threshold
+        
+        if high_missing.any():
+            logger.warning(f"⚠️ Removing {high_missing.sum()} features with >{missing_threshold*100}% missing values")
+            phenotype_df = phenotype_df[~high_missing]
+        
+        logger.info(f"✅ {qtl_type} validation: {phenotype_df.shape[0]} features, {phenotype_df.shape[1]} samples")
+        return phenotype_df
+    
+    def generate_enhanced_covariates(self, phenotype_df, existing_covariates=None):
+        """Generate enhanced covariates including PCA components"""
+        try:
+            from sklearn.decomposition import PCA
+            from sklearn.preprocessing import StandardScaler
+            
+            logger.info("🔧 Generating enhanced covariates...")
+            
+            # Prepare data for PCA
+            pheno_for_pca = phenotype_df.T.fillna(phenotype_df.T.mean())
+            
+            # Remove constant features
+            constant_mask = pheno_for_pca.std() == 0
+            if constant_mask.any():
+                pheno_for_pca = pheno_for_pca.loc[:, ~constant_mask]
+            
+            if pheno_for_pca.shape[1] < 2:
+                logger.warning("⚠️ Insufficient features for PCA")
+                return existing_covariates
+            
+            # Standardize and perform PCA
+            scaler = StandardScaler()
+            pheno_scaled = scaler.fit_transform(pheno_for_pca)
+            
+            n_components = min(10, pheno_scaled.shape[1], pheno_scaled.shape[0] - 1)
+            if n_components < 1:
+                return existing_covariates
+            
+            pca = PCA(n_components=n_components)
+            pc_components = pca.fit_transform(pheno_scaled)
+            
+            # Create PCA covariates
+            pc_columns = [f'PC{i+1}' for i in range(n_components)]
+            pc_df = pd.DataFrame(pc_components, index=pheno_for_pca.index, columns=pc_columns)
+            pc_df = pc_df.T  # Transpose to covariates x samples
+            
+            # Combine with existing covariates
+            if existing_covariates is not None and not existing_covariates.empty:
+                enhanced_covariates = pd.concat([existing_covariates, pc_df])
+            else:
+                enhanced_covariates = pc_df
+            
+            explained_variance = pca.explained_variance_ratio_.sum()
+            logger.info(f"✅ Enhanced covariates: {n_components} PC components "
+                       f"(explained variance: {explained_variance:.3f})")
+            
+            return enhanced_covariates
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Enhanced covariate generation failed: {e}")
+            return existing_covariates
 
 class HardwareOptimizer:
     """Optimize hardware utilization for tensorQTL analysis with your existing config"""
@@ -302,10 +439,11 @@ class PhenotypeProcessor:
         self.qc_config = config.get('qc', {})
         self.normalization_config = config.get('normalization', {})
         self.performance_config = config.get('performance', {})
+        self.data_handler = DynamicDataHandler(config)
         
-    def prepare_phenotype_data(self, qtl_type):
+    def prepare_phenotype_data(self, qtl_type, genotype_samples=None):
         """Prepare phenotype data with comprehensive processing and error handling"""
-        logger.info(f"🔧 Preparing {qtl_type} phenotype data...")
+        logger.info(f"🔧 Preparing {qtl_type} phenotype data with dynamic handling...")
         
         try:
             # Get phenotype file path using proper mapping
@@ -323,6 +461,27 @@ class PhenotypeProcessor:
             original_sample_count = pheno_df.shape[1]
             logger.info(f"📊 Loaded {qtl_type} data: {original_feature_count} features, {original_sample_count} samples")
             
+            # Load covariates if available
+            covariates_file = self.config['input_files'].get('covariates')
+            if covariates_file and os.path.exists(covariates_file):
+                cov_df = self._load_covariate_data(covariates_file)
+                logger.info(f"📊 Loaded covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+            else:
+                cov_df = pd.DataFrame()
+                logger.info("ℹ️ No covariate file found or specified")
+            
+            # Align data if genotype samples are provided
+            if genotype_samples is not None:
+                aligned_data = self.data_handler.align_qtl_data(genotype_samples, pheno_df, cov_df)
+                pheno_df = aligned_data['phenotype']
+                cov_df = aligned_data['covariates']
+                common_samples = aligned_data['common_samples']
+            else:
+                common_samples = pheno_df.columns.tolist()
+            
+            # Validate phenotype data
+            pheno_df = self.data_handler.validate_phenotype_data(pheno_df, qtl_type)
+            
             # Apply QC filters
             if self.qc_config.get('filter_low_expressed', True):
                 pheno_df = self._apply_qc_filters(pheno_df, qtl_type)
@@ -336,6 +495,12 @@ class PhenotypeProcessor:
                 normalized_df = pheno_df
                 logger.info("📊 Using raw data without normalization")
             
+            # Generate enhanced covariates if enabled
+            if self.config.get('enhanced_qc', {}).get('generate_enhanced_covariates', True):
+                enhanced_cov_df = self.data_handler.generate_enhanced_covariates(normalized_df, cov_df)
+                if enhanced_cov_df is not None:
+                    cov_df = enhanced_cov_df
+            
             # Generate normalization comparison if enabled
             if self.config.get('enhanced_qc', {}).get('generate_normalization_plots', True) and NormalizationComparison:
                 self._generate_normalization_comparison(pheno_df, normalized_df, qtl_type)
@@ -344,10 +509,11 @@ class PhenotypeProcessor:
             normalized_df = normalized_df.T
             
             # Save processed data
-            output_files = self._save_processed_data(normalized_df, qtl_type)
+            output_files = self._save_processed_data(normalized_df, qtl_type, cov_df)
             
             final_feature_count = normalized_df.shape[1]
-            logger.info(f"✅ Prepared {qtl_type} data: {final_feature_count}/{original_feature_count} features retained")
+            logger.info(f"✅ Prepared {qtl_type} data: {final_feature_count}/{original_feature_count} features retained, "
+                       f"{len(common_samples)} samples, {cov_df.shape[0] if not cov_df.empty else 0} covariates")
             
             return output_files
             
@@ -373,34 +539,41 @@ class PhenotypeProcessor:
                     df = pd.read_csv(file_path, sep=sep, index_col=0)
                     if not df.empty:
                         logger.info(f"✅ Successfully loaded {qtl_type} data with separator '{sep}'")
-                        break
+                        return df
                 except:
                     continue
-            else:
-                raise ValueError(f"Could not read {qtl_type} file with any standard separator")
             
+            # If standard separators fail, try with header detection
+            df = pd.read_csv(file_path, index_col=0)
             if df.empty:
-                raise ValueError(f"Phenotype file is empty: {file_path}")
-            
-            # Check for numeric data
-            non_numeric_cols = df.select_dtypes(exclude=[np.number]).columns
-            if len(non_numeric_cols) > 0:
-                logger.warning(f"⚠️ Found {len(non_numeric_cols)} non-numeric columns in {qtl_type} data")
-                # Try to convert to numeric
-                for col in non_numeric_cols:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                
-                # Check if conversion was successful
-                remaining_non_numeric = df.select_dtypes(exclude=[np.number]).columns
-                if len(remaining_non_numeric) > 0:
-                    logger.warning(f"⚠️ Could not convert {len(remaining_non_numeric)} columns to numeric, they will be dropped")
-                    df = df.select_dtypes(include=[np.number])
+                raise ValueError(f"Could not read {qtl_type} file with any standard separator")
             
             return df
             
         except Exception as e:
             logger.error(f"❌ Error loading phenotype data from {file_path}: {e}")
             raise
+    
+    def _load_covariate_data(self, covariate_file):
+        """Load covariate data with dynamic format handling"""
+        try:
+            # Try different separators
+            for sep in ['\t', ',', ' ']:
+                try:
+                    df = pd.read_csv(covariate_file, sep=sep, index_col=0)
+                    if not df.empty:
+                        logger.info(f"✅ Successfully loaded covariate data with separator '{sep}'")
+                        return df
+                except:
+                    continue
+            
+            # Fallback
+            df = pd.read_csv(covariate_file, index_col=0)
+            return df
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error loading covariate data: {e}")
+            return pd.DataFrame()
     
     def _apply_qc_filters(self, pheno_df, qtl_type):
         """Apply comprehensive quality control filters"""
@@ -610,7 +783,7 @@ class PhenotypeProcessor:
         except Exception as e:
             logger.warning(f"⚠️ Normalization comparison failed: {e}")
     
-    def _save_processed_data(self, normalized_df, qtl_type):
+    def _save_processed_data(self, normalized_df, qtl_type, covariate_df):
         """Save processed phenotype data with comprehensive output options"""
         # Save phenotype matrix based on config format
         output_format = self.config.get('tensorqtl', {}).get('output_format', 'parquet')
@@ -620,6 +793,14 @@ class PhenotypeProcessor:
         else:
             pheno_file = os.path.join(self.results_dir, f"{qtl_type}_phenotypes.txt.gz")
             normalized_df.to_csv(pheno_file, sep='\t', compression='gzip')
+        
+        # Save covariates if available
+        if not covariate_df.empty:
+            cov_file = os.path.join(self.results_dir, f"{qtl_type}_covariates.parquet")
+            covariate_df.to_parquet(cov_file)
+            logger.info(f"💾 Saved covariates: {cov_file}")
+        else:
+            cov_file = None
         
         # Create and save phenotype positions
         pheno_pos_file = os.path.join(self.results_dir, f"{qtl_type}_phenotype_positions.parquet")
@@ -631,8 +812,10 @@ class PhenotypeProcessor:
         return {
             'phenotype_file': pheno_file,
             'phenotype_pos_file': pheno_pos_file,
+            'covariate_file': cov_file,
             'phenotype_df': normalized_df,
-            'phenotype_pos_df': pheno_pos_df
+            'phenotype_pos_df': pheno_pos_df,
+            'covariate_df': covariate_df
         }
     
     def _create_phenotype_positions(self, feature_ids, qtl_type):
@@ -795,25 +978,34 @@ def prepare_genotypes(config, results_dir):
         logger.error(f"❌ Genotype preparation failed: {e}")
         raise
 
-def load_covariates(config, results_dir):
-    """Load and prepare covariates for tensorQTL with enhanced processing"""
-    logger.info("🔧 Loading covariates for tensorQTL...")
+def load_covariates(config, results_dir, qtl_type='eqtl'):
+    """Load and prepare covariates for tensorQTL with enhanced processing and dynamic handling"""
+    logger.info(f"🔧 Loading covariates for {qtl_type} with dynamic handling...")
     
     try:
-        covariates_file = config['input_files']['covariates']
-        cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0)
+        # Try to load pre-processed covariates first
+        cov_file = os.path.join(results_dir, f"{qtl_type}_covariates.parquet")
+        if os.path.exists(cov_file):
+            cov_df = pd.read_parquet(cov_file)
+            logger.info(f"✅ Loaded pre-processed covariates: {cov_df.shape[1]} samples, {cov_df.shape[0]} covariates")
+            return cov_df.T  # Return samples x covariates for tensorQTL
+        
+        # Fallback to original covariate file
+        covariates_file = config['input_files'].get('covariates')
+        if not covariates_file or not os.path.exists(covariates_file):
+            logger.warning("⚠️ No covariate file found, proceeding without covariates")
+            return None
+        
+        # Load with dynamic format handling
+        data_handler = DynamicDataHandler(config)
+        cov_df = data_handler._load_covariate_data(covariates_file)
+        
+        if cov_df.empty:
+            logger.warning("⚠️ Covariate data is empty, proceeding without covariates")
+            return None
         
         # Transpose for tensorQTL (samples x covariates)
         cov_df = cov_df.T
-        
-        # Check for enhanced covariates
-        enhanced_cov_file = os.path.join(results_dir, "enhanced_covariates.txt")
-        if os.path.exists(enhanced_cov_file):
-            enhanced_cov_df = pd.read_csv(enhanced_cov_file, sep='\t', index_col=0)
-            enhanced_cov_df = enhanced_cov_df.T
-            # Merge with original covariates
-            cov_df = pd.concat([cov_df, enhanced_cov_df], axis=1)
-            logger.info("✅ Using enhanced covariates with PCA components")
         
         # Remove constant covariates
         constant_covariates = cov_df.columns[cov_df.nunique() <= 1]
@@ -869,17 +1061,18 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         else:
             logger.info(f"🔢 Using CPU for {qtl_type} cis-QTL analysis (threads: {params.get('num_threads', 'auto')})")
         
-        # Prepare phenotype data
-        pheno_processor = PhenotypeProcessor(config, results_dir)
-        pheno_data = pheno_processor.prepare_phenotype_data(qtl_type)
-        
-        # Load and optimize genotype data
+        # Load and optimize genotype data first to get samples
         genotype_loader = GenotypeLoader(config)
         pr = genotype_loader.load_genotypes(genotype_file)
         pr = genotype_loader.optimize_genotype_data(pr)
+        genotype_samples = pr.genotypes.columns.tolist()
         
-        # Load covariates
-        covariates_df = load_covariates(config, results_dir)
+        # Prepare phenotype data with genotype samples for alignment
+        pheno_processor = PhenotypeProcessor(config, results_dir)
+        pheno_data = pheno_processor.prepare_phenotype_data(qtl_type, genotype_samples)
+        
+        # Load covariates (will use pre-processed ones if available)
+        covariates_df = load_covariates(config, results_dir, qtl_type)
         
         # Set output prefix
         output_prefix = os.path.join(results_dir, f"{qtl_type}_cis")
@@ -972,17 +1165,18 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         else:
             logger.info(f"🔢 Using CPU for {qtl_type} trans-QTL analysis")
         
-        # Prepare phenotype data
-        pheno_processor = PhenotypeProcessor(config, results_dir)
-        pheno_data = pheno_processor.prepare_phenotype_data(qtl_type)
-        
-        # Load and optimize genotype data
+        # Load and optimize genotype data first to get samples
         genotype_loader = GenotypeLoader(config)
         pr = genotype_loader.load_genotypes(genotype_file)
         pr = genotype_loader.optimize_genotype_data(pr)
+        genotype_samples = pr.genotypes.columns.tolist()
         
-        # Load covariates
-        covariates_df = load_covariates(config, results_dir)
+        # Prepare phenotype data with genotype samples for alignment
+        pheno_processor = PhenotypeProcessor(config, results_dir)
+        pheno_data = pheno_processor.prepare_phenotype_data(qtl_type, genotype_samples)
+        
+        # Load covariates (will use pre-processed ones if available)
+        covariates_df = load_covariates(config, results_dir, qtl_type)
         
         # Set output prefix
         output_prefix = os.path.join(results_dir, f"{qtl_type}_trans")

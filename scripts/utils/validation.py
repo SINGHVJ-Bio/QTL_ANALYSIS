@@ -4,6 +4,8 @@ Comprehensive input validation utilities for tensorQTL pipeline - Production Ver
 Robust validation with enhanced mapping, parallel processing, and comprehensive error handling
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
+
+ENHANCED: Dynamic covariate and phenotype handling with flexible validation
 """
 
 import os
@@ -37,6 +39,8 @@ class ValidationResult:
         self.info = []
         self.file_stats = {}
         self.sample_counts = {}
+        self.covariate_info = {}  # NEW: Store covariate metadata
+        self.phenotype_info = {}  # NEW: Store phenotype metadata
         self.data_types_available = []
         self.validation_time = datetime.now().isoformat()
         self.overall_status = "PASS"
@@ -59,9 +63,294 @@ class ValidationResult:
             'info': self.info,
             'file_stats': self.file_stats,
             'sample_counts': self.sample_counts,
+            'covariate_info': self.covariate_info,  # NEW
+            'phenotype_info': self.phenotype_info,  # NEW
             'data_types_available': self.data_types_available,
             'overall_status': self.overall_status
         }
+
+class DynamicCovariateAnalyzer:
+    """NEW: Analyze covariates dynamically and provide recommendations"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.enhanced_qc_config = config.get('enhanced_qc', {})
+        
+    def analyze_covariates(self, covariate_df, result):
+        """Analyze covariates and provide dynamic recommendations"""
+        if covariate_df.empty:
+            result.add_warning('covariate_analysis', "No covariates provided for analysis")
+            return
+            
+        logger.info("🔍 Analyzing covariate structure and composition...")
+        
+        # Store basic covariate information
+        result.covariate_info['total_covariates'] = covariate_df.shape[0]
+        result.covariate_info['sample_count'] = covariate_df.shape[1]
+        result.covariate_info['covariate_names'] = covariate_df.index.tolist()
+        
+        # Analyze covariate types
+        numeric_covariates = []
+        categorical_covariates = []
+        binary_covariates = []
+        
+        for covar in covariate_df.index:
+            values = covariate_df.loc[covar]
+            
+            # Check if numeric
+            try:
+                numeric_vals = pd.to_numeric(values, errors='coerce')
+                if numeric_vals.notna().all():
+                    unique_vals = numeric_vals.nunique()
+                    
+                    if unique_vals == 2:
+                        binary_covariates.append(covar)
+                        result.covariate_info[f'covariate_{covar}_type'] = 'binary'
+                        result.covariate_info[f'covariate_{covar}_values'] = sorted(numeric_vals.unique().tolist())
+                    else:
+                        numeric_covariates.append(covar)
+                        result.covariate_info[f'covariate_{covar}_type'] = 'numeric'
+                        result.covariate_info[f'covariate_{covar}_stats'] = {
+                            'mean': float(numeric_vals.mean()),
+                            'std': float(numeric_vals.std()),
+                            'min': float(numeric_vals.min()),
+                            'max': float(numeric_vals.max())
+                        }
+                else:
+                    categorical_covariates.append(covar)
+                    result.covariate_info[f'covariate_{covar}_type'] = 'categorical'
+                    result.covariate_info[f'covariate_{covar}_values'] = values.unique().tolist()
+                    
+            except Exception as e:
+                categorical_covariates.append(covar)
+                result.covariate_info[f'covariate_{covar}_type'] = 'categorical'
+                result.covariate_info[f'covariate_{covar}_values'] = values.unique().tolist()
+        
+        # Store type counts
+        result.covariate_info['numeric_covariates'] = numeric_covariates
+        result.covariate_info['categorical_covariates'] = categorical_covariates
+        result.covariate_info['binary_covariates'] = binary_covariates
+        result.covariate_info['numeric_count'] = len(numeric_covariates)
+        result.covariate_info['categorical_count'] = len(categorical_covariates)
+        result.covariate_info['binary_count'] = len(binary_covariates)
+        
+        # Detect common covariate patterns
+        self._detect_covariate_patterns(covariate_df, result)
+        
+        # Provide recommendations
+        self._provide_covariate_recommendations(covariate_df, result)
+        
+        logger.info(f"✅ Covariate analysis: {len(numeric_covariates)} numeric, "
+                   f"{len(categorical_covariates)} categorical, {len(binary_covariates)} binary covariates")
+    
+    def _detect_covariate_patterns(self, covariate_df, result):
+        """Detect common covariate patterns and technical artifacts"""
+        detected_patterns = []
+        
+        # Check for PCA components
+        pca_pattern = re.compile(r'^PC\d+$', re.IGNORECASE)
+        pca_covariates = [covar for covar in covariate_df.index if pca_pattern.match(str(covar))]
+        if pca_covariates:
+            detected_patterns.append(f"PCA components: {len(pca_covariates)} found")
+            result.covariate_info['pca_components'] = pca_covariates
+        
+        # Check for batch effects
+        batch_pattern = re.compile(r'.*batch.*', re.IGNORECASE)
+        batch_covariates = [covar for covar in covariate_df.index if batch_pattern.match(str(covar))]
+        if batch_covariates:
+            detected_patterns.append(f"Batch covariates: {batch_covariates}")
+            result.covariate_info['batch_covariates'] = batch_covariates
+        
+        # Check for demographic covariates
+        demo_patterns = ['age', 'sex', 'gender', 'bmi', 'height', 'weight']
+        demo_covariates = [covar for covar in covariate_df.index 
+                          if any(pattern in str(covar).lower() for pattern in demo_patterns)]
+        if demo_covariates:
+            detected_patterns.append(f"Demographic covariates: {demo_covariates}")
+            result.covariate_info['demographic_covariates'] = demo_covariates
+        
+        # Check for study-specific covariates
+        study_patterns = ['study', 'cohort', 'center', 'site']
+        study_covariates = [covar for covar in covariate_df.index 
+                           if any(pattern in str(covar).lower() for pattern in study_patterns)]
+        if study_covariates:
+            detected_patterns.append(f"Study-specific covariates: {study_covariates}")
+            result.covariate_info['study_covariates'] = study_covariates
+        
+        if detected_patterns:
+            result.add_info('covariate_patterns', f"Detected patterns: {'; '.join(detected_patterns)}")
+    
+    def _provide_covariate_recommendations(self, covariate_df, result):
+        """Provide dynamic recommendations based on covariate analysis"""
+        recommendations = []
+        
+        # Check if PCA components are present
+        pca_count = len(result.covariate_info.get('pca_components', []))
+        if pca_count < 5 and self.enhanced_qc_config.get('run_pca', True):
+            recommendations.append("Consider adding more PCA components (5-10 recommended)")
+        
+        # Check for missing common covariates
+        expected_covariates = ['age', 'sex', 'batch']
+        missing_expected = [covar for covar in expected_covariates 
+                          if covar not in [c.lower() for c in covariate_df.index]]
+        if missing_expected:
+            recommendations.append(f"Common covariates not found: {missing_expected}")
+        
+        # Check for categorical covariates that might need encoding
+        categorical_count = result.covariate_info.get('categorical_count', 0)
+        if categorical_count > 0:
+            categorical_covars = result.covariate_info.get('categorical_covariates', [])
+            recommendations.append(f"Categorical covariates detected: {categorical_covars}. Ensure proper encoding.")
+        
+        # Check sample size vs covariate count
+        sample_count = covariate_df.shape[1]
+        covariate_count = covariate_df.shape[0]
+        if covariate_count > sample_count / 10:
+            recommendations.append(f"High covariate count ({covariate_count}) relative to sample size ({sample_count})")
+        
+        if recommendations:
+            result.add_info('covariate_recommendations', f"Recommendations: {'; '.join(recommendations)}")
+
+class DynamicPhenotypeAnalyzer:
+    """NEW: Analyze phenotype data dynamically"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.normalization_config = config.get('normalization', {})
+        
+    def analyze_phenotype_data(self, phenotype_df, qtl_type, result):
+        """Analyze phenotype data and provide dynamic recommendations"""
+        logger.info(f"🔍 Analyzing {qtl_type} phenotype data structure...")
+        
+        # Store basic phenotype information
+        result.phenotype_info[qtl_type] = {
+            'feature_count': phenotype_df.shape[0],
+            'sample_count': phenotype_df.shape[1],
+            'total_measurements': phenotype_df.size,
+            'missing_count': int(phenotype_df.isna().sum().sum()),
+            'missing_percentage': float((phenotype_df.isna().sum().sum() / phenotype_df.size) * 100)
+        }
+        
+        # Analyze data distribution
+        self._analyze_phenotype_distribution(phenotype_df, qtl_type, result)
+        
+        # Check normalization compatibility
+        self._check_normalization_compatibility(phenotype_df, qtl_type, result)
+        
+        # Detect data quality issues
+        self._detect_data_quality_issues(phenotype_df, qtl_type, result)
+        
+        logger.info(f"✅ {qtl_type} analysis: {phenotype_df.shape[0]} features, "
+                   f"{phenotype_df.shape[1]} samples, "
+                   f"{result.phenotype_info[qtl_type]['missing_percentage']:.2f}% missing")
+    
+    def _analyze_phenotype_distribution(self, phenotype_df, qtl_type, result):
+        """Analyze phenotype data distribution"""
+        try:
+            # Sample a subset for efficiency
+            if phenotype_df.shape[0] > 1000:
+                sample_df = phenotype_df.sample(n=1000, random_state=42)
+            else:
+                sample_df = phenotype_df
+            
+            # Calculate basic statistics
+            stats_data = {}
+            
+            # Mean and variance
+            means = sample_df.mean(axis=1)
+            variances = sample_df.var(axis=1)
+            
+            stats_data['mean_mean'] = float(means.mean())
+            stats_data['mean_std'] = float(means.std())
+            stats_data['variance_mean'] = float(variances.mean())
+            stats_data['variance_std'] = float(variances.std())
+            
+            # Detect distribution type based on QTL type
+            if qtl_type == 'eqtl':
+                # Expression data - typically count-like or continuous
+                if (sample_df >= 0).all().all():
+                    if (sample_df == 0).any().any():
+                        stats_data['distribution_type'] = 'count_like'
+                    else:
+                        stats_data['distribution_type'] = 'continuous_positive'
+                else:
+                    stats_data['distribution_type'] = 'continuous'
+                    
+            elif qtl_type == 'pqtl':
+                # Protein data - often continuous
+                stats_data['distribution_type'] = 'continuous'
+                
+            elif qtl_type == 'sqtl':
+                # Splicing data - often proportions (0-1)
+                if ((sample_df >= 0) & (sample_df <= 1)).all().all():
+                    stats_data['distribution_type'] = 'proportion'
+                else:
+                    stats_data['distribution_type'] = 'continuous'
+            
+            result.phenotype_info[qtl_type]['distribution'] = stats_data
+            
+        except Exception as e:
+            logger.warning(f"Phenotype distribution analysis failed: {e}")
+    
+    def _check_normalization_compatibility(self, phenotype_df, qtl_type, result):
+        """Check if configured normalization is compatible with data"""
+        norm_config = self.normalization_config.get(qtl_type, {})
+        norm_method = norm_config.get('method', 'log2')
+        
+        compatibility_notes = []
+        
+        if qtl_type == 'eqtl':
+            if norm_method == 'vst' and (phenotype_df < 0).any().any():
+                compatibility_notes.append("VST normalization expects non-negative data")
+            elif norm_method == 'log2' and (phenotype_df <= 0).any().any():
+                compatibility_notes.append("Log2 normalization requires positive values")
+                
+        elif qtl_type == 'sqtl':
+            if norm_method == 'log2' and ((phenotype_df < 0) | (phenotype_df > 1)).any().any():
+                compatibility_notes.append("Log2 normalization may not be ideal for PSI values outside [0,1]")
+        
+        if compatibility_notes:
+            result.add_warning(f'normalization_{qtl_type}', 
+                             f"Normalization compatibility: {'; '.join(compatibility_notes)}")
+        else:
+            result.add_info(f'normalization_{qtl_type}', 
+                          f"Configured normalization '{norm_method}' appears compatible")
+    
+    def _detect_data_quality_issues(self, phenotype_df, qtl_type, result):
+        """Detect potential data quality issues"""
+        issues = []
+        
+        # Check for constant features
+        constant_features = (phenotype_df.nunique(axis=1) == 1).sum()
+        if constant_features > 0:
+            issues.append(f"{constant_features} constant features")
+        
+        # Check for zero-variance features
+        zero_variance = (phenotype_df.std(axis=1) == 0).sum()
+        if zero_variance > 0:
+            issues.append(f"{zero_variance} zero-variance features")
+        
+        # Check for excessive missingness
+        missing_threshold = 0.2  # 20% missing threshold
+        high_missing_features = (phenotype_df.isna().sum(axis=1) / phenotype_df.shape[1] > missing_threshold).sum()
+        if high_missing_features > 0:
+            issues.append(f"{high_missing_features} features with >{missing_threshold*100}% missing values")
+        
+        # Check for outliers
+        if phenotype_df.size > 0:
+            Q1 = phenotype_df.quantile(0.25)
+            Q3 = phenotype_df.quantile(0.75)
+            IQR = Q3 - Q1
+            outlier_mask = (phenotype_df < (Q1 - 3 * IQR)) | (phenotype_df > (Q3 + 3 * IQR))
+            outlier_count = outlier_mask.sum().sum()
+            if outlier_count > 0:
+                outlier_percent = (outlier_count / phenotype_df.size) * 100
+                if outlier_percent > 5:  # More than 5% outliers
+                    issues.append(f"{outlier_percent:.1f}% potential outliers")
+        
+        if issues:
+            result.add_warning(f'data_quality_{qtl_type}', 
+                             f"Data quality issues: {'; '.join(issues)}")
 
 def validate_inputs(config):
     """Validate all input files and data consistency with comprehensive checks for tensorQTL - ENHANCED"""
@@ -72,6 +361,10 @@ def validate_inputs(config):
     logger.info("Starting comprehensive input validation")
     
     try:
+        # Initialize dynamic analyzers
+        covariate_analyzer = DynamicCovariateAnalyzer(config)
+        phenotype_analyzer = DynamicPhenotypeAnalyzer(config)
+        
         # Validate mandatory files with enhanced parallel processing
         mandatory_files = ['genotypes', 'covariates', 'annotations']
         validate_mandatory_files_parallel(input_files, mandatory_files, config, result)
@@ -80,6 +373,25 @@ def validate_inputs(config):
         analysis_types = get_qtl_types_from_config(config)
         result.data_types_available = analysis_types
         validate_phenotype_files_parallel(input_files, analysis_types, config, result)
+        
+        # NEW: Perform dynamic analysis of covariates and phenotypes
+        if 'covariates' in input_files and input_files['covariates'] and os.path.exists(input_files['covariates']):
+            try:
+                cov_df = pd.read_csv(input_files['covariates'], sep='\t', index_col=0)
+                if not cov_df.empty:
+                    covariate_analyzer.analyze_covariates(cov_df, result)
+            except Exception as e:
+                logger.warning(f"Dynamic covariate analysis failed: {e}")
+        
+        for analysis_type in analysis_types:
+            config_key = map_qtl_type_to_config_key(analysis_type)
+            if config_key in input_files and input_files[config_key] and os.path.exists(input_files[config_key]):
+                try:
+                    pheno_df = pd.read_csv(input_files[config_key], sep='\t', index_col=0, nrows=1000)
+                    if not pheno_df.empty:
+                        phenotype_analyzer.analyze_phenotype_data(pheno_df, analysis_type, result)
+                except Exception as e:
+                    logger.warning(f"Dynamic phenotype analysis for {analysis_type} failed: {e}")
         
         # Validate GWAS if enabled
         if config['analysis'].get('run_gwas', False):
@@ -117,12 +429,193 @@ def validate_inputs(config):
             if result.warnings:
                 print(f"   Found {len(result.warnings)} warnings - review validation report for details")
             logger.info(f"Input validation completed: {len(result.warnings)} warnings, {len(result.info)} info messages")
+            
+            # NEW: Print dynamic analysis summary
+            print_dynamic_analysis_summary(result)
+            
             return True
             
     except Exception as e:
         logger.error(f"Validation process failed: {e}")
         result.add_error('validation_process', f"Validation process failed: {e}")
         raise
+
+def print_dynamic_analysis_summary(result):
+    """NEW: Print summary of dynamic covariate and phenotype analysis"""
+    print("\n📊 DYNAMIC ANALYSIS SUMMARY:")
+    
+    # Covariate summary
+    if result.covariate_info:
+        print("  📈 Covariates:")
+        print(f"    - Total: {result.covariate_info.get('total_covariates', 'N/A')}")
+        print(f"    - Numeric: {result.covariate_info.get('numeric_count', 'N/A')}")
+        print(f"    - Categorical: {result.covariate_info.get('categorical_count', 'N/A')}")
+        print(f"    - Binary: {result.covariate_info.get('binary_count', 'N/A')}")
+        
+        # Print detected patterns
+        if 'pca_components' in result.covariate_info:
+            pca_count = len(result.covariate_info['pca_components'])
+            print(f"    - PCA components: {pca_count}")
+        
+        if 'batch_covariates' in result.covariate_info:
+            print(f"    - Batch covariates: {result.covariate_info['batch_covariates']}")
+    
+    # Phenotype summary
+    if result.phenotype_info:
+        print("  🧬 Phenotypes:")
+        for qtl_type, info in result.phenotype_info.items():
+            print(f"    - {qtl_type.upper()}: {info.get('feature_count', 'N/A')} features, "
+                  f"{info.get('sample_count', 'N/A')} samples, "
+                  f"{info.get('missing_percentage', 0):.1f}% missing")
+            
+            dist_info = info.get('distribution', {})
+            if 'distribution_type' in dist_info:
+                print(f"      Distribution: {dist_info['distribution_type']}")
+
+def validate_covariates_file_enhanced(file_path, config, result):
+    """Enhanced covariates file validation with dynamic handling"""
+    try:
+        # Read with comprehensive checks
+        df = pd.read_csv(file_path, sep='\t', index_col=0)
+        
+        if df.empty:
+            result.add_error('covariates', "Covariates file is empty")
+            return
+        
+        # Store sample count
+        sample_count = df.shape[1]
+        result.sample_counts['covariates'] = sample_count
+        result.add_info('covariates', f"Found {df.shape[0]} covariates for {sample_count} samples")
+        
+        # NEW: Flexible covariate validation - don't enforce specific covariates
+        self_reported_covariates = df.index.tolist()
+        result.add_info('covariates', f"Covariates provided: {', '.join(self_reported_covariates[:10])}"
+                       f"{'...' if len(self_reported_covariates) > 10 else ''}")
+        
+        # Check for missing values with dynamic threshold
+        missing_matrix = df.isna()
+        missing_count = missing_matrix.sum().sum()
+        if missing_count > 0:
+            missing_percent = (missing_count / (df.shape[0] * df.shape[1])) * 100
+            result.add_warning('covariates', f"Found {missing_count} missing values ({missing_percent:.2f}%)")
+        
+        # Check for constant covariates
+        constant_covariates = []
+        for covar in df.index:
+            if df.loc[covar].nunique() <= 1:
+                constant_covariates.append(covar)
+        
+        if constant_covariates:
+            result.add_warning('covariates', f"Found {len(constant_covariates)} constant covariates: {constant_covariates[:5]}...")
+        
+        # Check for numeric covariates with flexible handling
+        non_numeric_covariates = []
+        numeric_covariates = []
+        
+        for covar in df.index:
+            try:
+                numeric_series = pd.to_numeric(df.loc[covar], errors='coerce')
+                if numeric_series.isna().any():
+                    non_numeric_covariates.append(covar)
+                else:
+                    numeric_covariates.append(covar)
+            except (ValueError, TypeError):
+                non_numeric_covariates.append(covar)
+        
+        if non_numeric_covariates:
+            result.add_info('covariates', f"Found {len(non_numeric_covariates)} non-numeric covariates: {non_numeric_covariates[:5]}...")
+        
+        # NEW: Dynamic check for extreme values only on numeric covariates
+        if numeric_covariates:
+            numeric_df = df.loc[numeric_covariates]
+            extreme_threshold = 10  # Z-score threshold
+            z_scores = np.abs((numeric_df - numeric_df.mean()) / numeric_df.std())
+            extreme_count = (z_scores > extreme_threshold).sum().sum()
+            if extreme_count > 0:
+                result.add_warning('covariates', f"Found {extreme_count} extreme values (|Z| > {extreme_threshold}) in numeric covariates")
+        
+        # NEW: Check covariate count relative to sample size
+        if df.shape[0] > df.shape[1] / 2:
+            result.add_warning('covariates', 
+                             f"High covariate count ({df.shape[0]}) relative to sample size ({df.shape[1]})")
+        
+    except Exception as e:
+        result.add_error('covariates', f"Error reading covariates file: {e}")
+
+def validate_phenotype_file_enhanced(file_path, qtl_type, config, result):
+    """Enhanced phenotype file validation with dynamic handling"""
+    try:
+        # Read phenotype data
+        df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=1000)  # Sample for validation
+        
+        if df.empty:
+            result.add_error(qtl_type, f"Phenotype file is empty: {file_path}")
+            return
+        
+        # Store sample count
+        sample_count = df.shape[1]
+        result.sample_counts[qtl_type] = sample_count
+        result.add_info(qtl_type, f"Found {df.shape[0]} features for {sample_count} samples")
+        
+        # NEW: Dynamic phenotype validation based on QTL type
+        self_reported_features = df.index.tolist()[:5]  # First 5 features
+        result.add_info(qtl_type, f"Sample features: {', '.join(self_reported_features)}...")
+        
+        # Check for missing values with dynamic thresholds
+        missing_count = df.isna().sum().sum()
+        if missing_count > 0:
+            missing_percent = (missing_count / (df.shape[0] * df.shape[1])) * 100
+            result.add_warning(qtl_type, f"Found {missing_count} missing values ({missing_percent:.2f}%)")
+        
+        # Check for constant features
+        constant_features = (df.nunique(axis=1) == 1).sum()
+        if constant_features > 0:
+            result.add_warning(qtl_type, f"Found {constant_features} constant features")
+        
+        # Check for zero-variance features
+        zero_variance = (df.std(axis=1) == 0).sum()
+        if zero_variance > 0:
+            result.add_warning(qtl_type, f"Found {zero_variance} zero-variance features")
+        
+        # NEW: Dynamic data distribution checks based on QTL type
+        data_type = map_qtl_type_to_data_type(qtl_type)
+        if data_type == 'expression':
+            # Check for negative values in expression data
+            negative_count = (df < 0).sum().sum()
+            if negative_count > 0:
+                result.add_info(qtl_type, f"Found {negative_count} negative values - ensure proper normalization")
+        
+        elif data_type == 'splicing':
+            # Check if data appears to be proportions (PSI values)
+            if ((df >= 0) & (df <= 1)).all().all():
+                result.add_info(qtl_type, "Data appears to be proportion-based (PSI values 0-1)")
+            else:
+                result.add_info(qtl_type, "Data range suggests non-standard PSI values")
+        
+        # NEW: Check for extreme outliers with dynamic thresholds
+        if df.size > 0:
+            Q1 = df.quantile(0.25)
+            Q3 = df.quantile(0.75)
+            IQR = Q3 - Q1
+            outlier_mask = (df < (Q1 - 3 * IQR)) | (df > (Q3 + 3 * IQR))
+            outlier_count = outlier_mask.sum().sum()
+            
+            if outlier_count > 0:
+                outlier_percent = (outlier_count / (df.shape[0] * df.shape[1])) * 100
+                result.add_info(qtl_type, f"Found {outlier_count} potential outliers ({outlier_percent:.2f}%)")
+        
+        # NEW: Check normalization method compatibility
+        norm_method = config['normalization'].get(qtl_type, {}).get('method', 'unknown')
+        result.add_info(qtl_type, f"Configured normalization: {norm_method}")
+        
+        # Calculate basic statistics
+        if df.size > 0:
+            mean_val = df.mean().mean()
+            std_val = df.std().mean()
+            result.add_info(qtl_type, f"Data stats - Mean: {mean_val:.3f}, Std: {std_val:.3f}")
+        
+    except Exception as e:
+        result.add_error(qtl_type, f"Error reading phenotype file {file_path}: {e}")
 
 def validate_mandatory_files_parallel(input_files, mandatory_files, config, result):
     """Validate mandatory files with enhanced parallel processing"""
@@ -392,67 +885,6 @@ def validate_plink_file_enhanced(file_path, config, result):
     except Exception as e:
         result.add_error('plink', f"PLINK validation error: {e}")
 
-def validate_covariates_file_enhanced(file_path, config, result):
-    """Enhanced covariates file validation"""
-    try:
-        # Read with comprehensive checks
-        df = pd.read_csv(file_path, sep='\t', index_col=0)
-        
-        if df.empty:
-            result.add_error('covariates', "Covariates file is empty")
-            return
-        
-        # Store sample count
-        sample_count = df.shape[1]
-        result.sample_counts['covariates'] = sample_count
-        result.add_info('covariates', f"Found {df.shape[0]} covariates for {sample_count} samples")
-        
-        # Check for missing values
-        missing_matrix = df.isna()
-        missing_count = missing_matrix.sum().sum()
-        if missing_count > 0:
-            missing_percent = (missing_count / (df.shape[0] * df.shape[1])) * 100
-            result.add_warning('covariates', f"Found {missing_count} missing values ({missing_percent:.2f}%)")
-        
-        # Check for constant covariates
-        constant_covariates = []
-        for covar in df.index:
-            if df.loc[covar].nunique() <= 1:
-                constant_covariates.append(covar)
-        
-        if constant_covariates:
-            result.add_warning('covariates', f"Found {len(constant_covariates)} constant covariates: {constant_covariates[:5]}...")
-        
-        # Check for numeric covariates
-        non_numeric_covariates = []
-        for covar in df.index:
-            try:
-                pd.to_numeric(df.loc[covar], errors='raise')
-            except (ValueError, TypeError):
-                non_numeric_covariates.append(covar)
-        
-        if non_numeric_covariates:
-            result.add_warning('covariates', f"Found {len(non_numeric_covariates)} non-numeric covariates: {non_numeric_covariates[:5]}...")
-        
-        # Check for recommended covariates
-        recommended_covariates = ['PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'age', 'sex', 'batch']
-        available_recommended = [cov for cov in recommended_covariates if cov in df.index]
-        if available_recommended:
-            result.add_info('covariates', f"Found recommended covariates: {', '.join(available_recommended)}")
-        
-        # Check for extreme values
-        numeric_mask = ~df.index.isin(non_numeric_covariates)
-        if numeric_mask.any():
-            numeric_df = df[numeric_mask]
-            extreme_threshold = 10  # Z-score threshold
-            z_scores = np.abs((numeric_df - numeric_df.mean()) / numeric_df.std())
-            extreme_count = (z_scores > extreme_threshold).sum().sum()
-            if extreme_count > 0:
-                result.add_warning('covariates', f"Found {extreme_count} extreme values (|Z| > {extreme_threshold})")
-        
-    except Exception as e:
-        result.add_error('covariates', f"Error reading covariates file: {e}")
-
 def validate_annotations_file_enhanced(file_path, config, result):
     """Enhanced annotations file validation"""
     try:
@@ -512,70 +944,6 @@ def validate_annotations_file_enhanced(file_path, config, result):
         
     except Exception as e:
         result.add_error('annotations', f"Error reading annotations file: {e}")
-
-def validate_phenotype_file_enhanced(file_path, qtl_type, config, result):
-    """Enhanced phenotype file validation"""
-    try:
-        # Read phenotype data
-        df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=1000)  # Sample for validation
-        
-        if df.empty:
-            result.add_error(qtl_type, f"Phenotype file is empty: {file_path}")
-            return
-        
-        # Store sample count
-        sample_count = df.shape[1]
-        result.sample_counts[qtl_type] = sample_count
-        result.add_info(qtl_type, f"Found {df.shape[0]} features for {sample_count} samples")
-        
-        # Check for missing values
-        missing_count = df.isna().sum().sum()
-        if missing_count > 0:
-            missing_percent = (missing_count / (df.shape[0] * df.shape[1])) * 100
-            result.add_warning(qtl_type, f"Found {missing_count} missing values ({missing_percent:.2f}%)")
-        
-        # Check for constant features
-        constant_features = (df.nunique(axis=1) == 1).sum()
-        if constant_features > 0:
-            result.add_warning(qtl_type, f"Found {constant_features} constant features")
-        
-        # Check for zero-variance features
-        zero_variance = (df.std(axis=1) == 0).sum()
-        if zero_variance > 0:
-            result.add_warning(qtl_type, f"Found {zero_variance} zero-variance features")
-        
-        # Check data distribution based on QTL type
-        data_type = map_qtl_type_to_data_type(qtl_type)
-        if data_type == 'expression':
-            # Check for negative values in expression data
-            negative_count = (df < 0).sum().sum()
-            if negative_count > 0:
-                result.add_warning(qtl_type, f"Found {negative_count} negative values in expression data")
-        
-        # Check for extreme outliers
-        if df.size > 0:
-            Q1 = df.quantile(0.25)
-            Q3 = df.quantile(0.75)
-            IQR = Q3 - Q1
-            outlier_mask = (df < (Q1 - 3 * IQR)) | (df > (Q3 + 3 * IQR))
-            outlier_count = outlier_mask.sum().sum()
-            
-            if outlier_count > 0:
-                outlier_percent = (outlier_count / (df.shape[0] * df.shape[1])) * 100
-                result.add_info(qtl_type, f"Found {outlier_count} potential outliers ({outlier_percent:.2f}%)")
-        
-        # Check normalization method compatibility
-        norm_method = config['normalization'].get(qtl_type, {}).get('method', 'unknown')
-        result.add_info(qtl_type, f"Configured normalization: {norm_method}")
-        
-        # Calculate basic statistics
-        if df.size > 0:
-            mean_val = df.mean().mean()
-            std_val = df.std().mean()
-            result.add_info(qtl_type, f"Data stats - Mean: {mean_val:.3f}, Std: {std_val:.3f}")
-        
-    except Exception as e:
-        result.add_error(qtl_type, f"Error reading phenotype file {file_path}: {e}")
 
 def validate_gwas_files(input_files, config, result):
     """Validate GWAS-related files"""
@@ -794,7 +1162,7 @@ def check_sample_concordance_enhanced(config, input_files, result):
         result.add_error('sample_concordance', f"Sample concordance check failed: {e}")
 
 def validate_configuration_comprehensive(config, result):
-    """Comprehensive configuration validation"""
+    """Comprehensive configuration validation with dynamic checks"""
     print("\n⚙️  Validating configuration parameters...")
     
     # TensorQTL configuration
@@ -822,12 +1190,18 @@ def validate_configuration_comprehensive(config, result):
     if os.path.exists(results_dir) and len(os.listdir(results_dir)) > 0:
         result.add_warning('configuration', f"Results directory {results_dir} already exists and is not empty")
     
-    # Normalization settings
+    # NEW: Dynamic normalization configuration validation
     normalization_config = config.get('normalization', {})
     for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
         if qtl_type in normalization_config:
             method = normalization_config[qtl_type].get('method', 'unknown')
-            result.add_info('configuration', f"{qtl_type.upper()} normalization: {method}")
+            pseudocount = normalization_config[qtl_type].get('log2_pseudocount', 1)
+            
+            result.add_info('configuration', f"{qtl_type.upper()} normalization: {method} (pseudocount: {pseudocount})")
+            
+            # Provide method-specific recommendations
+            if method == 'vst' and qtl_type != 'eqtl':
+                result.add_warning('configuration', f"VST normalization is typically for expression data, not {qtl_type}")
     
     # Enhanced features
     if config.get('enhanced_qc', {}).get('enable', False):
@@ -838,6 +1212,17 @@ def validate_configuration_comprehensive(config, result):
     
     if config.get('fine_mapping', {}).get('enable', False):
         result.add_info('configuration', "Fine-mapping enabled")
+    
+    # NEW: Validate dynamic covariate handling
+    covariates_file = config['input_files'].get('covariates')
+    if covariates_file and os.path.exists(covariates_file):
+        try:
+            cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0, nrows=1)
+            covariate_count = cov_df.shape[0]
+            sample_count = cov_df.shape[1]
+            result.add_info('configuration', f"Covariate structure: {covariate_count} covariates for {sample_count} samples")
+        except:
+            pass
 
 def generate_validation_report(result, config):
     """Generate comprehensive validation report"""
@@ -866,6 +1251,26 @@ def generate_validation_report(result, config):
         for data_type, count in result.sample_counts.items():
             f.write(f"  - {data_type}: {count} samples\n")
         f.write("\n")
+        
+        # NEW: Add covariate information
+        if result.covariate_info:
+            f.write("Covariate Information:\n")
+            f.write(f"  - Total covariates: {result.covariate_info.get('total_covariates', 'N/A')}\n")
+            f.write(f"  - Numeric covariates: {result.covariate_info.get('numeric_count', 'N/A')}\n")
+            f.write(f"  - Categorical covariates: {result.covariate_info.get('categorical_count', 'N/A')}\n")
+            f.write(f"  - Binary covariates: {result.covariate_info.get('binary_count', 'N/A')}\n")
+            if 'pca_components' in result.covariate_info:
+                f.write(f"  - PCA components: {len(result.covariate_info['pca_components'])}\n")
+            f.write("\n")
+        
+        # NEW: Add phenotype information
+        if result.phenotype_info:
+            f.write("Phenotype Information:\n")
+            for qtl_type, info in result.phenotype_info.items():
+                f.write(f"  - {qtl_type.upper()}: {info.get('feature_count', 'N/A')} features, "
+                       f"{info.get('sample_count', 'N/A')} samples, "
+                       f"{info.get('missing_percentage', 0):.1f}% missing\n")
+            f.write("\n")
         
         if result.errors:
             f.write("ERRORS:\n")
