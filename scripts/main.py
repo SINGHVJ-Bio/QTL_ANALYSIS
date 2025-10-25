@@ -5,6 +5,7 @@ Optimized for large datasets with 100GB+ VCF files
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
+Enhanced with modular pipeline compatibility and additional features.
 """
 
 import os
@@ -27,6 +28,7 @@ try:
     from utils.enhanced_qc import EnhancedQC
     from utils.advanced_plotting import AdvancedPlotter
     from utils.normalization_comparison import NormalizationComparison
+    from utils.genotype_processing import process_genotypes
 except ImportError:
     # Try alternative import paths for script organization
     try:
@@ -34,6 +36,7 @@ except ImportError:
         from scripts.utils.enhanced_qc import EnhancedQC
         from scripts.utils.advanced_plotting import AdvancedPlotter
         from scripts.utils.normalization_comparison import NormalizationComparison
+        from scripts.utils.genotype_processing import process_genotypes
     except ImportError as e:
         logging.error(f"Import error: {e}")
         logging.error("Please ensure all utility modules are available")
@@ -226,6 +229,7 @@ class QTLPipeline:
         self.logger.info(f"🤝 Interaction analysis: {self.config.get('interaction_analysis', {}).get('enable', False)}")
         self.logger.info(f"🎯 Fine-mapping: {self.config.get('fine_mapping', {}).get('enable', False)}")
         self.logger.info(f"💾 Large data optimizations: {self.config.get('large_data', {}).get('force_plink', False)}")
+        self.logger.info(f"🔄 Modular pipeline also available: python run_QTLPipeline.py --list")
         
     def map_qtl_type_to_config_key(self, qtl_type):
         """Map QTL analysis types to config file keys"""
@@ -267,6 +271,15 @@ class QTLPipeline:
             self.logger.info("🧬 Step 3: Preparing genotype data...")
             genotype_file = qtl_analysis.prepare_genotypes(self.config, self.results_dir)
             
+            # Alternative: Use modular genotype processing if available
+            try:
+                from scripts.utils.genotype_processing import process_genotypes
+                self.logger.info("🔄 Using modular genotype processing...")
+                genotype_file = process_genotypes(self.config)
+            except ImportError:
+                self.logger.info("🔧 Using standard genotype processing...")
+                genotype_file = qtl_analysis.prepare_genotypes(self.config, self.results_dir)
+            
             # Step 4: Run QTL analyses (cis/trans/both)
             self.logger.info("🔍 Step 4: Running QTL analyses...")
             qtl_results = self.run_qtl_analyses(genotype_file)
@@ -298,6 +311,7 @@ class QTLPipeline:
             # Calculate and log runtime
             runtime = datetime.now() - self.start_time
             self.logger.info(f"✅ Pipeline completed successfully in {runtime}")
+            self.logger.info(f"💡 You can also run individual modules using: python run_QTLPipeline.py --list")
             
             return self.results
             
@@ -593,6 +607,7 @@ if __name__ == "__main__":
         pipeline = QTLPipeline(config_file)
         results = pipeline.run_pipeline()
         print(f"✅ Pipeline completed successfully!")
+        print(f"💡 You can also run individual modules using: python run_QTLPipeline.py --list")
         
     except Exception as e:
         print(f"❌ Pipeline failed: {e}")

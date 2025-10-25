@@ -6,13 +6,14 @@ Optimized for 100GB+ VCF files with 400+ samples
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
+Enhanced with modular pipeline support and function exports.
 """
 
 import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-import logging
+import traceback, logging, sys
 import subprocess
 import tempfile
 import re
@@ -782,3 +783,44 @@ class GenotypeProcessor:
             if check:
                 raise RuntimeError(f"Command failed: {description}") from e
             return e
+
+# Modular pipeline function
+def process_genotypes(config):
+    """
+    Main function for genotype processing module in the modular pipeline
+    Returns: bool (success)
+    """
+    try:
+        logger.info("🚀 Starting genotype processing module...")
+        
+        # Get input parameters from config
+        input_file = config['genotype_processing']['input_file']
+        output_dir = config['output_dir']
+        
+        # Initialize processor
+        processor = GenotypeProcessor(config)
+        
+        # Process genotypes
+        result_file = processor.process_genotypes(input_file, output_dir)
+        
+        if result_file and os.path.exists(result_file):
+            logger.info(f"✅ Genotype processing completed successfully: {result_file}")
+            return True
+        else:
+            logger.error("❌ Genotype processing failed - no output file generated")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Genotype processing module failed: {e}")
+        logger.debug(traceback.format_exc())
+        return False
+
+# Maintain backward compatibility
+if __name__ == "__main__":
+    # Load config and run as standalone script
+    import yaml
+    with open("config/config.yaml", 'r') as f:
+        config = yaml.safe_load(f)
+    
+    success = process_genotypes(config)
+    sys.exit(0 if success else 1)
