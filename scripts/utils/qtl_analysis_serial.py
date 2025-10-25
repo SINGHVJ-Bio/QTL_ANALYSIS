@@ -2,12 +2,8 @@
 """
 Enhanced QTL analysis utilities with tensorQTL-specific capabilities - Production Version
 Complete pipeline for cis/trans QTL analysis using tensorQTL with robust error handling
-and optimized CPU/GPU utilization
-
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
-
-Enhanced with comprehensive CPU/GPU optimization, memory management, and performance tuning.
 """
 
 import os
@@ -76,131 +72,8 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
-class HardwareOptimizer:
-    """Optimize hardware utilization for tensorQTL analysis with your existing config"""
-    
-    def __init__(self, config):
-        self.config = config
-        self.performance_config = config.get('performance', {})
-        self.tensorqtl_config = config.get('tensorqtl', {})
-        
-    def setup_hardware(self):
-        """Setup optimal hardware configuration for tensorQTL based on your config"""
-        device_info = self.detect_available_devices()
-        
-        # Use GPU if available and enabled in config, otherwise use optimized CPU
-        use_gpu = self.tensorqtl_config.get('use_gpu', False) and device_info['gpu_available']
-        
-        if use_gpu:
-            device = self.setup_gpu()
-        else:
-            device = self.setup_cpu_optimized()
-        
-        # Set memory optimization based on available resources
-        self.setup_memory_optimization(device_info)
-        
-        return device, device_info
-    
-    def detect_available_devices(self):
-        """Detect available hardware devices"""
-        device_info = {
-            'gpu_available': False,
-            'gpu_count': 0,
-            'gpu_names': [],
-            'cpu_cores': os.cpu_count(),
-            'memory_gb': psutil.virtual_memory().total / (1024**3)
-        }
-        
-        # Check GPU availability
-        if TENSORQTL_AVAILABLE:
-            if torch.cuda.is_available():
-                device_info['gpu_available'] = True
-                device_info['gpu_count'] = torch.cuda.device_count()
-                device_info['gpu_names'] = [torch.cuda.get_device_name(i) for i in range(device_info['gpu_count'])]
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                device_info['gpu_available'] = True
-                device_info['gpu_names'] = ['Apple MPS']
-        
-        logger.info(f"🖥️  Hardware detected: {device_info['cpu_cores']} CPU cores, "
-                   f"{device_info['memory_gb']:.1f} GB RAM, "
-                   f"{device_info['gpu_count']} GPUs available")
-        
-        if device_info['gpu_available']:
-            logger.info(f"🎮 GPUs: {', '.join(device_info['gpu_names'])}")
-        
-        return device_info
-    
-    def setup_gpu(self):
-        """Setup GPU configuration for optimal performance"""
-        if not TENSORQTL_AVAILABLE:
-            return None
-            
-        try:
-            # Set default tensor type to CUDA
-            torch.set_default_tensor_type(torch.cuda.FloatTensor)
-            
-            # Configure CUDA optimization
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            
-            # Clear GPU cache
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            logger.info("🎯 GPU acceleration enabled for tensorQTL")
-            return torch.device('cuda')
-            
-        except Exception as e:
-            logger.warning(f"⚠️ GPU setup failed: {e}, falling back to CPU")
-            return self.setup_cpu_optimized()
-    
-    def setup_cpu_optimized(self):
-        """Setup CPU configuration for optimal multi-core performance"""
-        try:
-            # Set CPU threads for optimal performance - use your config or auto-detect
-            num_threads = self.performance_config.get('num_threads', min(16, os.cpu_count()))
-            torch.set_num_threads(num_threads)
-            torch.set_num_interop_threads(num_threads)
-            
-            # Set environment variables for OpenMP
-            os.environ['OMP_NUM_THREADS'] = str(num_threads)
-            os.environ['MKL_NUM_THREADS'] = str(num_threads)
-            
-            logger.info(f"🔢 Using {num_threads} CPU threads for tensor operations")
-            
-            return torch.device('cpu')
-            
-        except Exception as e:
-            logger.warning(f"⚠️ CPU optimization failed: {e}")
-            return None
-    
-    def setup_memory_optimization(self, device_info):
-        """Setup memory optimization parameters based on available resources"""
-        memory_gb = device_info['memory_gb']
-        
-        # Adaptive batch sizing based on available memory and your config
-        config_batch_size = self.tensorqtl_config.get('batch_size', 20000)
-        config_chunk_size = self.tensorqtl_config.get('chunk_size', 200)
-        
-        # Adjust based on available memory
-        if memory_gb > 64:
-            # High memory system - can use larger batches
-            optimized_batch_size = min(config_batch_size * 2, 50000)
-            optimized_chunk_size = min(config_chunk_size * 2, 500)
-        elif memory_gb > 32:
-            # Medium memory system - use config values
-            optimized_batch_size = config_batch_size
-            optimized_chunk_size = config_chunk_size
-        else:
-            # Low memory system - reduce batch size
-            optimized_batch_size = max(config_batch_size // 2, 5000)
-            optimized_chunk_size = max(config_chunk_size // 2, 100)
-        
-        logger.info(f"💾 Memory optimization: {memory_gb:.1f} GB available, "
-                   f"batch_size={optimized_batch_size}, chunk_size={optimized_chunk_size}")
-
 class QTLConfig:
-    """Enhanced QTL configuration management with robust error handling and hardware optimization"""
+    """Enhanced QTL configuration management with robust error handling"""
     def __init__(self, config):
         self.config = config
         self.qtl_config = config.get('qtl', {})
@@ -209,62 +82,30 @@ class QTLConfig:
         self.performance_config = config.get('performance', {})
         self.large_data_config = config.get('large_data', {})
         
-        # Initialize hardware optimizer
-        self.hardware_optimizer = HardwareOptimizer(config)
-        
     def get_analysis_params(self, analysis_type):
-        """Get analysis parameters with comprehensive fallbacks and hardware optimization"""
-        # Setup hardware first
-        device, device_info = self.hardware_optimizer.setup_hardware()
-        
-        # Use your existing config values with hardware optimization
+        """Get analysis parameters with comprehensive fallbacks"""
         base_params = {
             'cis_window': self.tensorqtl_config.get('cis_window', 1000000),
             'maf_threshold': self.tensorqtl_config.get('maf_threshold', 0.05),
             'min_maf': self.tensorqtl_config.get('min_maf', 0.01),
             'fdr_threshold': self.tensorqtl_config.get('fdr_threshold', 0.05),
             'num_permutations': self.tensorqtl_config.get('num_permutations', 1000),
-            'batch_size': self.tensorqtl_config.get('batch_size', 20000),
-            'chunk_size': self.tensorqtl_config.get('chunk_size', 200),
-            'seed': self.tensorqtl_config.get('seed', 12345),
+            'batch_size': self.tensorqtl_config.get('batch_size', 10000),
+            'seed': self.tensorqtl_config.get('seed', 42),
             'run_permutations': self.tensorqtl_config.get('run_permutations', True),
             'write_stats': self.tensorqtl_config.get('write_stats', True),
-            'write_top_results': self.tensorqtl_config.get('write_top_results', True),
-            'run_eigenmt': self.tensorqtl_config.get('run_eigenmt', False),
-            'output_format': self.tensorqtl_config.get('output_format', 'parquet'),
-            'write_sparse': self.tensorqtl_config.get('write_sparse', True),
-            'impute_missing': self.tensorqtl_config.get('impute_missing', True),
-            'center_features': self.tensorqtl_config.get('center_features', True),
-            'standardize_features': self.tensorqtl_config.get('standardize_features', True),
-            'device': device,
-            'device_info': device_info,
-            'use_gpu': device_info['gpu_available'] and self.tensorqtl_config.get('use_gpu', False)
+            'write_top_results': self.tensorqtl_config.get('write_top_results', True)
         }
         
         # Analysis-specific adjustments
         if analysis_type == 'trans':
             base_params.update({
-                'batch_size': self.tensorqtl_config.get('trans_batch_size', base_params['batch_size']),
+                'batch_size': self.tensorqtl_config.get('trans_batch_size', 5000),
                 'pval_threshold': self.tensorqtl_config.get('trans_pval_threshold', 1e-5),
                 'return_sparse': self.tensorqtl_config.get('return_sparse', True)
             })
         
-        # Performance tuning based on hardware
-        if base_params['use_gpu']:
-            # GPU-optimized parameters
-            logger.info("🚀 Using GPU-optimized parameters")
-            base_params.update({
-                'batch_size': base_params['batch_size'] * 2,  # Larger batches for GPU
-                'chunk_size': min(base_params['chunk_size'] * 2, 500)
-            })
-        else:
-            # CPU-optimized parameters
-            logger.info("🔢 Using CPU-optimized parameters")
-            base_params.update({
-                'num_threads': self.performance_config.get('num_threads', min(16, os.cpu_count()))
-            })
-        
-        # Large data handling
+        # Performance tuning
         if self.large_data_config.get('process_by_chromosome', False):
             base_params['chromosome_batch_size'] = self.large_data_config.get('max_concurrent_chromosomes', 2)
         
@@ -283,10 +124,6 @@ class QTLConfig:
             errors.append("fdr_threshold must be between 0 and 1")
         if params['num_permutations'] < 10:
             errors.append("num_permutations should be at least 10 for meaningful results")
-        if params['batch_size'] <= 0:
-            errors.append("batch_size must be positive")
-        if params['chunk_size'] <= 0:
-            errors.append("chunk_size must be positive")
         
         if errors:
             raise ValueError(f"Parameter validation failed: {'; '.join(errors)}")
@@ -612,8 +449,8 @@ class PhenotypeProcessor:
     
     def _save_processed_data(self, normalized_df, qtl_type):
         """Save processed phenotype data with comprehensive output options"""
-        # Save phenotype matrix based on config format
-        output_format = self.config.get('tensorqtl', {}).get('output_format', 'parquet')
+        # Save phenotype matrix
+        output_format = self.config.get('output', {}).get('phenotype_format', 'parquet')
         if output_format == 'parquet':
             pheno_file = os.path.join(self.results_dir, f"{qtl_type}_phenotypes.parquet")
             normalized_df.to_parquet(pheno_file)
@@ -712,13 +549,13 @@ class GenotypeLoader:
                 # Load PLINK data
                 plink_prefix = genotype_file.replace('.bed', '')
                 
-                # Hardware optimization for tensorQTL
-                hardware_optimizer = HardwareOptimizer(self.config)
-                device, device_info = hardware_optimizer.setup_hardware()
+                # Set tensorQTL parameters for performance
+                if self.performance_config.get('use_gpu', False) and torch.cuda.is_available():
+                    logger.info("🚀 Using GPU for tensorQTL analysis")
+                    torch.set_default_tensor_type(torch.cuda.FloatTensor)
                 
                 pr = genotypeio.read_plink(plink_prefix)
                 logger.info(f"✅ Loaded PLINK data: {pr.genotypes.shape[0]} variants, {pr.genotypes.shape[1]} samples")
-                
                 return pr
             else:
                 raise ValueError(f"Unsupported genotype format: {genotype_file}. Use PLINK format for best performance.")
@@ -857,17 +694,10 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
     logger.info(f"🔍 Running {qtl_type} cis-QTL analysis with tensorQTL...")
     
     try:
-        # Initialize configuration with hardware optimization
+        # Initialize configuration
         qtl_config = QTLConfig(config)
         qtl_config.validate_parameters('cis')
         params = qtl_config.get_analysis_params('cis')
-        
-        # Log hardware configuration
-        device_info = params['device_info']
-        if params['use_gpu']:
-            logger.info(f"🎮 Using GPU for {qtl_type} cis-QTL analysis")
-        else:
-            logger.info(f"🔢 Using CPU for {qtl_type} cis-QTL analysis (threads: {params.get('num_threads', 'auto')})")
         
         # Prepare phenotype data
         pheno_processor = PhenotypeProcessor(config, results_dir)
@@ -884,10 +714,10 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         # Set output prefix
         output_prefix = os.path.join(results_dir, f"{qtl_type}_cis")
         
-        # Run cis-QTL analysis with hardware optimization
+        # Run cis-QTL analysis
         logger.info("🔬 Running tensorQTL cis mapping...")
         
-        # Map cis-QTLs with hardware optimization
+        # Map cis-QTLs
         cis_df = cis.map_cis(
             genotype_df=pr.genotypes,
             phenotype_df=pheno_data['phenotype_df'],
@@ -900,8 +730,7 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
             prefix=f"{qtl_type}_cis",
             write_stats=params['write_stats'],
             write_top=params['write_top_results'],
-            run_eigenmt=params['run_eigenmt'],
-            device=params.get('device')  # Pass device for GPU optimization
+            run_eigenmt=False
         )
         
         # Run permutations for FDR estimation if requested
@@ -920,9 +749,8 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
                 prefix=f"{qtl_type}_cis",
                 write_stats=params['write_stats'],
                 write_top=params['write_top_results'],
-                run_eigenmt=params['run_eigenmt'],
-                nperm=params['num_permutations'],
-                device=params.get('device')  # Pass device for GPU optimization
+                run_eigenmt=False,
+                nperm=params['num_permutations']
             )
         
         # Count significant associations
@@ -930,17 +758,12 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         
         logger.info(f"✅ {qtl_type} cis: Found {significant_count} significant associations")
         
-        # Clean up GPU memory if used
-        if params['use_gpu'] and TENSORQTL_AVAILABLE:
-            torch.cuda.empty_cache()
-        
         return {
             'result_file': os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz"),
             'nominals_file': os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz"),
             'significant_count': significant_count,
             'status': 'completed',
-            'params': params,
-            'hardware_used': 'GPU' if params['use_gpu'] else 'CPU'
+            'params': params
         }
         
     except Exception as e:
@@ -961,16 +784,9 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
     logger.info(f"🔍 Running {qtl_type} trans-QTL analysis with tensorQTL...")
     
     try:
-        # Initialize configuration with hardware optimization
+        # Initialize configuration
         qtl_config = QTLConfig(config)
         params = qtl_config.get_analysis_params('trans')
-        
-        # Log hardware configuration
-        device_info = params['device_info']
-        if params['use_gpu']:
-            logger.info(f"🎮 Using GPU for {qtl_type} trans-QTL analysis")
-        else:
-            logger.info(f"🔢 Using CPU for {qtl_type} trans-QTL analysis")
         
         # Prepare phenotype data
         pheno_processor = PhenotypeProcessor(config, results_dir)
@@ -990,7 +806,7 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         # Run trans-QTL analysis with memory optimization
         logger.info("🔬 Running tensorQTL trans mapping...")
         
-        # Use chunked processing for large datasets with hardware optimization
+        # Use chunked processing for large datasets
         trans_df = trans.map_trans(
             genotype_df=pr.genotypes,
             phenotype_df=pheno_data['phenotype_df'],
@@ -998,8 +814,7 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
             batch_size=params['batch_size'],
             maf_threshold=params['maf_threshold'],
             return_sparse=params.get('return_sparse', True),
-            pval_threshold=params.get('pval_threshold', 1e-5),
-            device=params.get('device') if params.get('use_gpu') else None  # Only pass device if using GPU
+            pval_threshold=params.get('pval_threshold', 1e-5)
         )
         
         # Save results
@@ -1024,17 +839,12 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         
         logger.info(f"✅ {qtl_type} trans: Found {significant_count} significant associations")
         
-        # Clean up GPU memory if used
-        if params['use_gpu'] and TENSORQTL_AVAILABLE:
-            torch.cuda.empty_cache()
-        
         return {
             'result_file': trans_file,
             'nominals_file': trans_file,
             'significant_count': significant_count,
             'status': 'completed',
-            'params': params,
-            'hardware_used': 'GPU' if params['use_gpu'] else 'CPU'
+            'params': params
         }
         
     except Exception as e:
@@ -1203,21 +1013,6 @@ def run_qtl_mapping(config, genotype_file, qtl_type, results_dir, analysis_mode=
         return run_trans_analysis(config, genotype_file, qtl_type, results_dir)
     else:
         raise ValueError(f"Unknown analysis mode: {analysis_mode}")
-
-# Performance monitoring utilities
-def monitor_performance():
-    """Monitor current performance metrics"""
-    if TENSORQTL_AVAILABLE:
-        gpu_memory = None
-        if torch.cuda.is_available():
-            gpu_memory = torch.cuda.memory_allocated() / (1024**3)  # GB
-            
-    cpu_percent = psutil.cpu_percent()
-    memory = psutil.virtual_memory()
-    
-    logger.info(f"📊 Performance: CPU {cpu_percent}%, RAM {memory.percent}%")
-    if gpu_memory:
-        logger.info(f"📊 GPU memory: {gpu_memory:.2f} GB")
 
 if __name__ == "__main__":
     """Standalone QTL analysis script"""

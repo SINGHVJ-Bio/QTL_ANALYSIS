@@ -161,44 +161,33 @@ chr1   5000     6000   gene2      0        -
 
 
 # 🎯 Command Line Options
-# Basic usage
-python run_QTLPipeline.py --config config/config.yaml
+# Individual Modules (with auto-dependencies):
 
-# Custom analysis
-python run_QTLPipeline.py --config config/config.yaml --qtl-types eqtl,pqtl --qtl-mode both
+# Data processing
+python run_QTLPipeline.py --modules data_preparation
+python run_QTLPipeline.py --modules genotype_processing --auto-deps
+python run_QTLPipeline.py --modules expression_processing --auto-deps
+python run_QTLPipeline.py --modules quality_control --auto-deps
 
-# Enable advanced features
-python run_QTLPipeline.py --config config/config.yaml --enhanced-qc --interaction-analysis --fine-mapping
+# Analysis
+python run_QTLPipeline.py --modules qtl_mapping --auto-deps
+python run_QTLPipeline.py --modules fine_mapping --auto-deps
+python run_QTLPipeline.py --modules interaction_analysis --auto-deps
 
-# Performance tuning
-python run_QTLPipeline.py --config config/config.yaml --threads 8 --memory 16 --output-dir my_results
+# Outputs
+python run_QTLPipeline.py --modules visualization --auto-deps
+python run_QTLPipeline.py --modules report_generation --auto-deps
+Popular Combinations:
 
-# Validation only
-python run_QTLPipeline.py --config config/config.yaml --validate-only
+# Complete analysis in one command
+python run_QTLPipeline.py --all
 
-# Debug mode
-python run_QTLPipeline.py --config config/config.yaml --debug
+# Just the analysis (assuming data is ready)
+python run_QTLPipeline.py --modules qtl_mapping fine_mapping interaction_analysis --force
 
-# Run with default normalization (VST for eQTL, log2 for others)
-python run_QTLPipeline.py --config config/config.yaml
+# Regenerate reports only
+python run_QTLPipeline.py --modules visualization report_generation --force
 
-# Override normalization methods
-python run_QTLPipeline.py --config config/config.yaml --eqtl-norm vst --pqtl-norm log2 --sqtl-norm log2
-
-# Use quantile normalization for all
-python run_QTLPipeline.py --config config/config.yaml --eqtl-norm quantile --pqtl-norm quantile --sqtl-norm quantile
-
-# Run without normalization
-python run_QTLPipeline.py --config config/config.yaml --eqtl-norm raw --pqtl-norm raw --sqtl-norm raw
-
-# For a 16-core system with 64GB RAM
-python run_QTLPipeline.py --config config.yaml --threads 16 --memory 64 --optimize-cpu --chromosome-parallel
-
-# For maximum performance on a 32-core system
-python run_QTLPipeline.py --config config.yaml --threads 32 --memory 128 --optimize-cpu --chromosome-parallel
-
-# Test with limited resources first
-python run_QTLPipeline.py --config config.yaml --threads 8 --memory 32 --optimize-cpu
 
 # 📈 Output Structure
 results/
