@@ -199,8 +199,43 @@ class InputBuilder:
         self.filtered_count_df = filtered_count_df
         return filtered_count_df
     
+    def load_pca_data(self):
+        """Load PCA data from eigenvec file and return merged with metadata"""
+        logger.info("Loading PCA data...")
+        
+        if not self.pca_file or not os.path.exists(self.pca_file):
+            logger.warning("PCA file not available, skipping PCA components")
+            return None
+        
+        try:
+            # Load PCA data (PLINK eigenvec format: FID IID PC1 PC2 ...)
+            pca_df = pd.read_csv(self.pca_file, sep=r"\s+", header=None)
+            
+            # Determine number of PCs to read
+            pca_count = self.config['covariates'].get('pca_count', 5)
+            expected_columns = 2 + pca_count  # FID, IID, PC1...PCn
+            
+            if pca_df.shape[1] < expected_columns:
+                logger.warning(f"PCA file has {pca_df.shape[1]} columns, but expected {expected_columns}")
+                pca_count = pca_df.shape[1] - 2
+            
+            # Assign column names
+            pca_columns = ['FID', 'IID'] + [f'PC{i}' for i in range(1, pca_count + 1)]
+            pca_df = pca_df.iloc[:, :len(pca_columns)]
+            pca_df.columns = pca_columns
+            
+            # Normalize IID for consistency
+            pca_df['IID'] = self.normalize_ids(pca_df['IID'])
+            
+            logger.info(f"Loaded PCA data with {pca_df.shape[0]} samples and {pca_count} components")
+            return pca_df
+            
+        except Exception as e:
+            logger.error(f"Failed to load PCA data: {e}")
+            return None
+    
     def build_covariates(self):
-        """Build covariate matrix with user-specified columns"""
+        """Build covariate matrix with metadata and PCA components"""
         logger.info("Step 2: Building covariate file...")
         
         meta_df = pd.read_csv(self.meta_file)
@@ -210,52 +245,50 @@ class InputBuilder:
         # Normalize WGS library IDs
         meta_df[wgs_lib_col] = self.normalize_ids(meta_df[wgs_lib_col])
         
-        # Load PCA data if available
+        # Get covariate configuration
+        covariate_config = self.config['covariates']
+        meta_covariates = covariate_config.get('include', [])
+        pca_covariates = covariate_config.get('pca_include', [])
+        categorical_columns = covariate_config.get('categorical_columns', [])
+        
+        # Load PCA data if available and requested
         pca_data = None
-        if self.pca_file and os.path.exists(self.pca_file):
-            try:
-                pca_cols = ["FID", "IID"] + [f"PC{i}" for i in range(1, 41)]
-                pca_df = pd.read_csv(self.pca_file, sep=r"\s+", comment="#", names=pca_cols)
-                pca_df["IID"] = self.normalize_ids(pca_df["IID"])
-                
-                # Use specified number of PCs
-                pca_count = self.config['covariates'].get('pca_count', 5)
-                pca_columns = [f"PC{i}" for i in range(1, pca_count + 1)]
-                pca_data = pca_df[["IID"] + pca_columns]
-                logger.info(f"Loaded {pca_count} PCA components")
-                
-            except Exception as e:
-                logger.warning(f"Could not load PCA file: {e}")
-                pca_data = None
-        
-        # Get user-specified covariate columns
-        covariate_columns = self.config['covariates']['include']
-        available_columns = [col for col in covariate_columns if col in meta_df.columns]
-        missing_columns = set(covariate_columns) - set(available_columns)
-        
-        if missing_columns:
-            logger.warning(f"Missing covariate columns: {missing_columns}")
+        if pca_covariates and self.pca_file:
+            pca_df = self.load_pca_data()
+            if pca_df is not None:
+                # Filter to requested PCA components
+                available_pca_cols = [col for col in pca_covariates if col in pca_df.columns]
+                pca_data = pca_df[["IID"] + available_pca_cols]
+                logger.info(f"Loaded PCA components: {available_pca_cols}")
+            else:
+                logger.warning("PCA components requested but could not load PCA data")
         
         # Prepare base covariates from metadata
-        base_covariates = meta_df[[wgs_lib_col] + available_columns].copy()
+        available_meta_cols = [col for col in meta_covariates if col in meta_df.columns]
+        missing_meta_cols = set(meta_covariates) - set(available_meta_cols)
+        
+        if missing_meta_cols:
+            logger.warning(f"Missing metadata covariate columns: {missing_meta_cols}")
+        
+        base_covariates = meta_df[[wgs_lib_col] + available_meta_cols].copy()
         base_covariates = base_covariates.rename(columns={wgs_lib_col: "IID"})
         
         # Merge with PCA data if available
         if pca_data is not None:
             base_covariates = base_covariates.merge(pca_data, on="IID", how="left")
-            available_columns.extend(pca_columns)
+            available_meta_cols.extend(available_pca_cols)
         
         # Restrict to samples present in expression data
         base_covariates = base_covariates[base_covariates["IID"].isin(self.expression_samples)]
         base_covariates = base_covariates.drop_duplicates(subset=["IID"])
         
         # Handle categorical variables
-        categorical_columns = self.config['covariates'].get('categorical_columns', [])
-        for col in available_columns:
+        for col in available_meta_cols:
             if col in base_covariates.columns:
                 if col in categorical_columns:
                     # Convert categorical to numeric codes
                     base_covariates[col] = pd.Categorical(base_covariates[col]).codes
+                    logger.info(f"Converted categorical column '{col}' to numeric codes")
                 else:
                     # Ensure numeric columns are properly typed
                     try:
@@ -264,9 +297,13 @@ class InputBuilder:
                         logger.warning(f"Could not convert column '{col}' to numeric")
         
         # Handle missing values
-        missing_strategy = self.config['covariates'].get('missing_value_strategy', 'drop')
+        missing_strategy = covariate_config.get('missing_value_strategy', 'drop')
         if missing_strategy == 'drop':
+            original_count = base_covariates.shape[0]
             base_covariates = base_covariates.dropna()
+            dropped_count = original_count - base_covariates.shape[0]
+            if dropped_count > 0:
+                logger.warning(f"Dropped {dropped_count} samples with missing covariate values")
         elif missing_strategy == 'mean':
             base_covariates = base_covariates.fillna(base_covariates.mean(numeric_only=True))
         
@@ -275,7 +312,7 @@ class InputBuilder:
         covar_matrix.index.name = "covariate"
         
         # Add intercept term (recommended for tensorQTL)
-        if self.config['covariates'].get('add_intercept', True):
+        if covariate_config.get('add_intercept', True):
             covar_matrix.loc['intercept'] = 1.0
         
         # Remove constant covariates
@@ -334,11 +371,13 @@ class InputBuilder:
         phenotype_df = phenotype_df.drop_duplicates(subset=["IID"])
         
         # Handle data types and missing values
+        categorical_phenotypes = phenotype_config.get('categorical_phenotypes', {})
         for col in available_phenotypes:
             if col in phenotype_df.columns:
                 # Convert categorical phenotypes to numeric codes
-                if phenotype_config.get('categorical_phenotypes', {}).get(col):
+                if categorical_phenotypes.get(col):
                     phenotype_df[col] = pd.Categorical(phenotype_df[col]).codes
+                    logger.info(f"Converted categorical phenotype '{col}' to numeric codes")
                 else:
                     # Try to convert to numeric, keep as is if not possible
                     try:
