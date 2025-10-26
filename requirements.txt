@@ -16,6 +16,7 @@ tensorqtl>=1.0.8
 torch>=1.9.0
 pyarrow>=3.0.0  # For parquet support
 pandas-plink>=2.0.0
+reportlab>=3.6.0
 
 # Optional for specific features
 # rpy2>=3.5.0  # For R integration if needed
