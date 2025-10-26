@@ -53,7 +53,7 @@ class FinalInputBuilder:
         self.samples_output = os.path.join(self.out_dir, "samples.txt")
         self.genotype_vcf_output = os.path.join(self.out_dir, "genotypes.vcf.gz")
         self.mapping_output = os.path.join(self.out_dir, "sample_mapping.tsv")
-        self.annotation_bed_output = os.path.join(self.out_dir, "annotations.bed")  # NEW: annotations file
+        self.annotation_bed_output = os.path.join(self.out_dir, "annotations.bed")
         
         logger.info(f"Output directory: {self.out_dir}")
     
@@ -501,16 +501,13 @@ class FinalInputBuilder:
         logger.info(f"VCF processing: biallelic_only={biallelic_only}, variant_type={variant_type}")
         logger.info(f"Using {self.threads} threads for VCF processing")
         
-        # Base bcftools command with threading and memory options
-        base_bcftools_cmd = [
-            bcftools_path,
-            "--threads", str(self.threads)
-        ]
-        
         if biallelic_only:
             # Simple case: only keep biallelic SNPs with parallel processing
-            cmd_filter = base_bcftools_cmd + [
+            # Note: --threads flag goes after the subcommand, not as global option
+            cmd_filter = [
+                bcftools_path,
                 "view", 
+                "--threads", str(self.threads),  # Threads flag after subcommand
                 "-S", self.samples_output,      # Filter samples
                 "-r", ",".join(regions),        # Filter regions
                 "-m2", "-M2",                   # Biallelic only
@@ -529,8 +526,10 @@ class FinalInputBuilder:
                 temp_filtered_vcf = os.path.join(temp_dir, "temp_filtered.vcf.gz")
                 
                 # First filter: samples, regions, variant type
-                cmd_first_filter = base_bcftools_cmd + [
+                cmd_first_filter = [
+                    bcftools_path,
                     "view",
+                    "--threads", str(self.threads),  # Threads flag after subcommand
                     "-S", self.samples_output,      # Filter samples
                     "-r", ",".join(regions),        # Filter regions
                     "-v", variant_type,             # SNP/indel filter
@@ -544,8 +543,10 @@ class FinalInputBuilder:
                 self.run_command(cmd_index_temp, "Indexing temporary VCF")
                 
                 # Split multiallelic sites into biallelic records with parallel processing
-                cmd_split = base_bcftools_cmd + [
+                cmd_split = [
+                    bcftools_path,
                     "norm",
+                    "--threads", str(self.threads),  # Threads flag after subcommand
                     "-m", "-any",                   # Split multiallelic sites
                     temp_filtered_vcf,
                     "-Oz", "-o", self.genotype_vcf_output
@@ -565,7 +566,7 @@ class FinalInputBuilder:
         
         try:
             self.validate_input_files()
-            self.create_annotation_bed()     # NEW: Create annotations first
+            self.create_annotation_bed()     # Create annotations first
             self.process_expression_data()   # Creates both BED and TSV
             self.build_covariates()
             self.create_phenotype_data()     # Creates both BED and TSV
