@@ -2,6 +2,7 @@
 """
 Final optimized pipeline to prepare QTL input files for tensorQTL
 Generates both BED and TSV expression files, BED + TSV phenotype files, and annotations BED
+Supports both TSV and CSV input files
 """
 
 import pandas as pd
@@ -39,6 +40,14 @@ class FinalInputBuilder:
         self.pca_file = self.config['input_files'].get('pca_file')
         self.vcf_input = self.config['input_files']['vcf_input']
         self.gtf_table = self.config['input_files']['gtf_table']
+        
+        # Get file separators from config with defaults
+        self.count_file_sep = self.config['input_files'].get('count_file_sep', '\t')
+        self.meta_file_sep = self.config['input_files'].get('meta_file_sep', ',')
+        self.gtf_table_sep = self.config['input_files'].get('gtf_table_sep', '\t')
+        self.pca_file_sep = self.config['input_files'].get('pca_file_sep', r'\s+')
+        
+        logger.info(f"File separators - Count: '{self.count_file_sep}', Meta: '{self.meta_file_sep}', GTF: '{self.gtf_table_sep}'")
         
         # Output directory
         self.out_dir = self.config['output']['output_dir']
@@ -119,8 +128,9 @@ class FinalInputBuilder:
         logger.info("Creating annotations.bed file...")
         
         try:
-            # Load GTF data
-            gtf_df = pd.read_csv(self.gtf_table, sep="\t")
+            # Load GTF data with configurable separator
+            logger.info(f"Reading GTF table with separator: '{self.gtf_table_sep}'")
+            gtf_df = pd.read_csv(self.gtf_table, sep=self.gtf_table_sep)
             
             # Get annotation configuration
             annotation_config = self.config['annotations']
@@ -166,15 +176,18 @@ class FinalInputBuilder:
         """Process expression data - creates both BED and TSV files"""
         logger.info("Processing expression data...")
         
-        # Load files in parallel
+        # Load files in parallel with configurable separators
         def load_count_data():
-            return pd.read_csv(self.count_file, sep="\t")
+            logger.info(f"Reading count file with separator: '{self.count_file_sep}'")
+            return pd.read_csv(self.count_file, sep=self.count_file_sep)
         
         def load_meta_data():
-            return pd.read_csv(self.meta_file)
+            logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
+            return pd.read_csv(self.meta_file, sep=self.meta_file_sep)
         
         def load_gtf_data():
-            return pd.read_csv(self.gtf_table, sep="\t")
+            logger.info(f"Reading GTF file with separator: '{self.gtf_table_sep}'")
+            return pd.read_csv(self.gtf_table, sep=self.gtf_table_sep)
         
         with ThreadPoolExecutor(max_workers=3) as executor:
             count_future = executor.submit(load_count_data)
@@ -276,7 +289,8 @@ class FinalInputBuilder:
             return None
         
         try:
-            pca_df = pd.read_csv(self.pca_file, sep=r"\s+", header=None, engine='python')
+            logger.info(f"Reading PCA file with separator: '{self.pca_file_sep}'")
+            pca_df = pd.read_csv(self.pca_file, sep=self.pca_file_sep, header=None, engine='python')
             pca_count = self.config['covariates'].get('pca_count', 5)
             
             # Assign column names
@@ -296,7 +310,8 @@ class FinalInputBuilder:
         """Build covariate file with correct samples"""
         logger.info("Building covariate file...")
         
-        meta_df = pd.read_csv(self.meta_file, low_memory=False)
+        logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
+        meta_df = pd.read_csv(self.meta_file, sep=self.meta_file_sep, low_memory=False)
         metadata_config = self.config['metadata_columns']
         wgs_col = metadata_config['wgs_library']
         
@@ -354,7 +369,8 @@ class FinalInputBuilder:
         """Create phenotype data in BED format for tensorQTL and TSV format for analysis"""
         logger.info("Creating phenotype data...")
         
-        meta_df = pd.read_csv(self.meta_file, low_memory=False)
+        logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
+        meta_df = pd.read_csv(self.meta_file, sep=self.meta_file_sep, low_memory=False)
         metadata_config = self.config['metadata_columns']
         wgs_col = metadata_config['wgs_library']
         
@@ -436,7 +452,8 @@ class FinalInputBuilder:
         """Create sample mapping file for cross-checking"""
         logger.info("Creating sample mapping file...")
         
-        meta_df = pd.read_csv(self.meta_file, low_memory=False)
+        logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
+        meta_df = pd.read_csv(self.meta_file, sep=self.meta_file_sep, low_memory=False)
         metadata_config = self.config['metadata_columns']
         rnaseq_col = metadata_config['rnaseq_library']
         wgs_col = metadata_config['wgs_library']

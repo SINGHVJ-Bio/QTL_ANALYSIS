@@ -1,10 +1,20 @@
 # Optimized Input Build Configuration for tensorQTL
 input_files:
-  count_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Merge_Pre_EMULSION_ENABL150_ENABL300_count_protein_coding.tsv"
-  meta_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/meta_wgs_rnaseq.csv"
+  count_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Datasets/TRANSCRIPTOMICS_ENABLE300/FULL/Count/count_transcriptomics_300.csv"
+  meta_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Datasets/TRANSCRIPTOMICS_ENABLE300/FULL/Clinical/meta_transcriptomics_300.csv"
   pca_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/pca_result_cohort.eigenvec"
   vcf_input: "/home/ubuntu/DATA_DRIVE/qtl_analysis/ENABL_merged_280_cohort.snp.recalibrated.vcf.gz"
   gtf_table: "/home/ubuntu/DATA_DRIVE/qtl_analysis/gencode.v38.annotation.gtf.full.table.txt"
+
+  count_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Datasets/TRANSCRIPTOMICS_ENABLE300/FULL/Count/count_transcriptomics_300.csv"
+  count_file_sep: ","  # Specify comma for CSV, tab for TSV
+  meta_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Datasets/TRANSCRIPTOMICS_ENABLE300/FULL/Clinical/meta_transcriptomics_300.csv"
+  meta_file_sep: ","   # Specify comma for CSV, tab for TSV
+  pca_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/pca_result_cohort.eigenvec"
+  pca_file_sep: " "    # Usually space for PCA files
+  vcf_input: "/home/ubuntu/DATA_DRIVE/qtl_analysis/ENABL_merged_280_cohort.snp.recalibrated.vcf.gz"
+  gtf_table: "/home/ubuntu/DATA_DRIVE/qtl_analysis/gencode.v38.annotation.gtf.full.table.txt"
+  gtf_table_sep: "\t"  # Usually tab for GTF files
 
 output:
   output_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data"
