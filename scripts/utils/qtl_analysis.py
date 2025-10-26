@@ -32,6 +32,7 @@ import sys
 try:
     import tensorqtl
     from tensorqtl import genotypeio, cis, trans
+    from tensorqtl.core import DoubleMatrix
     import torch
     
     # Try different imports for calculate_qvalues based on tensorQTL version
@@ -138,7 +139,10 @@ class DynamicDataHandler:
         if not non_numeric.empty:
             logger.warning(f"⚠️ Found {non_numeric.shape[1]} non-numeric columns in {qtl_type} data, attempting conversion")
             try:
-                phenotype_df = phenotype_df.astype(np.float64)
+                # Convert to numeric, coercing errors to NaN
+                phenotype_df = phenotype_df.apply(pd.to_numeric, errors='coerce')
+                # Drop columns that couldn't be converted
+                phenotype_df = phenotype_df.dropna(axis=1, how='all')
             except Exception as e:
                 logger.error(f"❌ Could not convert non-numeric columns to numeric: {e}")
                 raise
@@ -584,6 +588,8 @@ class PhenotypeProcessor:
                     df = pd.read_csv(file_path, sep=sep, index_col=0)
                     if not df.empty:
                         logger.info(f"✅ Successfully loaded {qtl_type} data with separator '{sep}'")
+                        # Ensure all data is numeric
+                        df = df.apply(pd.to_numeric, errors='coerce')
                         return df
                 except:
                     continue
@@ -593,6 +599,8 @@ class PhenotypeProcessor:
             if df.empty:
                 raise ValueError(f"Could not read {qtl_type} file with any standard separator")
             
+            # Ensure all data is numeric
+            df = df.apply(pd.to_numeric, errors='coerce')
             return df
             
         except Exception as e:
@@ -608,12 +616,16 @@ class PhenotypeProcessor:
                     df = pd.read_csv(covariate_file, sep=sep, index_col=0)
                     if not df.empty:
                         logger.info(f"✅ Successfully loaded covariate data with separator '{sep}'")
+                        # Ensure all data is numeric
+                        df = df.apply(pd.to_numeric, errors='coerce')
                         return df
                 except:
                     continue
             
             # Fallback
             df = pd.read_csv(covariate_file, index_col=0)
+            # Ensure all data is numeric
+            df = df.apply(pd.to_numeric, errors='coerce')
             return df
             
         except Exception as e:
@@ -737,6 +749,8 @@ class PhenotypeProcessor:
             # Load normalized data
             if os.path.exists(temp_output_path):
                 vst_df = pd.read_csv(temp_output_path, sep='\t', index_col=0)
+                # Ensure all data is numeric
+                vst_df = vst_df.apply(pd.to_numeric, errors='coerce')
                 logger.info("✅ VST normalization completed successfully")
                 return vst_df
             else:
@@ -837,11 +851,26 @@ class PhenotypeProcessor:
     
     def _save_processed_data(self, normalized_df, qtl_type, covariate_df):
         """Save processed phenotype data with comprehensive output options"""
+        # Ensure all data is numeric before saving
+        logger.info("🔧 Ensuring all data is numeric before saving...")
+        
+        # Clean and convert normalized_df
+        normalized_df = normalized_df.apply(pd.to_numeric, errors='coerce')
+        
+        # Clean and convert covariate_df if it exists
+        if not covariate_df.empty:
+            covariate_df = covariate_df.apply(pd.to_numeric, errors='coerce')
+        
         # Save phenotype matrix based on config format
         output_format = self.config.get('tensorqtl', {}).get('output_format', 'parquet')
         if output_format == 'parquet':
             pheno_file = os.path.join(self.results_dir, f"{qtl_type}_phenotypes.parquet")
-            normalized_df.to_parquet(pheno_file)
+            try:
+                normalized_df.to_parquet(pheno_file)
+            except Exception as e:
+                logger.warning(f"⚠️ Parquet save failed, using CSV: {e}")
+                pheno_file = os.path.join(self.results_dir, f"{qtl_type}_phenotypes.txt.gz")
+                normalized_df.to_csv(pheno_file, sep='\t', compression='gzip')
         else:
             pheno_file = os.path.join(self.results_dir, f"{qtl_type}_phenotypes.txt.gz")
             normalized_df.to_csv(pheno_file, sep='\t', compression='gzip')
@@ -849,15 +878,26 @@ class PhenotypeProcessor:
         # Save covariates if available
         if not covariate_df.empty:
             cov_file = os.path.join(self.results_dir, f"{qtl_type}_covariates.parquet")
-            covariate_df.to_parquet(cov_file)
-            logger.info(f"💾 Saved covariates: {cov_file}")
+            try:
+                covariate_df.to_parquet(cov_file)
+                logger.info(f"💾 Saved covariates: {cov_file}")
+            except Exception as e:
+                logger.warning(f"⚠️ Covariate parquet save failed, using CSV: {e}")
+                cov_file = os.path.join(self.results_dir, f"{qtl_type}_covariates.txt.gz")
+                covariate_df.to_csv(cov_file, sep='\t', compression='gzip')
+                logger.info(f"💾 Saved covariates: {cov_file}")
         else:
             cov_file = None
         
         # Create and save phenotype positions
         pheno_pos_file = os.path.join(self.results_dir, f"{qtl_type}_phenotype_positions.parquet")
         pheno_pos_df = self._create_phenotype_positions(normalized_df.columns, qtl_type)
-        pheno_pos_df.to_parquet(pheno_pos_file)
+        try:
+            pheno_pos_df.to_parquet(pheno_pos_file)
+        except Exception as e:
+            logger.warning(f"⚠️ Phenotype positions parquet save failed, using CSV: {e}")
+            pheno_pos_file = os.path.join(self.results_dir, f"{qtl_type}_phenotype_positions.txt.gz")
+            pheno_pos_df.to_csv(pheno_pos_file, sep='\t', compression='gzip')
         
         logger.info(f"💾 Saved processed data: {pheno_file}")
         
@@ -1038,9 +1078,16 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
         # Try to load pre-processed covariates first
         cov_file = os.path.join(results_dir, f"{qtl_type}_covariates.parquet")
         if os.path.exists(cov_file):
-            cov_df = pd.read_parquet(cov_file)
-            logger.info(f"✅ Loaded pre-processed covariates: {cov_df.shape[1]} samples, {cov_df.shape[0]} covariates")
-            return cov_df.T  # Return samples x covariates for tensorQTL
+            try:
+                cov_df = pd.read_parquet(cov_file)
+                logger.info(f"✅ Loaded pre-processed covariates: {cov_df.shape[1]} samples, {cov_df.shape[0]} covariates")
+                return cov_df.T  # Return samples x covariates for tensorQTL
+            except Exception as e:
+                logger.warning(f"⚠️ Could not read parquet covariates, trying CSV: {e}")
+                cov_file = os.path.join(results_dir, f"{qtl_type}_covariates.txt.gz")
+                if os.path.exists(cov_file):
+                    cov_df = pd.read_csv(cov_file, sep='\t', index_col=0)
+                    return cov_df.T
         
         # Fallback to original covariate file
         covariates_file = config['input_files'].get('covariates')
@@ -1132,21 +1179,19 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         # Run cis-QTL analysis with hardware optimization
         logger.info("🔬 Running tensorQTL cis mapping...")
         
-        # Map cis-QTLs with hardware optimization
+        # Convert to tensorQTL-compatible format if needed
+        phenotype_df_t = pheno_data['phenotype_df'].T  # tensorQTL expects samples x features
+        phenotype_pos_df = pheno_data['phenotype_pos_df']
+        
+        # Map cis-QTLs with hardware optimization - using proper tensorQTL API
         cis_df = cis.map_cis(
-            genotype_df=pr.genotypes,
-            phenotype_df=pheno_data['phenotype_df'],
-            phenotype_pos_df=pheno_data['phenotype_pos_df'],
+            pr,  # Pass the genotype reader object directly
+            phenotype_df_t, 
+            phenotype_pos_df,
             covariates_df=covariates_df,
             window=params['cis_window'],
-            maf_threshold=params['maf_threshold'],
             seed=params['seed'],
-            output_dir=results_dir,
-            prefix=f"{qtl_type}_cis",
-            write_stats=params['write_stats'],
-            write_top=params['write_top_results'],
-            run_eigenmt=params['run_eigenmt'],
-            device=params.get('device')  # Pass device for GPU optimization
+            run_eigenmt=params['run_eigenmt']
         )
         
         # Run permutations for FDR estimation if requested
@@ -1154,21 +1199,19 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
             logger.info("🔬 Running tensorQTL cis permutations...")
             
             cis_df = cis.map_cis(
-                genotype_df=pr.genotypes,
-                phenotype_df=pheno_data['phenotype_df'],
-                phenotype_pos_df=pheno_data['phenotype_pos_df'],
+                pr,
+                phenotype_df_t,
+                phenotype_pos_df,
                 covariates_df=covariates_df,
                 window=params['cis_window'],
-                maf_threshold=params['maf_threshold'],
                 seed=params['seed'],
-                output_dir=results_dir,
-                prefix=f"{qtl_type}_cis",
-                write_stats=params['write_stats'],
-                write_top=params['write_top_results'],
                 run_eigenmt=params['run_eigenmt'],
-                nperm=params['num_permutations'],
-                device=params.get('device')  # Pass device for GPU optimization
+                nperm=params['num_permutations']
             )
+        
+        # Save results
+        result_file = os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz")
+        cis_df.to_csv(result_file, sep='\t', compression='gzip')
         
         # Count significant associations
         significant_count = count_significant_associations(results_dir, f"{qtl_type}_cis", params['fdr_threshold'])
@@ -1180,8 +1223,8 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
             torch.cuda.empty_cache()
         
         return {
-            'result_file': os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz"),
-            'nominals_file': os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz"),
+            'result_file': result_file,
+            'nominals_file': result_file,
             'significant_count': significant_count,
             'status': 'completed',
             'params': params,
@@ -1236,16 +1279,17 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         # Run trans-QTL analysis with memory optimization
         logger.info("🔬 Running tensorQTL trans mapping...")
         
+        # Convert to tensorQTL-compatible format
+        phenotype_df_t = pheno_data['phenotype_df'].T  # tensorQTL expects samples x features
+        
         # Use chunked processing for large datasets with hardware optimization
         trans_df = trans.map_trans(
-            genotype_df=pr.genotypes,
-            phenotype_df=pheno_data['phenotype_df'],
+            pr,
+            phenotype_df_t,
             covariates_df=covariates_df,
             batch_size=params['batch_size'],
-            maf_threshold=params['maf_threshold'],
             return_sparse=params.get('return_sparse', True),
-            pval_threshold=params.get('pval_threshold', 1e-5),
-            device=params.get('device') if params.get('use_gpu') else None  # Only pass device if using GPU
+            pval_threshold=params.get('pval_threshold', 1e-5)
         )
         
         # Save results
