@@ -3,6 +3,7 @@
 Final optimized pipeline to prepare QTL input files for tensorQTL
 Generates both BED and TSV expression files, BED + TSV phenotype files, and annotations BED
 Supports both TSV and CSV input files with automatic encoding detection
+Applies count transformation: count = round(count + 1)
 """
 
 import pandas as pd
@@ -17,6 +18,7 @@ import tempfile
 import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 import chardet
+import numpy as np
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -48,7 +50,12 @@ class FinalInputBuilder:
         self.gtf_table_sep = self.config['input_files'].get('gtf_table_sep', '\t')
         self.pca_file_sep = self.config['input_files'].get('pca_file_sep', r'\s+')
         
+        # Get count transformation settings
+        self.add_value = self.config.get('count_transformation', {}).get('add_value', 1)
+        self.round_counts = self.config.get('count_transformation', {}).get('round_counts', True)
+        
         logger.info(f"File separators - Count: '{self.count_file_sep}', Meta: '{self.meta_file_sep}', GTF: '{self.gtf_table_sep}'")
+        logger.info(f"Count transformation - Add value: {self.add_value}, Round counts: {self.round_counts}")
         
         # Output directory
         self.out_dir = self.config['output']['output_dir']
@@ -57,6 +64,7 @@ class FinalInputBuilder:
         # Output files
         self.expression_bed_output = os.path.join(self.out_dir, "expression.bed")
         self.expression_tsv_output = os.path.join(self.out_dir, "expression.tsv")
+        self.expression_tsv_raw_output = os.path.join(self.out_dir, "expression_raw.tsv")  # Keep raw counts for reference
         self.covar_output = os.path.join(self.out_dir, "covariates.txt")
         self.phenotype_bed_output = os.path.join(self.out_dir, "phenotypes.bed")
         self.phenotype_tsv_output = os.path.join(self.out_dir, "phenotype_data.tsv")
@@ -144,6 +152,38 @@ class FinalInputBuilder:
         # Final fallback with error replacement
         logger.warning("Using final fallback with error replacement")
         return pd.read_csv(file_path, sep=sep, encoding='utf-8', errors='replace', **kwargs)
+    
+    def transform_count_matrix(self, count_df):
+        """Apply count transformation: add value and round"""
+        logger.info("Applying count transformation...")
+        
+        # Identify sample columns (all columns except 'gene_id')
+        sample_cols = [col for col in count_df.columns if col != 'gene_id']
+        
+        # Create a copy to avoid modifying the original
+        transformed_df = count_df.copy()
+        
+        # Store original statistics for logging
+        original_stats = transformed_df[sample_cols].describe()
+        
+        # Apply transformation: count = count + add_value
+        logger.info(f"Adding {self.add_value} to all count values")
+        transformed_df[sample_cols] = transformed_df[sample_cols] + self.add_value
+        
+        if self.round_counts:
+            logger.info("Rounding count values to nearest integer")
+            transformed_df[sample_cols] = np.round(transformed_df[sample_cols]).astype(int)
+        else:
+            logger.info("Skipping rounding (keeping as floats)")
+        
+        # Log transformation summary
+        transformed_stats = transformed_df[sample_cols].describe()
+        
+        logger.info("Count transformation summary:")
+        logger.info(f"  Original - Min: {original_stats.loc['min'].min():.2f}, Max: {original_stats.loc['max'].max():.2f}, Mean: {original_stats.loc['mean'].mean():.2f}")
+        logger.info(f"  Transformed - Min: {transformed_stats.loc['min'].min():.2f}, Max: {transformed_stats.loc['max'].max():.2f}, Mean: {transformed_stats.loc['mean'].mean():.2f}")
+        
+        return transformed_df
     
     def normalize_ids(self, s):
         """Normalize sample IDs for consistency"""
@@ -251,6 +291,13 @@ class FinalInputBuilder:
         count_samples = [c for c in count_df.columns if c != "gene_id"]
         logger.info(f"Count matrix: {count_df.shape[0]} genes, {len(count_samples)} samples")
         
+        # Save raw counts for reference
+        count_df.to_csv(self.expression_tsv_raw_output, sep="\t", index=False)
+        logger.info(f"✅ Raw expression TSV saved: {self.expression_tsv_raw_output}")
+        
+        # Apply count transformation: add 1 and round
+        count_df = self.transform_count_matrix(count_df)
+        
         # Build mapping RNASeq_Library -> WGS_Library
         metadata_config = self.config['metadata_columns']
         rnaseq_col = metadata_config['rnaseq_library']
@@ -282,7 +329,7 @@ class FinalInputBuilder:
         
         # Save TSV file (gene_id + samples only, no genomic info)
         filtered_count_df.to_csv(self.expression_tsv_output, sep="\t", index=False)
-        logger.info(f"✅ Expression TSV created: {self.expression_tsv_output}")
+        logger.info(f"✅ Transformed expression TSV created: {self.expression_tsv_output}")
         
         # Create BED format with genomic coordinates
         logger.info("Creating BED format expression file...")
@@ -652,7 +699,9 @@ class FinalInputBuilder:
         
         logger.info(f"📊 EXPRESSION DATA")
         logger.info(f"  BED file (tensorQTL): {self.expression_bed_output}")
-        logger.info(f"  TSV file (raw counts): {self.expression_tsv_output}")
+        logger.info(f"  TSV file (transformed): {self.expression_tsv_output}")
+        logger.info(f"  TSV file (raw counts): {self.expression_tsv_raw_output}")
+        logger.info(f"  Transformation: count = count + {self.add_value}" + (" + round" if self.round_counts else ""))
         logger.info(f"  Genes: {self.expression_bed.shape[0]}")
         logger.info(f"  Samples: {len(self.expression_samples)}")
         

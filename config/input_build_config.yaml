@@ -16,6 +16,10 @@ input_files:
   gtf_table: "/home/ubuntu/DATA_DRIVE/qtl_analysis/gencode.v38.annotation.gtf.full.table.txt"
   gtf_table_sep: "\t"  # Usually tab for GTF files
 
+count_transformation:
+  add_value: 1           # Value to add to all counts (default: 1)
+  round_counts: true     # Whether to round to nearest integer (default: true)
+  
 output:
   output_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data"
 
