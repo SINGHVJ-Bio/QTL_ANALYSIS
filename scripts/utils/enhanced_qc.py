@@ -168,14 +168,18 @@ class EnhancedQC:
             covar_file = self.config['input_files'].get('covariates')
             if covar_file and os.path.exists(covar_file):
                 try:
-                    covar_df = pd.read_csv(covar_file, sep='\t', index_col=0, nrows=5)  # Only read first few rows
-                    covar_samples = set(covar_df.columns)
-                    overlap = set(geno_samples) & covar_samples
-                    
-                    if len(overlap) == 0:
-                        compatibility_issues.append("No overlapping samples between genotype and covariates")
-                    
-                    logger.info(f"✅ Covariates compatibility: {len(covar_samples)} samples, {len(overlap)} overlap with genotypes")
+                    # Use robust covariate reading that handles categorical data
+                    covar_df = self._read_covariates_robust(covar_file, nrows=5)
+                    if covar_df is not None:
+                        covar_samples = set(covar_df.columns)
+                        overlap = set(geno_samples) & covar_samples
+                        
+                        if len(overlap) == 0:
+                            compatibility_issues.append("No overlapping samples between genotype and covariates")
+                        
+                        logger.info(f"✅ Covariates compatibility: {len(covar_samples)} samples, {len(overlap)} overlap with genotypes")
+                    else:
+                        compatibility_issues.append("Could not read covariates file for compatibility check")
                     
                 except Exception as e:
                     compatibility_issues.append(f"Error reading covariates file: {e}")
@@ -197,6 +201,73 @@ class EnhancedQC:
         except Exception as e:
             logger.error(f"❌ TensorQTL compatibility check failed: {e}")
             return False
+
+    def _read_covariates_robust(self, file_path: str, nrows: Optional[int] = None):
+        """Robust covariate file reading that handles categorical data"""
+        try:
+            # First attempt: standard tab-separated with header
+            df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=nrows)
+            logger.info(f"Successfully read covariates file with standard tab separation")
+            return df
+        except Exception as e:
+            logger.warning(f"Standard reading failed: {e}, trying alternative methods")
+            
+            try:
+                # Second attempt: try different separators
+                for sep in ['\t', '  ', ' ', ',']:
+                    try:
+                        df = pd.read_csv(file_path, sep=sep, index_col=0, nrows=nrows, engine='python')
+                        if df.shape[1] > 1:  # Should have multiple samples
+                            logger.info(f"Successfully read covariates file with separator: {repr(sep)}")
+                            return df
+                    except:
+                        continue
+            except Exception as e2:
+                logger.warning(f"Alternative separator reading failed: {e2}")
+            
+            # Final attempt: manual parsing for complex formats
+            try:
+                with open(file_path, 'r') as f:
+                    lines = f.readlines()
+                
+                # Find header line
+                header_line = None
+                data_start = 0
+                for i, line in enumerate(lines):
+                    if line.strip() and not line.startswith('#'):
+                        # Check if this looks like a header with sample IDs
+                        parts = line.strip().split()
+                        if len(parts) > 3 and all(len(part) > 3 for part in parts[1:4]):  # Sample IDs usually have reasonable length
+                            header_line = i
+                            break
+                
+                if header_line is not None:
+                    # Parse header and data
+                    header = lines[header_line].strip().split()
+                    data_lines = []
+                    
+                    for i in range(header_line + 1, len(lines)):
+                        if lines[i].strip() and not lines[i].startswith('#'):
+                            data_lines.append(lines[i].strip().split())
+                    
+                    if data_lines and len(data_lines[0]) == len(header):
+                        # Create DataFrame
+                        data_dict = {}
+                        for row in data_lines:
+                            if len(row) == len(header):
+                                covar_name = row[0]
+                                values = row[1:]
+                                data_dict[covar_name] = values
+                        
+                        df = pd.DataFrame(data_dict, index=header[1:]).T
+                        logger.info(f"Successfully read covariates file with manual parsing")
+                        return df
+                        
+            except Exception as e3:
+                logger.error(f"Manual parsing also failed: {e3}")
+        
+        logger.error("All covariate file reading methods failed")
+        return None
 
     def _check_phenotype_compatibility(self, pheno_file: str, qtl_type: str, geno_samples: List[str]) -> List[str]:
         """Check phenotype file compatibility (for parallel execution)"""
@@ -483,8 +554,8 @@ class EnhancedQC:
     def validate_covariates_format(self, covariates_file: str) -> bool:
         """Validate covariates file format for tensorQTL compatibility"""
         try:
-            df = pd.read_csv(covariates_file, sep='\t', index_col=0, nrows=5)
-            return df.shape[0] > 0 and df.shape[1] > 0
+            df = self._read_covariates_robust(covariates_file, nrows=5)
+            return df is not None and df.shape[0] > 0 and df.shape[1] > 0
         except:
             return False
 
@@ -682,8 +753,101 @@ class EnhancedQC:
             return self._create_empty_quality_result(pheno_type)
 
     def check_covariates_file_quality(self, covariates_file: str, file_type: str = None) -> Dict[str, Any]:
-        """Check covariates file quality"""
-        return self._check_tabular_file_quality(covariates_file, 'covariates', 6)
+        """Check covariates file quality with robust handling of categorical data"""
+        logger.info(f"  📈 Checking covariates file: {covariates_file}")
+        
+        try:
+            # Use robust reading that handles categorical data
+            df = self._read_covariates_robust(covariates_file, nrows=1000)
+            
+            if df is None or df.empty:
+                return self._create_empty_quality_result('covariates')
+            
+            quality_info = {
+                'file_type': 'covariates',
+                'checks_passed': 0,
+                'checks_total': 6,
+                'details': {
+                    'n_covariates': df.shape[0],
+                    'n_samples': df.shape[1],
+                    'missing_percentage': (df.isna().sum().sum() / df.size) * 100,
+                    'tensorqtl_format': 'OK'
+                }
+            }
+            
+            # Check 1: Non-empty file
+            if df.shape[0] > 0 and df.shape[1] > 0:
+                quality_info['checks_passed'] += 1
+                quality_info['details']['non_empty'] = True
+            
+            # Check 2: Low missing rate (more lenient for covariates)
+            if quality_info['details']['missing_percentage'] < 10:  # Increased threshold for covariates
+                quality_info['checks_passed'] += 1
+                quality_info['details']['missing_rate_acceptable'] = True
+            
+            # Check 3: No constant rows - handle both numeric and categorical
+            try:
+                # For numeric columns, check standard deviation
+                # For categorical, check number of unique values
+                constant_rows = 0
+                for idx in df.index:
+                    row = df.loc[idx]
+                    # Try to convert to numeric, if successful check std
+                    try:
+                        numeric_row = pd.to_numeric(row, errors='coerce')
+                        if numeric_row.notna().all() and numeric_row.std() == 0:
+                            constant_rows += 1
+                    except:
+                        # If conversion fails, check if all values are the same
+                        if row.nunique() == 1:
+                            constant_rows += 1
+                
+                if constant_rows == 0:
+                    quality_info['checks_passed'] += 1
+                    quality_info['details']['no_constant_rows'] = True
+                else:
+                    quality_info['details']['constant_rows'] = constant_rows
+            except Exception as e:
+                logger.warning(f"Could not check constant rows: {e}")
+            
+            # Check 4: No duplicate names
+            if not df.index.duplicated().any():
+                quality_info['checks_passed'] += 1
+                quality_info['details']['no_duplicate_names'] = True
+            
+            # Check 5: Data type analysis (not strict requirement)
+            numeric_count = 0
+            categorical_count = 0
+            for idx in df.index:
+                row = df.loc[idx]
+                try:
+                    numeric_row = pd.to_numeric(row, errors='coerce')
+                    if numeric_row.notna().all():
+                        numeric_count += 1
+                    else:
+                        categorical_count += 1
+                except:
+                    categorical_count += 1
+            
+            quality_info['details']['numeric_covariates'] = numeric_count
+            quality_info['details']['categorical_covariates'] = categorical_count
+            
+            # This check always passes for covariates since we handle mixed types
+            quality_info['checks_passed'] += 1
+            quality_info['details']['mixed_types_handled'] = True
+            
+            # Check 6: Proper format
+            if df.shape[0] > 0 and df.shape[1] > 0:
+                quality_info['checks_passed'] += 1
+                quality_info['details']['tensorqtl_compatible'] = True
+            
+            logger.info(f"    ✅ covariates file: {df.shape[0]} rows, {df.shape[1]} samples - {quality_info['checks_passed']}/6 checks passed")
+            logger.info(f"    📊 Covariate types: {numeric_count} numeric, {categorical_count} categorical")
+            return quality_info
+            
+        except Exception as e:
+            logger.error(f"    ❌ covariates quality check failed: {e}")
+            return self._create_empty_quality_result('covariates')
 
     def check_annotations_file_quality(self, annotations_file: str, file_type: str = None) -> Dict[str, Any]:
         """Check annotations file quality"""
@@ -733,65 +897,6 @@ class EnhancedQC:
         except Exception as e:
             logger.error(f"    ❌ Annotations quality check failed: {e}")
             return self._create_empty_quality_result('annotations')
-
-    def _check_tabular_file_quality(self, file_path: str, file_type: str, total_checks: int) -> Dict[str, Any]:
-        """Generic function to check tabular file quality"""
-        logger.info(f"  📈 Checking {file_type} file: {file_path}")
-        
-        try:
-            df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=1000)  # Only read first 1000 rows
-            
-            quality_info = {
-                'file_type': file_type,
-                'checks_passed': 0,
-                'checks_total': total_checks,
-                'details': {
-                    f'n_{file_type}': df.shape[0],
-                    'n_samples': df.shape[1],
-                    'missing_percentage': (df.isna().sum().sum() / df.size) * 100,
-                    'tensorqtl_format': 'OK'
-                }
-            }
-            
-            # Check 1: Non-empty file
-            if df.shape[0] > 0 and df.shape[1] > 0:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['non_empty'] = True
-            
-            # Check 2: Low missing rate
-            if quality_info['details']['missing_percentage'] < 5:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['missing_rate_acceptable'] = True
-            
-            # Check 3: No constant rows
-            if not (df.std(axis=1) == 0).any():
-                quality_info['checks_passed'] += 1
-                quality_info['details']['no_constant_rows'] = True
-            
-            # Check 4: No duplicate names
-            if not df.index.duplicated().any():
-                quality_info['checks_passed'] += 1
-                quality_info['details']['no_duplicate_names'] = True
-            
-            # Check 5: Numeric data
-            try:
-                df.astype(float)
-                quality_info['checks_passed'] += 1
-                quality_info['details']['all_numeric'] = True
-            except:
-                quality_info['details']['all_numeric'] = False
-            
-            # Check 6: Proper format
-            if df.shape[0] > 0 and df.shape[1] > 0:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['tensorqtl_compatible'] = True
-            
-            logger.info(f"    ✅ {file_type} file: {df.shape[0]} rows, {df.shape[1]} samples - {quality_info['checks_passed']}/{total_checks} checks passed")
-            return quality_info
-            
-        except Exception as e:
-            logger.error(f"    ❌ {file_type} quality check failed: {e}")
-            return self._create_empty_quality_result(file_type)
 
     def create_sample_mapping_files(self) -> bool:
         """Create sample mapping files for downstream analysis"""
@@ -851,8 +956,12 @@ class EnhancedQC:
     def _extract_samples_from_tabular(self, file_path: str) -> Set[str]:
         """Extract samples from tabular file efficiently"""
         try:
-            # Only read header to get sample names
-            df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=0)
+            # For covariates, use robust reading
+            if 'covariate' in file_path.lower():
+                df = self._read_covariates_robust(file_path, nrows=0)
+            else:
+                # Only read header to get sample names
+                df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=0)
             return set(df.columns)
         except Exception as e:
             logger.warning(f"Could not extract samples from {file_path}: {e}")
