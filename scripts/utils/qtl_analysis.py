@@ -32,7 +32,6 @@ import sys
 try:
     import tensorqtl
     from tensorqtl import genotypeio, cis, trans
-    from tensorqtl.core import DoubleMatrix
     import torch
     
     # Try different imports for calculate_qvalues based on tensorQTL version
@@ -1184,6 +1183,7 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         phenotype_pos_df = pheno_data['phenotype_pos_df']
         
         # Map cis-QTLs with hardware optimization - using proper tensorQTL API
+        # Note: Removed device parameter as it's not supported in newer tensorQTL versions
         cis_df = cis.map_cis(
             pr,  # Pass the genotype reader object directly
             phenotype_df_t, 
@@ -1283,6 +1283,7 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         phenotype_df_t = pheno_data['phenotype_df'].T  # tensorQTL expects samples x features
         
         # Use chunked processing for large datasets with hardware optimization
+        # Note: Removed device parameter as it's not supported in newer tensorQTL versions
         trans_df = trans.map_trans(
             pr,
             phenotype_df_t,
