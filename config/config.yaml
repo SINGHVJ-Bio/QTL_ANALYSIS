@@ -295,6 +295,11 @@ qc:
   check_maf_distribution: true
   check_missingness: true
   
+  # Expression data filtering based on QTL best practices
+  filter_lowly_expressed_genes: true
+  low_expression_threshold: 0.1          # Expression value below this is considered low
+  max_low_expression_samples_percentage: 10  # Remove genes with low expression in >10% of samples
+
   # Sample QC
   sample_missingness_threshold: 0.1
   sample_heterozygosity_threshold: 3

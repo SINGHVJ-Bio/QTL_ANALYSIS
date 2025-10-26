@@ -486,6 +486,10 @@ class PhenotypeProcessor:
             if self.qc_config.get('filter_low_expressed', True):
                 pheno_df = self._apply_qc_filters(pheno_df, qtl_type)
             
+            # NEW: Apply expression-specific filtering for eQTL data
+            if qtl_type == 'eqtl' and self.qc_config.get('filter_lowly_expressed_genes', True):
+                pheno_df = self._filter_lowly_expressed_genes(pheno_df, qtl_type)
+            
             # Apply normalization
             if self.qc_config.get('normalize', True):
                 normalized_df = self._apply_normalization(pheno_df, qtl_type)
@@ -520,6 +524,47 @@ class PhenotypeProcessor:
         except Exception as e:
             logger.error(f"❌ Phenotype preparation failed for {qtl_type}: {e}")
             raise
+    
+    def _filter_lowly_expressed_genes(self, pheno_df, qtl_type):
+        """
+        NEW: Filter out genes with low expression in more than X% of samples
+        Based on QTL analysis best practices - removes genes that are lowly expressed in too many samples
+        """
+        if qtl_type != 'eqtl':
+            return pheno_df  # Only apply to expression data
+        
+        logger.info("🔍 Filtering lowly expressed genes based on QTL best practices...")
+        
+        # Get configuration parameters with defaults
+        low_expression_threshold = self.qc_config.get('low_expression_threshold', 0.1)
+        max_low_expression_samples_percentage = self.qc_config.get('max_low_expression_samples_percentage', 10)
+        
+        original_count = pheno_df.shape[0]
+        
+        # Calculate percentage of samples with low expression for each gene
+        low_expression_mask = pheno_df < low_expression_threshold
+        low_expression_percentage = (low_expression_mask.sum(axis=1) / pheno_df.shape[1]) * 100
+        
+        # Filter genes where low expression percentage is below threshold
+        keep_genes = low_expression_percentage <= max_low_expression_samples_percentage
+        filtered_df = pheno_df[keep_genes]
+        
+        filtered_count = filtered_df.shape[0]
+        removed_count = original_count - filtered_count
+        
+        logger.info(f"🔧 Low expression filtering: {filtered_count}/{original_count} genes retained "
+                   f"(threshold: {low_expression_threshold}, max low samples: {max_low_expression_samples_percentage}%, "
+                   f"removed: {removed_count})")
+        
+        # Log detailed statistics about the filtering
+        if removed_count > 0:
+            low_expr_stats = low_expression_percentage.describe()
+            logger.info(f"📊 Low expression statistics - "
+                       f"Mean: {low_expr_stats['mean']:.1f}%, "
+                       f"Median: {low_expr_stats['50%']:.1f}%, "
+                       f"Max: {low_expr_stats['max']:.1f}%")
+        
+        return filtered_df
     
     def _map_qtl_type_to_config_key(self, qtl_type):
         """Map QTL type to config file key"""
@@ -1385,8 +1430,13 @@ def map_qtl_type_to_config_key(qtl_type):
     return mapping.get(qtl_type, qtl_type)
 
 # Additional utility functions for modular pipeline
-def process_expression_data(config, results_dir):
-    """Process expression data for modular pipeline"""
+def process_expression_data(config, results_dir=None):
+    """Process expression data for modular pipeline - FIXED: Added results_dir parameter"""
+    if results_dir is None:
+        # Fallback to config if results_dir not provided
+        results_dir = config.get('results_dir', 'results')
+        logger.warning(f"results_dir not provided, using config value: {results_dir}")
+    
     return prepare_phenotype_data(config, 'eqtl', results_dir)
 
 def run_qtl_mapping(config, genotype_file, qtl_type, results_dir, analysis_mode='cis'):
