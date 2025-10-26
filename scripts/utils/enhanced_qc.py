@@ -1061,58 +1061,58 @@ class EnhancedQC:
             f.write(html_content)
 
     def _get_report_template(self) -> str:
-        """Return HTML report template"""
+        """Return HTML report template with FIXED CSS syntax"""
         return """<!DOCTYPE html>
-<html>
-<head>
-    <title>Data Preparation Report</title>
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background: #f8f9fa; padding: 20px; border-radius: 5px; }
-        .status-pass { color: #28a745; font-weight: bold; }
-        .status-warning { color: #ffc107; font-weight: bold; }
-        .status-fail { color: #dc3545; font-weight: bold; }
-        .section { margin: 20px 0; padding: 15px; border: 1px solid #dee2e6; border-radius: 5px; }
-        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }
-        th { background-color: #f8f9fa; }
-        .tensorqtl-note { background: #e7f3ff; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>Data Preparation Report</h1>
-        <p>Generated on: {timestamp}</p>
-        <p>Overall Status: <span class="status-{status_class}">{overall_status}</span></p>
-        <p>Checks Passed: {passed_checks} / {total_checks}</p>
-    </div>
-    
-    <div class="tensorqtl-note">
-        <h3>🧬 TensorQTL Compatibility Notes</h3>
-        <p>This pipeline uses <strong>tensorQTL</strong> for QTL analysis. Ensure:</p>
-        <ul>
-            <li>Genotype data is in PLINK format for optimal performance</li>
-            <li>Sample IDs match exactly across all files</li>
-            <li>Phenotype data is properly normalized (VST recommended for RNA-seq)</li>
-            <li>Sufficient common samples exist across all datasets</li>
-        </ul>
-    </div>
-    
-    {validation_table}
-    
-    {quality_table}
-    
-    <div class="section">
-        <h2>Next Steps</h2>
-        <ul>
-            <li><strong>If status is PASS:</strong> Proceed with genotype and expression processing</li>
-            <li><strong>If status is WARNING:</strong> Review warnings and consider addressing issues</li>
-            <li><strong>If status is FAIL:</strong> Fix the reported issues before proceeding</li>
-        </ul>
-    </div>
-</body>
-</html>"""
+    <html>
+    <head>
+        <title>Data Preparation Report</title>
+        <meta charset="UTF-8">
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .header { background: #f8f9fa; padding: 20px; border-radius: 5px; }
+            .status-pass { color: #28a745; font-weight: bold; }
+            .status-warning { color: #ffc107; font-weight: bold; }
+            .status-fail { color: #dc3545; font-weight: bold; }
+            .section { margin: 20px 0; padding: 15px; border: 1px solid #dee2e6; border-radius: 5px; }
+            table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+            th, td { padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }
+            th { background-color: #f8f9fa; }
+            .tensorqtl-note { background: #e7f3ff; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>Data Preparation Report</h1>
+            <p>Generated on: {timestamp}</p>
+            <p>Overall Status: <span class="status-{status_class}">{overall_status}</span></p>
+            <p>Checks Passed: {passed_checks} / {total_checks}</p>
+        </div>
+        
+        <div class="tensorqtl-note">
+            <h3>🧬 TensorQTL Compatibility Notes</h3>
+            <p>This pipeline uses <strong>tensorQTL</strong> for QTL analysis. Ensure:</p>
+            <ul>
+                <li>Genotype data is in PLINK format for optimal performance</li>
+                <li>Sample IDs match exactly across all files</li>
+                <li>Phenotype data is properly normalized (VST recommended for RNA-seq)</li>
+                <li>Sufficient common samples exist across all datasets</li>
+            </ul>
+        </div>
+        
+        {validation_table}
+        
+        {quality_table}
+        
+        <div class="section">
+            <h2>Next Steps</h2>
+            <ul>
+                <li><strong>If status is PASS:</strong> Proceed with genotype and expression processing</li>
+                <li><strong>If status is WARNING:</strong> Review warnings and consider addressing issues</li>
+                <li><strong>If status is FAIL:</strong> Fix the reported issues before proceeding</li>
+            </ul>
+        </div>
+    </body>
+    </html>"""
 
     def _generate_validation_table(self, validation_results: Dict[str, Any]) -> str:
         """Generate validation results table HTML"""
