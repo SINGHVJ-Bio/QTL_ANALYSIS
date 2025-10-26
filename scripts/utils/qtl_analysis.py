@@ -621,38 +621,45 @@ class PhenotypeProcessor:
             return pd.DataFrame()
     
     def _apply_qc_filters(self, pheno_df, qtl_type):
-        """Apply comprehensive quality control filters"""
+        """Apply comprehensive quality control filters with FIXED variable initialization"""
         original_count = pheno_df.shape[0]
         filtered_df = pheno_df.copy()
+        
+        # Initialize all removal counters to avoid uninitialized variable errors
+        constant_removed = 0
+        missing_removed = 0
+        low_expression_removed = 0
+        low_variance_removed = 0
         
         # Remove constant features
         constant_threshold = self.qc_config.get('constant_threshold', 0.95)
         non_constant_mask = (filtered_df.nunique(axis=1) / filtered_df.shape[1]) > (1 - constant_threshold)
-        filtered_df = filtered_df[non_constant_mask]
-        constant_removed = original_count - filtered_df.shape[0]
+        filtered_df_after_constant = filtered_df[non_constant_mask]
+        constant_removed = original_count - filtered_df_after_constant.shape[0]
+        filtered_df = filtered_df_after_constant
         
         # Remove features with too many missing values
         missing_threshold = self.qc_config.get('missing_value_threshold', 0.2)
         low_missing_mask = (filtered_df.isna().sum(axis=1) / filtered_df.shape[1]) < missing_threshold
-        filtered_df = filtered_df[low_missing_mask]
-        missing_removed = (original_count - constant_removed) - filtered_df.shape[0]
+        filtered_df_after_missing = filtered_df[low_missing_mask]
+        missing_removed = filtered_df.shape[0] - filtered_df_after_missing.shape[0]
+        filtered_df = filtered_df_after_missing
         
         # QTL-type specific filtering
         if qtl_type == 'eqtl':
             threshold = self.qc_config.get('expression_threshold', 0.1)
             mean_expression = filtered_df.mean(axis=1)
             expressed_mask = mean_expression > threshold
-            filtered_df = filtered_df[expressed_mask]
-            low_expression_removed = filtered_df.shape[0] - expressed_mask.sum()
+            filtered_df_after_expr = filtered_df[expressed_mask]
+            low_expression_removed = filtered_df.shape[0] - filtered_df_after_expr.shape[0]
+            filtered_df = filtered_df_after_expr
         elif qtl_type in ['pqtl', 'sqtl']:
             # Filter based on variance
             variance_threshold = filtered_df.var(axis=1).quantile(0.1)
             high_variance_mask = filtered_df.var(axis=1) > variance_threshold
-            filtered_df = filtered_df[high_variance_mask]
-            low_variance_removed = filtered_df.shape[0] - high_variance_mask.sum()
-        else:
-            low_expression_removed = 0
-            low_variance_removed = 0
+            filtered_df_after_var = filtered_df[high_variance_mask]
+            low_variance_removed = filtered_df.shape[0] - filtered_df_after_var.shape[0]
+            filtered_df = filtered_df_after_var
         
         filtered_count = filtered_df.shape[0]
         logger.info(f"🔧 QC filtering: {filtered_count}/{original_count} features retained "
