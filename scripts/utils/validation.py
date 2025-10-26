@@ -6,6 +6,7 @@ Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
 ENHANCED: Dynamic covariate and phenotype handling with flexible validation
+FIXED: Covariate file parsing for your specific format
 """
 
 import os
@@ -100,7 +101,10 @@ class DynamicCovariateAnalyzer:
             # Check if numeric
             try:
                 numeric_vals = pd.to_numeric(values, errors='coerce')
-                if numeric_vals.notna().all():
+                non_na_count = numeric_vals.notna().sum()
+                total_count = len(values)
+                
+                if non_na_count == total_count:  # All values are numeric
                     unique_vals = numeric_vals.nunique()
                     
                     if unique_vals == 2:
@@ -117,14 +121,24 @@ class DynamicCovariateAnalyzer:
                             'max': float(numeric_vals.max())
                         }
                 else:
+                    # Mixed or categorical data
                     categorical_covariates.append(covar)
                     result.covariate_info[f'covariate_{covar}_type'] = 'categorical'
-                    result.covariate_info[f'covariate_{covar}_values'] = values.unique().tolist()
+                    unique_values = values.unique()
+                    # Limit stored values to avoid huge JSON
+                    if len(unique_values) <= 20:
+                        result.covariate_info[f'covariate_{covar}_values'] = unique_values.tolist()
+                    else:
+                        result.covariate_info[f'covariate_{covar}_values'] = f"{len(unique_values)} unique values"
                     
             except Exception as e:
                 categorical_covariates.append(covar)
                 result.covariate_info[f'covariate_{covar}_type'] = 'categorical'
-                result.covariate_info[f'covariate_{covar}_values'] = values.unique().tolist()
+                unique_values = values.unique()
+                if len(unique_values) <= 20:
+                    result.covariate_info[f'covariate_{covar}_values'] = unique_values.tolist()
+                else:
+                    result.covariate_info[f'covariate_{covar}_values'] = f"{len(unique_values)} unique values"
         
         # Store type counts
         result.covariate_info['numeric_covariates'] = numeric_covariates
@@ -377,7 +391,8 @@ def validate_inputs(config):
         # NEW: Perform dynamic analysis of covariates and phenotypes
         if 'covariates' in input_files and input_files['covariates'] and os.path.exists(input_files['covariates']):
             try:
-                cov_df = pd.read_csv(input_files['covariates'], sep='\t', index_col=0)
+                # FIXED: Use the corrected covariate reading function
+                cov_df = read_covariates_file_robust(input_files['covariates'])
                 if not cov_df.empty:
                     covariate_analyzer.analyze_covariates(cov_df, result)
             except Exception as e:
@@ -440,6 +455,73 @@ def validate_inputs(config):
         result.add_error('validation_process', f"Validation process failed: {e}")
         raise
 
+def read_covariates_file_robust(file_path):
+    """FIXED: Robust covariate file reading that handles your specific format"""
+    try:
+        # First attempt: standard tab-separated with header
+        df = pd.read_csv(file_path, sep='\t', index_col=0)
+        logger.info(f"Successfully read covariates file with standard tab separation")
+        return df
+    except Exception as e:
+        logger.warning(f"Standard reading failed: {e}, trying alternative methods")
+        
+        try:
+            # Second attempt: try different separators
+            for sep in ['\t', '  ', ' ', ',']:
+                try:
+                    df = pd.read_csv(file_path, sep=sep, index_col=0, engine='python')
+                    if df.shape[1] > 1:  # Should have multiple samples
+                        logger.info(f"Successfully read covariates file with separator: {repr(sep)}")
+                        return df
+                except:
+                    continue
+        except Exception as e2:
+            logger.warning(f"Alternative separator reading failed: {e2}")
+        
+        # Final attempt: manual parsing for complex formats
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+            
+            # Find header line
+            header_line = None
+            data_start = 0
+            for i, line in enumerate(lines):
+                if line.strip() and not line.startswith('#'):
+                    # Check if this looks like a header with sample IDs
+                    parts = line.strip().split()
+                    if len(parts) > 3 and all(len(part) > 3 for part in parts[1:4]):  # Sample IDs usually have reasonable length
+                        header_line = i
+                        break
+            
+            if header_line is not None:
+                # Parse header and data
+                header = lines[header_line].strip().split()
+                data_lines = []
+                
+                for i in range(header_line + 1, len(lines)):
+                    if lines[i].strip() and not lines[i].startswith('#'):
+                        data_lines.append(lines[i].strip().split())
+                
+                if data_lines and len(data_lines[0]) == len(header):
+                    # Create DataFrame
+                    data_dict = {}
+                    for row in data_lines:
+                        if len(row) == len(header):
+                            covar_name = row[0]
+                            values = row[1:]
+                            data_dict[covar_name] = values
+                    
+                    df = pd.DataFrame(data_dict, index=header[1:]).T
+                    logger.info(f"Successfully read covariates file with manual parsing")
+                    return df
+                    
+        except Exception as e3:
+            logger.error(f"Manual parsing also failed: {e3}")
+            raise ValueError(f"Could not parse covariates file with any method: {e3}")
+    
+    raise ValueError("All covariate file reading methods failed")
+
 def print_dynamic_analysis_summary(result):
     """NEW: Print summary of dynamic covariate and phenotype analysis"""
     print("\n📊 DYNAMIC ANALYSIS SUMMARY:")
@@ -473,10 +555,10 @@ def print_dynamic_analysis_summary(result):
                 print(f"      Distribution: {dist_info['distribution_type']}")
 
 def validate_covariates_file_enhanced(file_path, config, result):
-    """Enhanced covariates file validation with dynamic handling"""
+    """Enhanced covariates file validation with dynamic handling - FIXED for your format"""
     try:
-        # Read with comprehensive checks
-        df = pd.read_csv(file_path, sep='\t', index_col=0)
+        # FIXED: Use robust reading function
+        df = read_covariates_file_robust(file_path)
         
         if df.empty:
             result.add_error('covariates', "Covariates file is empty")
@@ -515,10 +597,13 @@ def validate_covariates_file_enhanced(file_path, config, result):
         for covar in df.index:
             try:
                 numeric_series = pd.to_numeric(df.loc[covar], errors='coerce')
-                if numeric_series.isna().any():
-                    non_numeric_covariates.append(covar)
-                else:
+                non_na_count = numeric_series.notna().sum()
+                total_count = len(df.loc[covar])
+                
+                if non_na_count == total_count:
                     numeric_covariates.append(covar)
+                else:
+                    non_numeric_covariates.append(covar)
             except (ValueError, TypeError):
                 non_numeric_covariates.append(covar)
         
@@ -527,9 +612,12 @@ def validate_covariates_file_enhanced(file_path, config, result):
         
         # NEW: Dynamic check for extreme values only on numeric covariates
         if numeric_covariates:
-            numeric_df = df.loc[numeric_covariates]
+            numeric_df = df.loc[numeric_covariates].apply(pd.to_numeric, errors='coerce')
             extreme_threshold = 10  # Z-score threshold
-            z_scores = np.abs((numeric_df - numeric_df.mean()) / numeric_df.std())
+            # Avoid division by zero
+            numeric_std = numeric_df.std()
+            numeric_std = numeric_std.replace(0, 1)  # Replace zero std with 1 to avoid division by zero
+            z_scores = np.abs((numeric_df - numeric_df.mean()) / numeric_std)
             extreme_count = (z_scores > extreme_threshold).sum().sum()
             if extreme_count > 0:
                 result.add_warning('covariates', f"Found {extreme_count} extreme values (|Z| > {extreme_threshold}) in numeric covariates")
@@ -597,7 +685,9 @@ def validate_phenotype_file_enhanced(file_path, qtl_type, config, result):
             Q1 = df.quantile(0.25)
             Q3 = df.quantile(0.75)
             IQR = Q3 - Q1
-            outlier_mask = (df < (Q1 - 3 * IQR)) | (df > (Q3 + 3 * IQR))
+            # Avoid division by zero in IQR
+            iqr_nonzero = IQR.replace(0, 1)
+            outlier_mask = (df < (Q1 - 3 * iqr_nonzero)) | (df > (Q3 + 3 * iqr_nonzero))
             outlier_count = outlier_mask.sum().sum()
             
             if outlier_count > 0:
@@ -1217,7 +1307,7 @@ def validate_configuration_comprehensive(config, result):
     covariates_file = config['input_files'].get('covariates')
     if covariates_file and os.path.exists(covariates_file):
         try:
-            cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0, nrows=1)
+            cov_df = read_covariates_file_robust(covariates_file)
             covariate_count = cov_df.shape[0]
             sample_count = cov_df.shape[1]
             result.add_info('configuration', f"Covariate structure: {covariate_count} covariates for {sample_count} samples")
@@ -1442,7 +1532,8 @@ def extract_genotype_samples(genotype_file, config):
 def extract_covariate_samples(covariates_file):
     """Extract samples from covariates file"""
     try:
-        df = pd.read_csv(covariates_file, sep='\t', index_col=0, nrows=0)
+        # Use robust reading for covariate file
+        df = read_covariates_file_robust(covariates_file)
         return set(df.columns)
     except:
         return set()

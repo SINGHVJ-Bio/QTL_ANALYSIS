@@ -11,7 +11,7 @@ input_files:
   genotypes: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/cohort.filtered.samples.vcf.gz"
   
   # Covariates file (tab-separated)
-  covariates: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/covariate.tsv"
+  covariates: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/covariate.txt"
   
   # Annotation file (BED format)
   annotations: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/annotations.bed"
