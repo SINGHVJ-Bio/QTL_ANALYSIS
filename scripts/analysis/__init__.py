@@ -12,13 +12,14 @@ import logging
 logger = logging.getLogger('QTLPipeline')
 
 from .interaction_analysis import InteractionAnalysis, run_interaction_analysis
-from .fine_mapping import FineMapping, run_fine_mapping
+from .fine_mapping import FineMapping, run_fine_mapping, map_qtl_type_to_config_key
 
 __all__ = [
     'InteractionAnalysis',
     'FineMapping',
     'run_interaction_analysis', 
-    'run_fine_mapping'
+    'run_fine_mapping',
+    'map_qtl_type_to_config_key'
 ]
 
 # Version info for analysis modules

@@ -10,6 +10,7 @@ Enhanced with:
 - Better memory management for large datasets
 - Additional fine-mapping methods
 - Comprehensive logging and progress tracking
+- Fixed import issues for pipeline compatibility
 """
 
 import os
@@ -20,7 +21,7 @@ import subprocess
 from scipy import stats
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 import time
 import json
 from pathlib import Path
@@ -37,6 +38,15 @@ def map_qtl_type_to_config_key(qtl_type: str) -> str:
         'sqtl': 'splicing'
     }
     return mapping.get(qtl_type, qtl_type)
+
+def run_fine_mapping(config: Dict[str, Any], qtl_results_file: str, vcf_file: str, 
+                    output_dir: str, qtl_type: str) -> Dict[str, Any]:
+    """
+    Main function to run fine-mapping analysis
+    This is the entry point called by the pipeline
+    """
+    fine_mapper = FineMapping(config)
+    return fine_mapper.run_fine_mapping(qtl_results_file, vcf_file, output_dir, qtl_type)
 
 class FineMapping:
     def __init__(self, config: Dict[str, Any]):
@@ -103,7 +113,7 @@ class FineMapping:
         return True
     
     def _load_qtl_results(self, qtl_results_file: str) -> pd.DataFrame:
-        """Load QTL results with optimized memory usage"""
+        """Load QTL results with optimized memory usage and type handling"""
         try:
             # Determine file format and load accordingly
             if qtl_results_file.endswith('.parquet'):
@@ -116,6 +126,9 @@ class FineMapping:
                     df = pd.read_csv(qtl_results_file, sep='\t', low_memory=False)
                 except:
                     df = pd.read_csv(qtl_results_file, low_memory=False)
+            
+            # Enhanced type conversion for numeric columns
+            df = self._convert_numeric_columns(df)
             
             # Essential column validation
             required_cols = ['p_value', 'gene_id']
@@ -131,15 +144,37 @@ class FineMapping:
             logger.error(f"❌ Error loading QTL results: {e}")
             return pd.DataFrame()
     
+    def _convert_numeric_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Convert numeric columns with proper error handling for non-numeric values"""
+        numeric_columns = ['p_value', 'beta', 'se', 'maf', 'fdr']
+        
+        for col in numeric_columns:
+            if col in df.columns:
+                # Convert to numeric, coercing errors to NaN
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+                # Count and report any non-numeric values that were converted
+                nan_count = df[col].isna().sum()
+                if nan_count > 0:
+                    logger.warning(f"⚠️ Converted {nan_count} non-numeric values in column '{col}' to NaN")
+        
+        return df
+    
     def _filter_significant_qtls(self, qtl_df: pd.DataFrame, qtl_type: str) -> pd.DataFrame:
-        """Filter significant QTL associations"""
+        """Filter significant QTL associations with enhanced threshold handling"""
         fdr_threshold = self.config['qtl'].get('fdr_threshold', 0.05)
         p_threshold = self.finemap_config.get('p_value_threshold', 1e-5)
         
+        # Create a copy to avoid SettingWithCopyWarning
+        qtl_df = qtl_df.copy()
+        
+        # Ensure numeric types for comparison
         if 'fdr' in qtl_df.columns:
+            qtl_df['fdr'] = pd.to_numeric(qtl_df['fdr'], errors='coerce')
             significant_qtls = qtl_df[qtl_df['fdr'] < fdr_threshold].copy()
             logger.info(f"📈 Using FDR threshold: {fdr_threshold}")
         else:
+            qtl_df['p_value'] = pd.to_numeric(qtl_df['p_value'], errors='coerce')
             significant_qtls = qtl_df[qtl_df['p_value'] < p_threshold].copy()
             logger.info(f"📈 Using p-value threshold: {p_threshold}")
         
@@ -167,21 +202,32 @@ class FineMapping:
         
         logger.info(f"🔧 Processing {len(gene_groups)} genes with parallel workers: {self.max_workers}")
         
-        # Process genes in parallel
-        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_gene = {
-                executor.submit(self.fine_map_gene, gene_qtls, vcf_file, output_dir, gene_id, qtl_type): gene_id
-                for gene_id, gene_qtls in gene_groups.items()
-            }
-            
-            for future in as_completed(future_to_gene):
-                gene_id = future_to_gene[future]
+        # Use sequential processing if only 1 worker or small number of genes
+        if self.max_workers == 1 or len(gene_groups) < 5:
+            logger.info("Using sequential processing for small dataset")
+            for gene_id, gene_qtls in gene_groups.items():
                 try:
-                    gene_results = future.result(timeout=3600)  # 1 hour timeout per gene
+                    gene_results = self.fine_map_gene(gene_qtls, vcf_file, output_dir, gene_id, qtl_type)
                     results[gene_id] = gene_results
                 except Exception as e:
                     logger.error(f"❌ Fine-mapping failed for {gene_id}: {e}")
                     results[gene_id] = {'error': str(e)}
+        else:
+            # Process genes in parallel
+            with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+                future_to_gene = {
+                    executor.submit(self.fine_map_gene, gene_qtls, vcf_file, output_dir, gene_id, qtl_type): gene_id
+                    for gene_id, gene_qtls in gene_groups.items()
+                }
+                
+                for future in as_completed(future_to_gene):
+                    gene_id = future_to_gene[future]
+                    try:
+                        gene_results = future.result(timeout=3600)  # 1 hour timeout per gene
+                        results[gene_id] = gene_results
+                    except Exception as e:
+                        logger.error(f"❌ Fine-mapping failed for {gene_id}: {e}")
+                        results[gene_id] = {'error': str(e)}
         
         return results
     
@@ -228,18 +274,22 @@ class FineMapping:
             variants = gene_qtls['variant_id'].tolist()
             p_values = gene_qtls['p_value'].tolist()
             
-            # Get effect sizes and standard errors
+            # Get effect sizes and standard errors with enhanced handling
             if 'beta' in gene_qtls.columns and 'se' in gene_qtls.columns:
-                betas = gene_qtls['beta'].tolist()
-                ses = gene_qtls['se'].tolist()
+                betas = gene_qtls['beta'].fillna(0).tolist()
+                ses = gene_qtls['se'].fillna(0.1).tolist()
             else:
                 # Estimate from p-values if not available
                 betas = gene_qtls.get('beta', np.random.normal(0, 0.1, len(gene_qtls))).tolist()
                 ses = gene_qtls.get('se', np.abs(betas) / stats.norm.ppf(1 - np.array(p_values)/2)).tolist()
             
-            # Enhanced Bayes factor calculation
-            z_scores = np.abs(stats.norm.ppf(np.array(p_values)/2))
-            bayes_factors = np.exp(z_scores**2 / 2)
+            # Enhanced Bayes factor calculation with error handling
+            try:
+                z_scores = np.abs(stats.norm.ppf(np.array(p_values)/2))
+                bayes_factors = np.exp(z_scores**2 / 2)
+            except:
+                # Fallback calculation
+                bayes_factors = -np.log(np.array(p_values) + 1e-300)
             
             # Calculate posterior probabilities with smoothing
             posterior_probs = self._calculate_posterior_probabilities(bayes_factors)
@@ -279,8 +329,8 @@ class FineMapping:
             variants = gene_qtls['variant_id'].tolist()
             p_values = gene_qtls['p_value'].tolist()
             
-            # Enhanced log Bayes factor calculation
-            log_bf = -np.log(p_values + 1e-300)  # Avoid log(0)
+            # Enhanced log Bayes factor calculation with numerical stability
+            log_bf = -np.log(np.array(p_values) + 1e-300)  # Avoid log(0)
             
             # Normalize to posterior probabilities with prior incorporation
             prior_probs = self._calculate_prior_probabilities(gene_qtls)
@@ -327,14 +377,14 @@ class FineMapping:
             p_values = gene_qtls['p_value'].tolist()
             
             if 'beta' in gene_qtls.columns and 'se' in gene_qtls.columns:
-                betas = gene_qtls['beta'].tolist()
-                ses = gene_qtls['se'].tolist()
+                betas = gene_qtls['beta'].fillna(0).tolist()
+                ses = gene_qtls['se'].fillna(0.05).tolist()
             else:
                 # Use default values if not available
                 betas = [0.1] * len(p_values)
                 ses = [0.05] * len(p_values)
             
-            # Calculate ABF
+            # Calculate ABF with error handling
             abf_values = self._calculate_abf(betas, ses)
             
             # Calculate posterior probabilities
@@ -381,7 +431,7 @@ class FineMapping:
         
         # Adjust priors based on MAF if available
         if 'maf' in gene_qtls.columns:
-            maf = gene_qtls['maf'].values
+            maf = gene_qtls['maf'].fillna(0.01).values  # Fill NA with small MAF
             # Prefer common variants (adjustable based on research question)
             maf_prior = maf / np.sum(maf)
             base_prior = 0.7 * base_prior + 0.3 * maf_prior
@@ -393,16 +443,17 @@ class FineMapping:
         betas = np.array(betas)
         ses = np.array(ses)
         
-        # ABF formula
+        # ABF formula with numerical stability
         v = prior_variance
-        abf = np.sqrt(1 / (1 + (ses**2 / v))) * np.exp((betas**2 / (2 * v)) / (1 + (ses**2 / v)))
+        denominator = 1 + (ses**2 / v)
+        abf = np.sqrt(1 / denominator) * np.exp((betas**2 / (2 * v)) / denominator)
         
         return abf
     
     def _identify_credible_sets(self, posterior_probs: np.ndarray, variants: List[str], 
                                p_values: List[float], betas: List[float], ses: List[float],
                                credible_threshold: float, max_causal: int, qtl_type: str) -> List[Dict[str, Any]]:
-        """Identify credible sets of variants"""
+        """Identify credible sets of variants with enhanced logic"""
         if len(posterior_probs) == 0:
             return []
         
@@ -433,10 +484,10 @@ class FineMapping:
                 variant_idx = remaining_indices[idx]
                 credible_set.append({
                     'variant_id': variants[variant_idx],
-                    'posterior_prob': remaining_probs[idx],
-                    'p_value': p_values[variant_idx],
-                    'beta': betas[variant_idx] if len(betas) > variant_idx else 'NA',
-                    'se': ses[variant_idx] if len(ses) > variant_idx else 'NA',
+                    'posterior_prob': float(remaining_probs[idx]),  # Convert to float for JSON serialization
+                    'p_value': float(p_values[variant_idx]),
+                    'beta': float(betas[variant_idx]) if len(betas) > variant_idx else 0.0,
+                    'se': float(ses[variant_idx]) if len(ses) > variant_idx else 0.0,
                     'qtl_type': qtl_type
                 })
                 cumulative_prob += remaining_probs[idx]
@@ -445,9 +496,9 @@ class FineMapping:
                 credible_sets.append({
                     'causal_set_index': causal_set,
                     'credible_set': credible_set,
-                    'cumulative_probability': cumulative_prob,
+                    'cumulative_probability': float(cumulative_prob),
                     'lead_variant': credible_set[0]['variant_id'],
-                    'lead_posterior_prob': credible_set[0]['posterior_prob']
+                    'lead_posterior_prob': float(credible_set[0]['posterior_prob'])
                 })
             
             # Remove variants in this credible set from consideration
@@ -586,3 +637,6 @@ class FineMapping:
         except Exception as e:
             logger.error(f"❌ Error generating {qtl_type} fine-mapping summary: {e}")
             return {}
+
+# # Export functions for pipeline compatibility
+# __all__ = ['run_fine_mapping', 'FineMapping', 'map_qtl_type_to_config_key']
