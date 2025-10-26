@@ -1446,14 +1446,34 @@ class EnhancedReportGenerator:
             return None
 
 
-# Standalone functions for backward compatibility
+# NEW: Missing functions that are being imported by other scripts
+def generate_reports(config, results_dir, report_data):
+    """
+    Main function for generating all reports - used by EnhancedQC and other modules
+    This function provides backward compatibility with the original pipeline
+    """
+    try:
+        logger.info("📝 Generating comprehensive reports using enhanced report generator...")
+        
+        generator = EnhancedReportGenerator(config, results_dir)
+        reports = generator.generate_comprehensive_reports(report_data)
+        
+        logger.info(f"✅ All reports generated successfully: {len(reports)} reports")
+        return reports
+        
+    except Exception as e:
+        logger.error(f"❌ Error generating reports: {e}")
+        return {}
+
+
 def generate_html_report(report_data, output_file):
     """
     Generate HTML report - standalone function for backward compatibility
     """
     try:
-        config = report_data['config']
-        results_dir = report_data['results_dir']
+        # Extract config and results_dir from report_data
+        config = report_data.get('config', {})
+        results_dir = report_data.get('results_dir', './results')
         
         generator = EnhancedReportGenerator(config, results_dir)
         return generator.generate_html_main_report(report_data)
@@ -1468,8 +1488,8 @@ def generate_summary_report(report_data, output_file):
     Generate summary report - standalone function for backward compatibility
     """
     try:
-        config = report_data['config']
-        results_dir = report_data['results_dir']
+        config = report_data.get('config', {})
+        results_dir = report_data.get('results_dir', './results')
         
         generator = EnhancedReportGenerator(config, results_dir)
         return generator.generate_summary_report(report_data)
@@ -1527,6 +1547,60 @@ class QTLPlotter:
         return True
 
 
+# NEW: Additional missing functions that might be called from other modules
+def create_enhanced_qc_report(config, qc_results, output_dir):
+    """
+    Create enhanced QC report - used by EnhancedQC module
+    """
+    try:
+        logger.info("🔍 Creating enhanced QC report...")
+        
+        # Create report data structure
+        report_data = {
+            'config': config,
+            'results': {'qc': qc_results},
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'runtime': 'QC analysis completed',
+            'results_dir': output_dir
+        }
+        
+        generator = EnhancedReportGenerator(config, output_dir)
+        qc_report = generator.generate_qc_comprehensive_report(report_data)
+        
+        logger.info(f"✅ Enhanced QC report generated: {qc_report}")
+        return qc_report
+        
+    except Exception as e:
+        logger.error(f"❌ Enhanced QC report generation failed: {e}")
+        return None
+
+
+def create_normalization_report(config, normalization_results, output_dir):
+    """
+    Create normalization report - used by NormalizationComparison module
+    """
+    try:
+        logger.info("📊 Creating normalization report...")
+        
+        report_data = {
+            'config': config,
+            'results': {'normalization': normalization_results},
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'runtime': 'Normalization analysis completed',
+            'results_dir': output_dir
+        }
+        
+        generator = EnhancedReportGenerator(config, output_dir)
+        norm_report = generator.generate_normalization_summary_report(report_data)
+        
+        logger.info(f"✅ Normalization report generated: {norm_report}")
+        return norm_report
+        
+    except Exception as e:
+        logger.error(f"❌ Normalization report generation failed: {e}")
+        return None
+
+
 # Main execution block for testing
 if __name__ == "__main__":
     # Test the report generator
@@ -1563,3 +1637,7 @@ if __name__ == "__main__":
     # Generate test reports
     reports = generator.generate_comprehensive_reports(test_report_data)
     print(f"Generated {len(reports)} reports: {list(reports.keys())}")
+    
+    # Test the new functions
+    test_reports = generate_reports(test_config, './test_results', test_report_data)
+    print(f"Generated {len(test_reports)} reports using generate_reports function")
