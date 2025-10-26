@@ -1832,7 +1832,7 @@ class EnhancedQC:
             logger.warning(f"Could not generate sample concordance plot: {e}")
 
     def run_pca_analysis(self, vcf_file: str, output_dir: str) -> Dict[str, Any]:
-        """Run PCA for population stratification using PLINK"""
+        """Run PCA for population stratification using PLINK - FIXED VERSION"""
         logger.info("📊 Running PCA analysis using PLINK...")
         
         try:
@@ -1844,8 +1844,22 @@ class EnhancedQC:
             if result.returncode == 0:
                 pca_eigenvec = f"{plink_base}.eigenvec"
                 if os.path.exists(pca_eigenvec):
+                    # FIX: Dynamically handle column assignment based on actual number of columns
                     pca_df = pd.read_csv(pca_eigenvec, sep='\s+', header=None)
-                    pca_df.columns = ['FID', 'IID'] + [f'PC{i+1}' for i in range(10)]
+                    
+                    # Determine number of principal components based on actual columns
+                    n_columns = pca_df.shape[1]
+                    if n_columns >= 12:
+                        # Standard case: 2 ID columns + 10 PCs
+                        pca_df.columns = ['FID', 'IID'] + [f'PC{i+1}' for i in range(10)]
+                    elif n_columns >= 2:
+                        # Flexible case: handle different numbers of PCs
+                        n_pcs = n_columns - 2
+                        pca_df.columns = ['FID', 'IID'] + [f'PC{i+1}' for i in range(n_pcs)]
+                        logger.info(f"📊 PCA analysis: Found {n_pcs} principal components")
+                    else:
+                        logger.warning(f"Unexpected number of columns in PCA results: {n_columns}")
+                        return {}
                     
                     self._plot_pca_results(pca_df, output_dir)
                     
@@ -1862,7 +1876,7 @@ class EnhancedQC:
             return {}
 
     def _calculate_pca_variance(self, eigenval_file: str) -> List[float]:
-        """Calculate explained variance from eigenvalues"""
+        """Calculate explained variance from eigenvalues - FIXED VERSION"""
         try:
             if os.path.exists(eigenval_file):
                 eigenvalues = pd.read_csv(eigenval_file, header=None)[0].values
@@ -1874,7 +1888,7 @@ class EnhancedQC:
         return []
 
     def _plot_pca_results(self, pca_df: pd.DataFrame, output_dir: str) -> None:
-        """Plot PCA results"""
+        """Plot PCA results - FIXED VERSION"""
         try:
             plot_dir = Path(output_dir) / "QC_plots"
             plot_dir.mkdir(exist_ok=True)
@@ -1888,9 +1902,19 @@ class EnhancedQC:
             plt.title('PCA: PC1 vs PC2')
             
             plt.subplot(1, 2, 2)
-            pcs = range(1, 11)
-            # Simplified scree plot (actual values would come from eigenvalues)
-            plt.plot(pcs, [100/i for i in pcs], 'o-', color='#A23B72')
+            # FIX: Dynamically determine number of PCs to plot
+            pcs_available = [col for col in pca_df.columns if col.startswith('PC')]
+            n_pcs = len(pcs_available)
+            pcs = range(1, n_pcs + 1)
+            
+            # Get actual explained variance if available, otherwise use simplified scree
+            if hasattr(self, '_pca_variance'):
+                explained_variance = self._pca_variance[:n_pcs]
+                plt.plot(pcs, explained_variance, 'o-', color='#A23B72')
+            else:
+                # Simplified scree plot (fallback)
+                plt.plot(pcs, [100/i for i in pcs], 'o-', color='#A23B72')
+            
             plt.xlabel('Principal Component')
             plt.ylabel('Explained Variance (%)')
             plt.title('Scree Plot')
@@ -2076,12 +2100,13 @@ class EnhancedQC:
         return plots_html
 
     def save_qc_results(self, qc_results: Dict[str, Any], output_dir: str) -> None:
-        """Save QC results for downstream modules"""
+        """Save QC results for downstream modules - FIXED JSON SERIALIZATION"""
         try:
             results_file = Path(output_dir) / "comprehensive_qc_results.json"
             
-            # Convert to JSON-serializable format
+            # Enhanced JSON serialization function
             def convert_for_json(obj):
+                """Convert numpy/pandas objects to JSON-serializable types"""
                 if isinstance(obj, (np.int_, np.intc, np.intp, np.int8, np.int16, np.int32, np.int64)):
                     return int(obj)
                 elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
@@ -2090,17 +2115,28 @@ class EnhancedQC:
                     return obj.tolist()
                 elif isinstance(obj, (pd.DataFrame, pd.Series)):
                     return obj.to_dict()
+                elif isinstance(obj, (np.bool_, bool)):
+                    return bool(obj)  # Handle both numpy and Python bool
+                elif isinstance(obj, (np.void, type(None))):
+                    return None
+                elif hasattr(obj, 'dtype') and obj.dtype == bool:
+                    return bool(obj)
                 return obj
             
-            serializable_results = {}
-            for key, value in qc_results.items():
-                if isinstance(value, dict):
-                    serializable_results[key] = {k: convert_for_json(v) for k, v in value.items()}
+            def recursive_convert(obj):
+                """Recursively convert all objects in nested structures"""
+                if isinstance(obj, dict):
+                    return {k: recursive_convert(v) for k, v in obj.items()}
+                elif isinstance(obj, (list, tuple)):
+                    return [recursive_convert(item) for item in obj]
                 else:
-                    serializable_results[key] = convert_for_json(value)
+                    return convert_for_json(obj)
+            
+            # Apply recursive conversion to ensure all objects are JSON serializable
+            serializable_results = recursive_convert(qc_results)
             
             with open(results_file, 'w') as f:
-                json.dump(serializable_results, f, indent=2)
+                json.dump(serializable_results, f, indent=2, default=str)
             
             logger.info(f"💾 QC results saved: {results_file}")
             

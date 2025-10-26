@@ -28,37 +28,89 @@ import json
 from typing import Dict, List, Tuple, Optional, Union, Any
 import sys
 
-# Import tensorQTL with comprehensive error handling
+# Set up basic logger first for import errors
+if 'logger' not in locals():
+    logger = logging.getLogger('QTLPipeline')
+    if not logger.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Import tensorQTL with comprehensive error handling and better diagnostics
+TENSORQTL_AVAILABLE = False
+CALCULATE_QVALUES_AVAILABLE = False
+TENSORQTL_IMPORT_ERROR = None
+
 try:
-    import tensorqtl
-    from tensorqtl import genotypeio, cis, trans
-    import torch
-    
-    # Try different imports for calculate_qvalues based on tensorQTL version
+    # First try to import torch (required by tensorqtl)
     try:
-        # Alternative import for newer versions
-        from tensorqtl import calculate_qvalues
-        CALCULATE_QVALUES_AVAILABLE = True
-    except ImportError:
-        # Fallback to statsmodels for FDR calculation
-        from statsmodels.stats.multitest import multipletests
+        import torch
+        TORCH_AVAILABLE = True
+        logger.info(f"✅ PyTorch successfully imported (version: {torch.__version__})")
+        
+        # Check CUDA availability
+        if torch.cuda.is_available():
+            logger.info(f"🎮 CUDA is available: {torch.cuda.device_count()} GPU(s)")
+            for i in range(torch.cuda.device_count()):
+                logger.info(f"   - GPU {i}: {torch.cuda.get_device_name(i)}")
+        else:
+            logger.info("🔢 CUDA not available, using CPU")
+            
+    except ImportError as e:
+        TORCH_AVAILABLE = False
+        logger.error(f"❌ PyTorch import failed: {e}")
+        logger.error("Please install PyTorch: pip install torch")
+        raise
+
+    # Now try to import tensorqtl
+    try:
+        import tensorqtl
+        from tensorqtl import genotypeio, cis, trans
+        logger.info(f"✅ tensorQTL successfully imported (version: {tensorqtl.__version__})")
+        TENSORQTL_AVAILABLE = True
+        
+        # Enhanced calculate_qvalues import with multiple fallbacks
         CALCULATE_QVALUES_AVAILABLE = False
-        logger = logging.getLogger('QTLPipeline')
-        logger.warning("tensorqtl.utils.calculate_qvalues not available, using statsmodels fallback")
-    
-    TENSORQTL_AVAILABLE = True
-    # Initialize logger after import
-    if 'logger' not in locals():
-        logger = logging.getLogger('QTLPipeline')
-    logger.info("✅ tensorQTL successfully imported")
-    
-except ImportError as e:
-    # Initialize logger before using it
-    if 'logger' not in locals():
-        logger = logging.getLogger('QTLPipeline')
-    logger.error(f"❌ tensorQTL import failed: {e}")
+        calculate_qvalues = None
+        
+        # Try multiple import strategies for calculate_qvalues
+        import_strategies = [
+            # Strategy 1: Direct import from tensorqtl
+            lambda: __import__('tensorqtl').calculate_qvalues,
+            # Strategy 2: From tensorqtl.utils
+            lambda: __import__('tensorqtl.utils', fromlist=['calculate_qvalues']).calculate_qvalues,
+            # Strategy 3: Try to find it in the module
+            lambda: getattr(tensorqtl, 'calculate_qvalues', None),
+        ]
+        
+        for i, strategy in enumerate(import_strategies):
+            try:
+                calculate_qvalues = strategy()
+                if calculate_qvalues is not None:
+                    CALCULATE_QVALUES_AVAILABLE = True
+                    logger.info(f"✅ calculate_qvalues found using strategy {i+1}")
+                    break
+            except (ImportError, AttributeError) as e:
+                logger.debug(f"❌ Import strategy {i+1} failed: {e}")
+                continue
+        
+        if not CALCULATE_QVALUES_AVAILABLE:
+            # Try statsmodels as final fallback
+            try:
+                from statsmodels.stats.multitest import multipletests
+                logger.info("✅ Using statsmodels for FDR calculation")
+                # We'll create a wrapper function later
+            except ImportError:
+                logger.warning("❌ Neither tensorqtl.calculate_qvalues nor statsmodels available")
+        
+    except ImportError as e:
+        TENSORQTL_AVAILABLE = False
+        TENSORQTL_IMPORT_ERROR = str(e)
+        logger.error(f"❌ tensorQTL import failed: {e}")
+        logger.error("Please install tensorqtl: pip install tensorqtl")
+        logger.error("If using GPU, try: pip install tensorqtl[gpu]")
+
+except Exception as e:
+    logger.error(f"❌ Unexpected error during tensorQTL import: {e}")
     TENSORQTL_AVAILABLE = False
-    CALCULATE_QVALUES_AVAILABLE = False
 
 # Import other dependencies with fallbacks
 try:
@@ -252,7 +304,7 @@ class HardwareOptimizer:
         }
         
         # Check GPU availability
-        if TENSORQTL_AVAILABLE:
+        if TENSORQTL_AVAILABLE and 'torch' in sys.modules:
             if torch.cuda.is_available():
                 device_info['gpu_available'] = True
                 device_info['gpu_count'] = torch.cuda.device_count()
@@ -272,8 +324,9 @@ class HardwareOptimizer:
     
     def setup_gpu(self):
         """Setup GPU configuration for optimal performance"""
-        if not TENSORQTL_AVAILABLE:
-            return None
+        if not TENSORQTL_AVAILABLE or 'torch' not in sys.modules:
+            logger.warning("⚠️ GPU setup skipped: tensorQTL or PyTorch not available")
+            return self.setup_cpu_optimized()
             
         try:
             # Set default tensor type to CUDA
@@ -299,8 +352,11 @@ class HardwareOptimizer:
         try:
             # Set CPU threads for optimal performance - use your config or auto-detect
             num_threads = self.performance_config.get('num_threads', min(16, os.cpu_count()))
-            torch.set_num_threads(num_threads)
-            torch.set_num_interop_threads(num_threads)
+            
+            # Only set torch threads if torch is available
+            if 'torch' in sys.modules:
+                torch.set_num_threads(num_threads)
+                torch.set_num_interop_threads(num_threads)
             
             # Set environment variables for OpenMP
             os.environ['OMP_NUM_THREADS'] = str(num_threads)
@@ -308,7 +364,7 @@ class HardwareOptimizer:
             
             logger.info(f"🔢 Using {num_threads} CPU threads for tensor operations")
             
-            return torch.device('cpu')
+            return None  # Return None for CPU device
             
         except Exception as e:
             logger.warning(f"⚠️ CPU optimization failed: {e}")
@@ -979,7 +1035,13 @@ class GenotypeLoader:
         logger.info("🔧 Loading genotype data for tensorQTL...")
         
         if not TENSORQTL_AVAILABLE:
-            raise ImportError("tensorQTL is not available. Please install: pip install tensorqtl")
+            error_msg = "tensorQTL is not available. "
+            if TENSORQTL_IMPORT_ERROR:
+                error_msg += f"Import error: {TENSORQTL_IMPORT_ERROR}. "
+            error_msg += "Please install: pip install tensorqtl"
+            if TENSORQTL_IMPORT_ERROR and "torch" in TENSORQTL_IMPORT_ERROR.lower():
+                error_msg += " and make sure PyTorch is installed: pip install torch"
+            raise ImportError(error_msg)
         
         try:
             if genotype_file.endswith('.bed'):
@@ -1126,23 +1188,51 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
         return None
 
 def calculate_fdr(pvalues, method='bh'):
-    """Calculate FDR using available methods"""
-    if CALCULATE_QVALUES_AVAILABLE:
+    """Calculate FDR using available methods with enhanced fallbacks"""
+    # Try tensorQTL calculate_qvalues first if available
+    if CALCULATE_QVALUES_AVAILABLE and TENSORQTL_AVAILABLE:
         try:
-            return calculate_qvalues(pvalues)
-        except:
-            # Fallback to statsmodels if tensorQTL method fails
-            pass
+            # Dynamically import calculate_qvalues if not already available
+            if 'calculate_qvalues' not in globals():
+                # Try multiple import strategies
+                try:
+                    from tensorqtl import calculate_qvalues
+                except ImportError:
+                    try:
+                        from tensorqtl.utils import calculate_qvalues
+                    except ImportError:
+                        # Try to get it from the main tensorqtl module
+                        import tensorqtl
+                        calculate_qvalues = getattr(tensorqtl, 'calculate_qvalues', None)
+            
+            if calculate_qvalues is not None:
+                return calculate_qvalues(pvalues)
+            else:
+                raise ImportError("calculate_qvalues not found in tensorqtl")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ tensorQTL calculate_qvalues failed, using statsmodels: {e}")
     
     # Use statsmodels as fallback
-    from statsmodels.stats.multitest import multipletests
-    _, fdr, _, _ = multipletests(pvalues, method=method)
-    return fdr
+    try:
+        from statsmodels.stats.multitest import multipletests
+        _, fdr, _, _ = multipletests(pvalues, method=method)
+        return fdr
+    except ImportError:
+        logger.error("❌ Neither tensorqtl.calculate_qvalues nor statsmodels available for FDR calculation")
+        # Return raw pvalues if no FDR method is available
+        return pvalues
 
 def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
     """Run cis-QTL analysis using tensorQTL with enhanced error handling and performance"""
     if not TENSORQTL_AVAILABLE:
-        raise ImportError("tensorQTL is not available. Please install it: pip install tensorqtl")
+        error_msg = "tensorQTL is not available. "
+        if TENSORQTL_IMPORT_ERROR:
+            error_msg += f"Import error: {TENSORQTL_IMPORT_ERROR}. "
+        error_msg += "Please install it: pip install tensorqtl"
+        if TENSORQTL_IMPORT_ERROR and "torch" in TENSORQTL_IMPORT_ERROR.lower():
+            error_msg += " and make sure PyTorch is installed: pip install torch"
+        raise ImportError(error_msg)
     
     logger.info(f"🔍 Running {qtl_type} cis-QTL analysis with tensorQTL...")
     
@@ -1219,7 +1309,7 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         logger.info(f"✅ {qtl_type} cis: Found {significant_count} significant associations")
         
         # Clean up GPU memory if used
-        if params['use_gpu'] and TENSORQTL_AVAILABLE:
+        if params['use_gpu'] and TENSORQTL_AVAILABLE and 'torch' in sys.modules:
             torch.cuda.empty_cache()
         
         return {
@@ -1244,7 +1334,13 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
 def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
     """Run trans-QTL analysis using tensorQTL with enhanced performance and memory optimization"""
     if not TENSORQTL_AVAILABLE:
-        raise ImportError("tensorQTL is not available. Please install it: pip install tensorqtl")
+        error_msg = "tensorQTL is not available. "
+        if TENSORQTL_IMPORT_ERROR:
+            error_msg += f"Import error: {TENSORQTL_IMPORT_ERROR}. "
+        error_msg += "Please install it: pip install tensorqtl"
+        if TENSORQTL_IMPORT_ERROR and "torch" in TENSORQTL_IMPORT_ERROR.lower():
+            error_msg += " and make sure PyTorch is installed: pip install torch"
+        raise ImportError(error_msg)
     
     logger.info(f"🔍 Running {qtl_type} trans-QTL analysis with tensorQTL...")
     
@@ -1316,7 +1412,7 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         logger.info(f"✅ {qtl_type} trans: Found {significant_count} significant associations")
         
         # Clean up GPU memory if used
-        if params['use_gpu'] and TENSORQTL_AVAILABLE:
+        if params['use_gpu'] and TENSORQTL_AVAILABLE and 'torch' in sys.modules:
             torch.cuda.empty_cache()
         
         return {
@@ -1503,7 +1599,7 @@ def run_qtl_mapping(config, genotype_file, qtl_type, results_dir, analysis_mode=
 # Performance monitoring utilities
 def monitor_performance():
     """Monitor current performance metrics"""
-    if TENSORQTL_AVAILABLE:
+    if TENSORQTL_AVAILABLE and 'torch' in sys.modules:
         gpu_memory = None
         if torch.cuda.is_available():
             gpu_memory = torch.cuda.memory_allocated() / (1024**3)  # GB

@@ -8,16 +8,16 @@ results_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/results"
 # MANDATORY: Input files section
 input_files:
   # Genotype file - supports VCF, VCF.GZ, BCF, PLINK BED formats
-  genotypes: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/cohort.filtered.samples.vcf.gz"
+  genotypes: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data/genotypes.vcf.gz"
   
   # Covariates file (tab-separated)
-  covariates: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/covariate.txt"
+  covariates: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data/covariates.txt"
   
   # Annotation file (BED format)
-  annotations: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/annotations.bed"
+  annotations: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data/annotations.bed"
   
   # Phenotype files
-  expression: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input/rnseq_count.tsv"
+  expression: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data/expression.tsv"
   protein: ""
   splicing: ""
 

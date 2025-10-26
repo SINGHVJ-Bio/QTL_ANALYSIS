@@ -80,13 +80,21 @@ class NormalizationComparison:
             
             # Run comparisons in parallel where possible
             if self.parallel_processing:
-                comparison_results.update(self._run_parallel_comparisons(
+                parallel_results = self._run_parallel_comparisons(
                     raw_data, normalized_data, qtl_type, normalization_method, qtl_dir
-                ))
+                )
+                comparison_results.update(parallel_results)
+                # Ensure plots_generated is maintained
+                if 'plots_generated' in parallel_results:
+                    comparison_results['plots_generated'].extend(parallel_results['plots_generated'])
             else:
-                comparison_results.update(self._run_sequential_comparisons(
+                sequential_results = self._run_sequential_comparisons(
                     raw_data, normalized_data, qtl_type, normalization_method, qtl_dir
-                ))
+                )
+                comparison_results.update(sequential_results)
+                # Ensure plots_generated is maintained
+                if 'plots_generated' in sequential_results:
+                    comparison_results['plots_generated'].extend(sequential_results['plots_generated'])
             
             # Generate comprehensive HTML report
             html_report = self.generate_comparison_html_report(comparison_results, qtl_type, qtl_dir)
@@ -101,7 +109,7 @@ class NormalizationComparison:
             
         except Exception as e:
             logger.error(f"❌ Error generating normalization comparison for {qtl_type}: {e}")
-            return {}
+            return {'plots_generated': []}
     
     def _sample_data_for_performance(self, raw_data, normalized_data):
         """Sample data for performance optimization"""
@@ -132,7 +140,7 @@ class NormalizationComparison:
     
     def _run_parallel_comparisons(self, raw_data, normalized_data, qtl_type, method, output_dir):
         """Run comparison tasks in parallel"""
-        results = {}
+        results = {'plots_generated': []}
         
         # Define tasks for parallel execution
         tasks = [
@@ -1373,11 +1381,11 @@ def run_normalization_comparison(config, qtl_type, raw_data, normalized_data, no
             return comparison_results
         else:
             logger.error(f"❌ Normalization comparison failed for {qtl_type}")
-            return {}
+            return {'plots_generated': []}
             
     except Exception as e:
         logger.error(f"❌ Normalization comparison module failed: {e}")
-        return {}
+        return {'plots_generated': []}
 
 # Maintain backward compatibility
 if __name__ == "__main__":
