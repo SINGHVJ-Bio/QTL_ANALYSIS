@@ -2,7 +2,7 @@
 """
 Final optimized pipeline to prepare QTL input files for tensorQTL
 Generates both BED and TSV expression files, BED + TSV phenotype files, and annotations BED
-Supports both TSV and CSV input files
+Supports both TSV and CSV input files with automatic encoding detection
 """
 
 import pandas as pd
@@ -16,6 +16,7 @@ import sys
 import tempfile
 import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
+import chardet
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -98,6 +99,52 @@ class FinalInputBuilder:
             logger.error(f"Error output: {e.stderr}")
             raise
     
+    def detect_encoding(self, file_path):
+        """Detect file encoding using chardet"""
+        try:
+            with open(file_path, 'rb') as f:
+                raw_data = f.read()
+                result = chardet.detect(raw_data)
+                encoding = result['encoding']
+                confidence = result['confidence']
+                logger.info(f"Detected encoding for {file_path}: {encoding} (confidence: {confidence:.2f})")
+                return encoding
+        except Exception as e:
+            logger.warning(f"Could not detect encoding for {file_path}: {e}, defaulting to utf-8")
+            return 'utf-8'
+    
+    def read_csv_with_encoding_fallback(self, file_path, sep, **kwargs):
+        """Read CSV/TSV file with encoding fallback"""
+        encodings_to_try = ['utf-8', 'latin-1', 'windows-1252', 'iso-8859-1']
+        
+        for encoding in encodings_to_try:
+            try:
+                logger.info(f"Trying to read {file_path} with encoding: {encoding}")
+                df = pd.read_csv(file_path, sep=sep, encoding=encoding, **kwargs)
+                logger.info(f"✅ Successfully read {file_path} with {encoding} encoding")
+                return df
+            except UnicodeDecodeError as e:
+                logger.warning(f"Failed to read {file_path} with {encoding}: {e}")
+                continue
+            except Exception as e:
+                logger.warning(f"Unexpected error reading {file_path} with {encoding}: {e}")
+                continue
+        
+        # If all else fails, try with encoding detection
+        try:
+            detected_encoding = self.detect_encoding(file_path)
+            if detected_encoding and detected_encoding not in encodings_to_try:
+                logger.info(f"Trying detected encoding: {detected_encoding}")
+                df = pd.read_csv(file_path, sep=sep, encoding=detected_encoding, **kwargs)
+                logger.info(f"✅ Successfully read {file_path} with detected encoding {detected_encoding}")
+                return df
+        except Exception as e:
+            logger.error(f"Failed to read with detected encoding: {e}")
+        
+        # Final fallback with error replacement
+        logger.warning("Using final fallback with error replacement")
+        return pd.read_csv(file_path, sep=sep, encoding='utf-8', errors='replace', **kwargs)
+    
     def normalize_ids(self, s):
         """Normalize sample IDs for consistency"""
         return s.astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
@@ -128,9 +175,9 @@ class FinalInputBuilder:
         logger.info("Creating annotations.bed file...")
         
         try:
-            # Load GTF data with configurable separator
+            # Load GTF data with configurable separator and encoding handling
             logger.info(f"Reading GTF table with separator: '{self.gtf_table_sep}'")
-            gtf_df = pd.read_csv(self.gtf_table, sep=self.gtf_table_sep)
+            gtf_df = self.read_csv_with_encoding_fallback(self.gtf_table, self.gtf_table_sep)
             
             # Get annotation configuration
             annotation_config = self.config['annotations']
@@ -176,18 +223,18 @@ class FinalInputBuilder:
         """Process expression data - creates both BED and TSV files"""
         logger.info("Processing expression data...")
         
-        # Load files in parallel with configurable separators
+        # Load files in parallel with configurable separators and encoding handling
         def load_count_data():
             logger.info(f"Reading count file with separator: '{self.count_file_sep}'")
-            return pd.read_csv(self.count_file, sep=self.count_file_sep)
+            return self.read_csv_with_encoding_fallback(self.count_file, self.count_file_sep)
         
         def load_meta_data():
             logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
-            return pd.read_csv(self.meta_file, sep=self.meta_file_sep)
+            return self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep)
         
         def load_gtf_data():
             logger.info(f"Reading GTF file with separator: '{self.gtf_table_sep}'")
-            return pd.read_csv(self.gtf_table, sep=self.gtf_table_sep)
+            return self.read_csv_with_encoding_fallback(self.gtf_table, self.gtf_table_sep)
         
         with ThreadPoolExecutor(max_workers=3) as executor:
             count_future = executor.submit(load_count_data)
@@ -290,7 +337,7 @@ class FinalInputBuilder:
         
         try:
             logger.info(f"Reading PCA file with separator: '{self.pca_file_sep}'")
-            pca_df = pd.read_csv(self.pca_file, sep=self.pca_file_sep, header=None, engine='python')
+            pca_df = self.read_csv_with_encoding_fallback(self.pca_file, self.pca_file_sep, header=None, engine='python')
             pca_count = self.config['covariates'].get('pca_count', 5)
             
             # Assign column names
@@ -311,7 +358,7 @@ class FinalInputBuilder:
         logger.info("Building covariate file...")
         
         logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
-        meta_df = pd.read_csv(self.meta_file, sep=self.meta_file_sep, low_memory=False)
+        meta_df = self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep, low_memory=False)
         metadata_config = self.config['metadata_columns']
         wgs_col = metadata_config['wgs_library']
         
@@ -370,7 +417,7 @@ class FinalInputBuilder:
         logger.info("Creating phenotype data...")
         
         logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
-        meta_df = pd.read_csv(self.meta_file, sep=self.meta_file_sep, low_memory=False)
+        meta_df = self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep, low_memory=False)
         metadata_config = self.config['metadata_columns']
         wgs_col = metadata_config['wgs_library']
         
@@ -453,7 +500,7 @@ class FinalInputBuilder:
         logger.info("Creating sample mapping file...")
         
         logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
-        meta_df = pd.read_csv(self.meta_file, sep=self.meta_file_sep, low_memory=False)
+        meta_df = self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep, low_memory=False)
         metadata_config = self.config['metadata_columns']
         rnaseq_col = metadata_config['rnaseq_library']
         wgs_col = metadata_config['wgs_library']
