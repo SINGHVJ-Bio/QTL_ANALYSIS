@@ -1,6 +1,13 @@
 # Run input data build pipeline
 # --------------------------- #
-python build_input.py --config input_build_config.yaml
+# Use config settings (8 threads)
+python build_input_fast.py --config input_build_config.yaml
+
+# Override to use all available cores
+python build_input_fast.py --config input_build_config.yaml --threads 0
+
+# Use specific number of threads
+python build_input_fast.py --config input_build_config.yaml --threads 16
 
 # The pipeline will now create:
 # - phenotype.tsv: Phenotype data for GWAS analysis

@@ -365,10 +365,16 @@ class QTLPipeline:
             # Get QTL types for QC
             qtl_types = self.get_qtl_types()
             
-            # Run comprehensive QC - FIXED: Pass qtl_types instead of phenotype_files
+            # Build phenotype_files dictionary for backward compatibility
+            phenotype_files = {}
+            for qtl_type in qtl_types:
+                config_key = self.map_qtl_type_to_config_key(qtl_type)
+                phenotype_files[qtl_type] = self.config['input_files'].get(config_key)
+            
+            # Run comprehensive QC - FIXED: Pass phenotype_files dictionary
             qc_results = qc_processor.run_comprehensive_qc(
                 self.config['input_files']['genotypes'],
-                qtl_types,  # FIX: Pass list of qtl_types, not phenotype_files dict
+                phenotype_files,  # FIX: Pass phenotype_files dict for backward compatibility
                 self.results_dir
             )
             

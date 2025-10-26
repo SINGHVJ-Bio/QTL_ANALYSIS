@@ -7,6 +7,7 @@ Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
 Enhanced with modular pipeline support and function exports.
+Updated for tensorQTL compatibility with proper sample alignment and format handling.
 """
 
 import os
@@ -28,9 +29,10 @@ class GenotypeProcessor:
         self.config = config
         self.processing_config = config.get('genotype_processing', {})
         self.large_data_config = config.get('large_data', {})
+        self.tensorqtl_config = config.get('tensorqtl', {})
         
     def process_genotypes(self, input_file, output_dir):
-        """Main genotype processing function with comprehensive QC"""
+        """Main genotype processing function with comprehensive QC and tensorQTL optimization"""
         logger.info(f"🔧 Processing genotype file: {input_file}")
         
         # Create processing directory
@@ -45,51 +47,61 @@ class GenotypeProcessor:
         input_format = self.detect_input_format(input_file)
         logger.info(f"📁 Detected input format: {input_format}")
         
-        # Step 2: For large VCF files, convert directly to PLINK format
+        # Step 2: For tensorQTL, always prefer PLINK format for optimal performance
         if self.should_use_plink(input_file, input_format):
-            logger.info("🔄 Large dataset detected - using PLINK format for efficiency")
+            logger.info("🎯 Using PLINK format for optimal tensorQTL performance")
             plink_base = self.convert_to_plink_direct(input_file, process_dir, input_format)
-            return plink_base
-        
-        # Step 3: Standard processing for smaller files
-        standardized_file = self.standardize_format(input_file, process_dir, input_format)
-        
-        # Step 4: Apply comprehensive pre-processing
-        processed_file = self.apply_preprocessing(standardized_file, process_dir)
-        
-        # Step 5: Generate QC reports
-        self.generate_qc_reports(processed_file, process_dir)
-        
-        # Step 6: Prepare final file
-        final_file = self.prepare_final_file(processed_file, process_dir)
+            
+            # Apply tensorQTL-optimized preprocessing
+            processed_base = self.apply_tensorqtl_optimized_processing(plink_base, process_dir)
+            
+            # Generate QC reports with tensorQTL compatibility info
+            self.generate_tensorqtl_qc_reports(processed_base, process_dir)
+            
+            # Prepare final file for tensorQTL
+            final_file = self.prepare_tensorqtl_final_file(processed_base, process_dir)
+        else:
+            # Step 3: Standard processing for smaller files (maintain backward compatibility)
+            logger.info("🔧 Using standard processing for smaller files")
+            standardized_file = self.standardize_format(input_file, process_dir, input_format)
+            
+            # Step 4: Apply comprehensive pre-processing
+            processed_file = self.apply_preprocessing(standardized_file, process_dir)
+            
+            # Step 5: Generate QC reports
+            self.generate_qc_reports(processed_file, process_dir)
+            
+            # Step 6: Prepare final file
+            final_file = self.prepare_final_file(processed_file, process_dir)
         
         logger.info(f"✅ Genotype processing completed: {final_file}")
         return final_file
     
     def should_use_plink(self, input_file, input_format):
-        """Determine if we should use PLINK format for efficiency"""
-        # For tensorQTL, always prefer PLINK format
+        """Determine if we should use PLINK format for efficiency - Enhanced for tensorQTL"""
+        # For tensorQTL, always prefer PLINK format for optimal performance
         use_plink = (
             self.large_data_config.get('force_plink', True) or  # Changed default to True
             self.processing_config.get('prefer_plink', True) or
-            True  # Always use PLINK for tensorQTL
+            self.tensorqtl_config.get('prefer_plink', True) or
+            True  # Always use PLINK for tensorQTL for best performance
         )
         
         if use_plink:
             file_size_gb = os.path.getsize(input_file) / (1024**3)
-            logger.info(f"📊 Using PLINK format for tensorQTL compatibility ({file_size_gb:.1f} GB)")
+            logger.info(f"📊 Using PLINK format for optimal tensorQTL performance ({file_size_gb:.1f} GB)")
         
         return use_plink
     
     def convert_to_plink_direct(self, input_file, output_dir, input_format):
-        """Convert directly to PLINK format for large datasets"""
-        logger.info("🔄 Converting directly to PLINK format for large dataset...")
+        """Convert directly to PLINK format for large datasets - Enhanced for tensorQTL"""
+        logger.info("🔄 Converting directly to PLINK format for tensorQTL optimization...")
         
         plink_base = os.path.join(output_dir, "genotypes")
         
         if input_format in ['vcf', 'vcf.gz', 'bcf']:
-            # Convert VCF to PLINK with chunking for large files
-            self.convert_vcf_to_plink_chunked(input_file, plink_base)
+            # Convert VCF to PLINK with tensorQTL optimization
+            self.convert_vcf_to_plink_tensorqtl(input_file, plink_base)
         elif input_format == 'plink_bed':
             # Already in PLINK format, just ensure all files exist
             base_name = input_file.replace('.bed', '')
@@ -104,16 +116,389 @@ class GenotypeProcessor:
                 dst = f"{plink_base}{ext}"
                 self.run_command(f"cp {src} {dst}", f"Copying {ext} file")
         else:
-            raise ValueError(f"Cannot convert {input_format} directly to PLINK")
+            raise ValueError(f"Cannot convert {input_format} directly to PLINK for tensorQTL")
         
-        # Apply PLINK-specific filters
-        filtered_base = self.apply_plink_filters(plink_base, output_dir)
+        logger.info(f"✅ PLINK conversion completed for tensorQTL: {plink_base}")
+        return plink_base    
+    def convert_vcf_to_plink_tensorqtl(self, vcf_file, plink_base):
+        """Convert VCF to PLINK with tensorQTL-optimized parameters"""
+        logger.info("🔧 Converting VCF to PLINK with tensorQTL optimization...")
         
-        logger.info(f"✅ PLINK conversion completed: {filtered_base}")
+        # First, get chromosome list for parallel processing
+        chromosomes = self.get_chromosomes_from_vcf(vcf_file)
+        logger.info(f"📊 Found chromosomes: {', '.join(chromosomes)}")
+        
+        if len(chromosomes) > 1 and self.large_data_config.get('process_by_chromosome', True):
+            # Process by chromosome in parallel for large datasets
+            self.process_by_chromosome_tensorqtl(vcf_file, plink_base, chromosomes)
+        else:
+            # Process entire file at once with tensorQTL-optimized parameters
+            plink_threads = self.processing_config.get('plink_threads', 4)
+            self.run_command(
+                f"{self.config['paths']['plink']} --vcf {vcf_file} --make-bed "
+                f"--out {plink_base} --threads {plink_threads}",
+                "Converting VCF to PLINK for tensorQTL"
+            )
+    
+    def process_by_chromosome_tensorqtl(self, vcf_file, plink_base, chromosomes):
+        """Process VCF by chromosome in parallel with tensorQTL optimization"""
+        logger.info(f"🔧 Processing {len(chromosomes)} chromosomes for tensorQTL...")
+        
+        max_workers = min(len(chromosomes), self.config['performance'].get('num_threads', 4))
+        
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            
+            for chrom in chromosomes:
+                chrom_base = f"{plink_base}_chr{chrom}"
+                future = executor.submit(self.process_single_chromosome_tensorqtl, vcf_file, chrom_base, chrom)
+                futures[future] = chrom
+            
+            # Wait for completion
+            for future in as_completed(futures):
+                chrom = futures[future]
+                try:
+                    future.result()
+                    logger.info(f"✅ Chromosome {chrom} processed for tensorQTL")
+                except Exception as e:
+                    logger.error(f"❌ Chromosome {chrom} failed: {e}")
+                    raise
+        
+        # Merge all chromosome files with tensorQTL-optimized parameters
+        self.merge_plink_files_tensorqtl(plink_base, chromosomes)
+        
+        # Clean up temporary chromosome files
+        self.cleanup_chromosome_files(plink_base, chromosomes)
+    
+    def process_single_chromosome_tensorqtl(self, vcf_file, output_base, chromosome):
+        """Process a single chromosome with tensorQTL optimization"""
+        plink_threads = self.processing_config.get('plink_threads', 2)
+        cmd = (
+            f"{self.config['paths']['plink']} --vcf {vcf_file} "
+            f"--chr {chromosome} --make-bed --out {output_base} --threads {plink_threads}"
+        )
+        self.run_command(cmd, f"Processing chromosome {chromosome} for tensorQTL")
+    
+    def merge_plink_files_tensorqtl(self, plink_base, chromosomes):
+        """Merge PLINK files from all chromosomes with tensorQTL optimization"""
+        logger.info("🔧 Merging chromosome files for tensorQTL...")
+        
+        # Create merge list
+        merge_list_file = f"{plink_base}_merge_list.txt"
+        with open(merge_list_file, 'w') as f:
+            for chrom in chromosomes:
+                f.write(f"{plink_base}_chr{chrom}\n")
+        
+        # Merge using PLINK with optimized parameters
+        plink_threads = self.processing_config.get('plink_threads', 4)
+        self.run_command(
+            f"{self.config['paths']['plink']} --merge-list {merge_list_file} "
+            f"--make-bed --out {plink_base} --threads {plink_threads}",
+            "Merging chromosome files for tensorQTL"
+        )
+        
+        # Remove merge list
+        os.remove(merge_list_file)
+    
+    def apply_tensorqtl_optimized_processing(self, plink_base, output_dir):
+        """Apply tensorQTL-optimized processing and filtering"""
+        logger.info("🔧 Applying tensorQTL-optimized processing...")
+        
+        filtered_base = os.path.join(output_dir, "filtered_genotypes_tensorqtl")
+        
+        # Start with basic filter command
+        filter_cmd = f"{self.config['paths']['plink']} --bfile {plink_base}"
+        
+        # Apply tensorQTL-recommended filters
+        # MAF filter - tensorQTL default is 0.05, but we use config value
+        min_maf = self.tensorqtl_config.get('min_maf', self.processing_config.get('min_maf', 0.01))
+        filter_cmd += f" --maf {min_maf}"
+        
+        # Call rate filter
+        min_call_rate = self.processing_config.get('min_call_rate', 0.95)
+        filter_cmd += f" --geno {1 - min_call_rate}"
+        
+        # HWE filter - important for tensorQTL quality
+        hwe_threshold = self.processing_config.get('hwe_threshold', 1e-6)
+        filter_cmd += f" --hwe {hwe_threshold}"
+        
+        # Sample missingness filter
+        sample_missing_threshold = self.processing_config.get('max_missing', 0.1)
+        filter_cmd += f" --mind {sample_missing_threshold}"
+        
+        # Final output
+        filter_cmd += f" --make-bed --out {filtered_base}"
+        
+        # Add threads for performance
+        plink_threads = self.processing_config.get('plink_threads', 4)
+        filter_cmd += f" --threads {plink_threads}"
+        
+        self.run_command(filter_cmd, "Applying tensorQTL-optimized filters")
+        
+        # Extract and save sample list for tensorQTL alignment
+        self.extract_tensorqtl_sample_list(filtered_base, output_dir)
+        
         return filtered_base
     
+    def extract_tensorqtl_sample_list(self, plink_base, output_dir):
+        """Extract and save sample list for tensorQTL sample alignment"""
+        try:
+            # Read FAM file to get sample list
+            fam_file = f"{plink_base}.fam"
+            if os.path.exists(fam_file):
+                fam_df = pd.read_csv(fam_file, sep='\s+', header=None, names=['FID', 'IID', 'PID', 'MID', 'Sex', 'Pheno'])
+                samples = fam_df['IID'].tolist()
+                
+                # Save sample list for tensorQTL
+                sample_file = os.path.join(output_dir, "tensorqtl_samples.txt")
+                with open(sample_file, 'w') as f:
+                    for sample in samples:
+                        f.write(f"{sample}\n")
+                
+                logger.info(f"✅ Extracted {len(samples)} samples for tensorQTL alignment")
+                return samples
+            else:
+                logger.warning("❌ FAM file not found for sample extraction")
+                return []
+        except Exception as e:
+            logger.warning(f"❌ Could not extract tensorQTL sample list: {e}")
+            return []
+    
+    def generate_tensorqtl_qc_reports(self, plink_base, output_dir):
+        """Generate comprehensive QC reports with tensorQTL compatibility info"""
+        logger.info("📊 Generating tensorQTL QC reports...")
+        
+        qc_dir = os.path.join(output_dir, "tensorqtl_qc_reports")
+        os.makedirs(qc_dir, exist_ok=True)
+        
+        # Basic stats using PLINK
+        self.run_command(
+            f"{self.config['paths']['plink']} --bfile {plink_base} --freq --out {plink_base}_maf",
+            "Generating MAF statistics"
+        )
+        
+        self.run_command(
+            f"{self.config['paths']['plink']} --bfile {plink_base} --missing --out {plink_base}_missing",
+            "Generating missingness statistics"
+        )
+        
+        self.run_command(
+            f"{self.config['paths']['plink']} --bfile {plink_base} --hardy --out {plink_base}_hwe",
+            "Generating HWE statistics"
+        )
+        
+        # Generate tensorQTL compatibility report
+        self.generate_tensorqtl_compatibility_report(plink_base, qc_dir)
+        
+        logger.info("✅ TensorQTL QC reports generated")
+    
+    def generate_tensorqtl_compatibility_report(self, plink_base, output_dir):
+        """Generate tensorQTL-specific compatibility report"""
+        try:
+            report_file = os.path.join(output_dir, "tensorqtl_compatibility_report.html")
+            
+            # Gather statistics
+            stats = self.gather_tensorqtl_stats(plink_base)
+            
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>TensorQTL Genotype Compatibility Report</title>
+                <meta charset="UTF-8">
+                <style>
+                    body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                    .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; }}
+                    .good {{ color: green; }}
+                    .warning {{ color: orange; }}
+                    .error {{ color: red; }}
+                    table {{ width: 100%; border-collapse: collapse; }}
+                    th, td {{ padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }}
+                </style>
+            </head>
+            <body>
+                <h1>TensorQTL Genotype Compatibility Report</h1>
+                <p>Generated on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                
+                <div class="section">
+                    <h2>Compatibility Summary</h2>
+                    <table>
+                        <tr><th>Metric</th><th>Value</th><th>Status</th><th>Recommendation</th></tr>
+                        <tr>
+                            <td>Format</td>
+                            <td>PLINK BED</td>
+                            <td class="good">✅ Optimal</td>
+                            <td>Perfect for tensorQTL</td>
+                        </tr>
+                        <tr>
+                            <td>Sample Count</td>
+                            <td>{stats.get('samples', 'N/A')}</td>
+                            <td class="{'good' if stats.get('samples', 0) > 50 else 'warning'}">
+                                {'✅ Sufficient' if stats.get('samples', 0) > 50 else '⚠️ Low'}
+                            </td>
+                            <td>{'Adequate for QTL analysis' if stats.get('samples', 0) > 50 else 'Consider increasing sample size'}</td>
+                        </tr>
+                        <tr>
+                            <td>Variant Count</td>
+                            <td>{stats.get('variants', 'N/A')}</td>
+                            <td class="{'good' if stats.get('variants', 0) > 100000 else 'warning'}">
+                                {'✅ Sufficient' if stats.get('variants', 0) > 100000 else '⚠️ Low'}
+                            </td>
+                            <td>{'Good variant density' if stats.get('variants', 0) > 100000 else 'Consider imputation'}</td>
+                        </tr>
+                        <tr>
+                            <td>MAF Distribution</td>
+                            <td>Mean: {stats.get('mean_maf', 'N/A')}</td>
+                            <td class="{'good' if stats.get('mean_maf', 0) > 0.05 else 'warning'}">
+                                {'✅ Good' if stats.get('mean_maf', 0) > 0.05 else '⚠️ Low diversity'}
+                            </td>
+                            <td>{'Good genetic diversity' if stats.get('mean_maf', 0) > 0.05 else 'Common in specific populations'}</td>
+                        </tr>
+                        <tr>
+                            <td>Missingness</td>
+                            <td>Max: {stats.get('max_missing', 'N/A')}</td>
+                            <td class="{'good' if stats.get('max_missing', 1) < 0.1 else 'warning'}">
+                                {'✅ Good' if stats.get('max_missing', 1) < 0.1 else '⚠️ High'}
+                            </td>
+                            <td>{'Good data quality' if stats.get('max_missing', 1) < 0.1 else 'Consider stricter filtering'}</td>
+                        </tr>
+                    </table>
+                </div>
+                
+                <div class="section">
+                    <h2>TensorQTL Recommendations</h2>
+                    <ul>
+                        <li><strong>Format:</strong> PLINK format is optimal for tensorQTL performance</li>
+                        <li><strong>Sample Alignment:</strong> Ensure sample IDs match phenotype and covariate files</li>
+                        <li><strong>MAF Threshold:</strong> Current setting: {self.tensorqtl_config.get('maf_threshold', 0.05)}</li>
+                        <li><strong>Cis Window:</strong> Current setting: {self.tensorqtl_config.get('cis_window', 1000000)} bp</li>
+                        <li><strong>Performance:</strong> Using {self.config['performance'].get('num_threads', 4)} CPU threads</li>
+                    </ul>
+                </div>
+            </body>
+            </html>
+            """
+            
+            with open(report_file, 'w') as f:
+                f.write(html_content)
+            
+            logger.info(f"✅ TensorQTL compatibility report generated: {report_file}")
+            
+        except Exception as e:
+            logger.warning(f"❌ Could not generate tensorQTL compatibility report: {e}")
+    
+    def gather_tensorqtl_stats(self, plink_base):
+        """Gather statistics for tensorQTL compatibility report"""
+        stats = {}
+        
+        try:
+            # Get sample count from FAM file
+            fam_file = f"{plink_base}.fam"
+            if os.path.exists(fam_file):
+                fam_df = pd.read_csv(fam_file, sep='\s+', header=None)
+                stats['samples'] = len(fam_df)
+            
+            # Get variant count from BIM file
+            bim_file = f"{plink_base}.bim"
+            if os.path.exists(bim_file):
+                bim_df = pd.read_csv(bim_file, sep='\s+', header=None)
+                stats['variants'] = len(bim_df)
+            
+            # Get MAF statistics
+            maf_file = f"{plink_base}_maf.frq"
+            if os.path.exists(maf_file):
+                maf_df = pd.read_csv(maf_file, sep='\s+')
+                stats['mean_maf'] = maf_df['MAF'].mean() if 'MAF' in maf_df.columns else 'N/A'
+            
+            # Get missingness statistics
+            missing_file = f"{plink_base}_missing.lmiss"
+            if os.path.exists(missing_file):
+                missing_df = pd.read_csv(missing_file, sep='\s+')
+                stats['max_missing'] = missing_df['F_MISS'].max() if 'F_MISS' in missing_df.columns else 'N/A'
+            
+        except Exception as e:
+            logger.warning(f"❌ Could not gather tensorQTL statistics: {e}")
+        
+        return stats
+    
+    def prepare_tensorqtl_final_file(self, plink_base, output_dir):
+        """Prepare final genotype file optimized for tensorQTL"""
+        final_base = os.path.join(output_dir, "final_genotypes_tensorqtl")
+        
+        # Copy to final location with tensorQTL-optimized name
+        for ext in ['.bed', '.bim', '.fam']:
+            src = f"{plink_base}{ext}"
+            dst = f"{final_base}{ext}"
+            if os.path.exists(src):
+                self.run_command(f"cp {src} {dst}", f"Creating final {ext} file")
+        
+        # Validate final files
+        self.validate_tensorqtl_files(final_base)
+        
+        # Log final statistics
+        self.log_tensorqtl_final_stats(final_base)
+        
+        return final_base + ".bed"
+    
+    def validate_tensorqtl_files(self, plink_base):
+        """Validate that all PLINK files exist and are readable for tensorQTL"""
+        logger.info("🔍 Validating tensorQTL genotype files...")
+        
+        required_files = [f"{plink_base}.bed", f"{plink_base}.bim", f"{plink_base}.fam"]
+        
+        for file_path in required_files:
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Required tensorQTL file not found: {file_path}")
+            
+            # Check file size
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                raise ValueError(f"TensorQTL file is empty: {file_path}")
+        
+        # Check if we can read the files
+        try:
+            # Read FAM file to check samples
+            fam_df = pd.read_csv(f"{plink_base}.fam", sep='\s+', header=None)
+            logger.info(f"✅ TensorQTL validation: {len(fam_df)} samples confirmed")
+            
+            # Read BIM file to check variants
+            bim_df = pd.read_csv(f"{plink_base}.bim", sep='\s+', header=None)
+            logger.info(f"✅ TensorQTL validation: {len(bim_df)} variants confirmed")
+            
+        except Exception as e:
+            raise ValueError(f"TensorQTL file validation failed: {e}")
+        
+        logger.info("✅ All tensorQTL genotype files validated successfully")
+    
+    def log_tensorqtl_final_stats(self, plink_base):
+        """Log final statistics for tensorQTL analysis"""
+        try:
+            # Read FAM file for sample count
+            fam_df = pd.read_csv(f"{plink_base}.fam", sep='\s+', header=None)
+            sample_count = len(fam_df)
+            
+            # Read BIM file for variant count
+            bim_df = pd.read_csv(f"{plink_base}.bim", sep='\s+', header=None)
+            variant_count = len(bim_df)
+            
+            # Calculate approximate file size
+            total_size = sum(os.path.getsize(f"{plink_base}{ext}") for ext in ['.bed', '.bim', '.fam'])
+            total_size_gb = total_size / (1024**3)
+            
+            logger.info(f"📊 TensorQTL Final Statistics:")
+            logger.info(f"   🧬 Samples: {sample_count}")
+            logger.info(f"   🧬 Variants: {variant_count}")
+            logger.info(f"   💾 Total size: {total_size_gb:.2f} GB")
+            logger.info(f"   🔧 Format: PLINK (optimized for tensorQTL)")
+            logger.info(f"   ⚡ Ready for tensorQTL analysis")
+            
+        except Exception as e:
+            logger.warning(f"❌ Could not log final tensorQTL statistics: {e}")
+    
+    # ORIGINAL FUNCTIONS - MAINTAINED FOR BACKWARD COMPATIBILITY
+    
     def convert_vcf_to_plink_chunked(self, vcf_file, plink_base):
-        """Convert VCF to PLINK with chunking for very large files"""
+        """Convert VCF to PLINK with chunking for very large files - ORIGINAL FUNCTION"""
         logger.info("🔧 Converting VCF to PLINK with chunking...")
         
         # First, get chromosome list
@@ -131,7 +516,7 @@ class GenotypeProcessor:
             )
     
     def get_chromosomes_from_vcf(self, vcf_file):
-        """Extract chromosome list from VCF file"""
+        """Extract chromosome list from VCF file - ORIGINAL FUNCTION"""
         logger.info("🔍 Extracting chromosome list...")
         
         cmd = f"{self.config['paths']['bcftools']} view -h {vcf_file} 2>/dev/null | "
@@ -157,7 +542,7 @@ class GenotypeProcessor:
             return ['1']  # Assume chromosome 1 if we can't determine
     
     def process_by_chromosome(self, vcf_file, plink_base, chromosomes):
-        """Process VCF by chromosome in parallel"""
+        """Process VCF by chromosome in parallel - ORIGINAL FUNCTION"""
         logger.info(f"🔧 Processing {len(chromosomes)} chromosomes...")
         
         max_workers = min(len(chromosomes), self.config['performance'].get('num_threads', 4))
@@ -187,7 +572,7 @@ class GenotypeProcessor:
         self.cleanup_chromosome_files(plink_base, chromosomes)
     
     def process_single_chromosome(self, vcf_file, output_base, chromosome):
-        """Process a single chromosome"""
+        """Process a single chromosome - ORIGINAL FUNCTION"""
         cmd = (
             f"{self.config['paths']['plink']} --vcf {vcf_file} "
             f"--chr {chromosome} --make-bed --out {output_base}"
@@ -195,7 +580,7 @@ class GenotypeProcessor:
         self.run_command(cmd, f"Processing chromosome {chromosome}")
     
     def merge_plink_files(self, plink_base, chromosomes):
-        """Merge PLINK files from all chromosomes"""
+        """Merge PLINK files from all chromosomes - ORIGINAL FUNCTION"""
         logger.info("🔧 Merging chromosome files...")
         
         # Create merge list
@@ -214,7 +599,7 @@ class GenotypeProcessor:
         os.remove(merge_list_file)
     
     def cleanup_chromosome_files(self, plink_base, chromosomes):
-        """Clean up temporary chromosome files"""
+        """Clean up temporary chromosome files - ORIGINAL FUNCTION"""
         for chrom in chromosomes:
             for ext in ['.bed', '.bim', '.fam', '.log']:
                 file_path = f"{plink_base}_chr{chrom}{ext}"
@@ -222,7 +607,7 @@ class GenotypeProcessor:
                     os.remove(file_path)
     
     def apply_plink_filters(self, plink_base, output_dir):
-        """Apply comprehensive filters to PLINK data"""
+        """Apply comprehensive filters to PLINK data - ORIGINAL FUNCTION"""
         logger.info("🔧 Applying PLINK filters...")
         
         filtered_base = os.path.join(output_dir, "filtered_genotypes")
@@ -249,7 +634,7 @@ class GenotypeProcessor:
         return filtered_base
     
     def check_system_resources(self):
-        """Check if system has sufficient resources for large dataset processing"""
+        """Check if system has sufficient resources for large dataset processing - ORIGINAL FUNCTION"""
         logger.info("🔍 Checking system resources...")
         
         # Check memory
@@ -270,7 +655,7 @@ class GenotypeProcessor:
         logger.info(f"✅ System check: {memory_gb:.1f} GB RAM, {free_space_gb:.1f} GB disk free")
     
     def validate_input_file(self, input_file):
-        """Validate input genotype file"""
+        """Validate input genotype file - ENHANCED for tensorQTL"""
         if not os.path.exists(input_file):
             raise FileNotFoundError(f"Genotype file not found: {input_file}")
         
@@ -281,12 +666,18 @@ class GenotypeProcessor:
         
         logger.info(f"📊 Input file size: {file_size:.2f} GB")
         
+        # Check format compatibility for tensorQTL
+        input_format = self.detect_input_format(input_file)
+        compatible_formats = ['vcf', 'vcf.gz', 'bcf', 'plink_bed']
+        if input_format not in compatible_formats:
+            logger.warning(f"⚠️ Input format {input_format} may not be optimal for tensorQTL")
+        
         # For very large files, do a quick format check without loading entire file
         if file_size > 10:
             self.quick_validate_large_file(input_file)
     
     def quick_validate_large_file(self, input_file):
-        """Quick validation for very large files"""
+        """Quick validation for very large files - ENHANCED for tensorQTL"""
         logger.info("🔍 Performing quick validation for large file...")
         
         # Check if file is compressed
@@ -300,19 +691,21 @@ class GenotypeProcessor:
             except Exception as e:
                 raise ValueError(f"Gzip file appears corrupted: {e}")
         
-        # For VCF files, check header
+        # For VCF files, check header compatibility for tensorQTL
         if input_file.endswith(('.vcf', '.vcf.gz')):
             try:
                 cmd = f"{self.config['paths']['bcftools']} view -h {input_file} | head -5"
-                result = self.run_command(cmd, "Checking VCF header", check=False)
+                result = self.run_command(cmd, "Checking VCF header for tensorQTL", check=False)
                 if result.returncode != 0:
-                    raise ValueError("VCF file header cannot be read")
-                logger.info("✅ VCF header validation passed")
+                    raise ValueError("VCF file header cannot be read - tensorQTL may fail")
+                if '#CHROM' not in result.stdout:
+                    raise ValueError("VCF file missing #CHROM line - invalid format for tensorQTL")
+                logger.info("✅ VCF header validation passed for tensorQTL")
             except Exception as e:
                 logger.warning(f"⚠️ VCF header check failed: {e}")
     
     def detect_input_format(self, input_file):
-        """Detect the format of the input genotype file"""
+        """Detect the format of the input genotype file - ORIGINAL FUNCTION"""
         file_ext = input_file.lower()
         
         if file_ext.endswith('.vcf.gz') or file_ext.endswith('.vcf.bgz'):
@@ -330,7 +723,7 @@ class GenotypeProcessor:
             return self.detect_format_by_content(input_file)
     
     def detect_format_by_content(self, input_file):
-        """Detect file format by examining content"""
+        """Detect file format by examining content - ORIGINAL FUNCTION"""
         try:
             if input_file.endswith('.gz'):
                 with gzip.open(input_file, 'rt') as f:
@@ -362,7 +755,7 @@ class GenotypeProcessor:
             return 'vcf'
     
     def standardize_format(self, input_file, output_dir, input_format):
-        """Convert various formats to standard VCF.gz"""
+        """Convert various formats to standard VCF.gz - ORIGINAL FUNCTION"""
         output_file = os.path.join(output_dir, "standardized.vcf.gz")
         
         if input_format in ['vcf', 'vcf.gz']:
@@ -415,7 +808,7 @@ class GenotypeProcessor:
             raise ValueError(f"Unsupported input format: {input_format}")
     
     def apply_preprocessing(self, input_file, output_dir):
-        """Apply all configured pre-processing steps"""
+        """Apply all configured pre-processing steps - ORIGINAL FUNCTION"""
         current_file = input_file
         
         processing_steps = [
@@ -436,7 +829,7 @@ class GenotypeProcessor:
         return current_file
     
     def filter_variants(self, input_file, output_dir):
-        """Apply comprehensive variant filtering"""
+        """Apply comprehensive variant filtering - ORIGINAL FUNCTION"""
         output_file = os.path.join(output_dir, "filtered.vcf.gz")
         
         filter_expr = []
@@ -475,7 +868,7 @@ class GenotypeProcessor:
         return output_file
     
     def handle_multiallelic(self, input_file, output_dir):
-        """Handle multi-allelic sites"""
+        """Handle multi-allelic sites - ORIGINAL FUNCTION"""
         output_file = os.path.join(output_dir, "biallelic.vcf.gz")
         action = self.processing_config.get('multiallelic_action', 'split')
         
@@ -516,7 +909,7 @@ class GenotypeProcessor:
         return output_file
     
     def normalize_chromosomes(self, input_file, output_dir):
-        """Normalize chromosome naming convention"""
+        """Normalize chromosome naming convention - ORIGINAL FUNCTION"""
         output_file = os.path.join(output_dir, "chrom_normalized.vcf.gz")
         prefix_config = self.processing_config.get('chromosome_prefix', 'auto')
         
@@ -554,7 +947,7 @@ class GenotypeProcessor:
         return current_file
     
     def auto_normalize_chromosomes(self, input_file, output_dir):
-        """Auto-detect chromosome format and standardize"""
+        """Auto-detect chromosome format and standardize - ORIGINAL FUNCTION"""
         # Check current format
         result = self.run_command(
             f"{self.config['paths']['bcftools']} view {input_file} | head -100 | grep -v '^#' | head -1",
@@ -576,7 +969,7 @@ class GenotypeProcessor:
             return output_file
     
     def remove_phasing(self, input_file, output_dir):
-        """Remove phasing information from genotypes"""
+        """Remove phasing information from genotypes - ORIGINAL FUNCTION"""
         output_file = os.path.join(output_dir, "unphased.vcf.gz")
         
         self.run_command(
@@ -592,7 +985,7 @@ class GenotypeProcessor:
         return output_file
     
     def normalize_indels(self, input_file, output_dir):
-        """Normalize INDEL representations (requires reference genome)"""
+        """Normalize INDEL representations (requires reference genome) - ORIGINAL FUNCTION"""
         output_file = os.path.join(output_dir, "indel_normalized.vcf.gz")
         
         # Check if reference genome is available
@@ -625,7 +1018,7 @@ class GenotypeProcessor:
         return output_file
     
     def remove_duplicates(self, input_file, output_dir):
-        """Remove duplicate variants"""
+        """Remove duplicate variants - ORIGINAL FUNCTION"""
         output_file = os.path.join(output_dir, "deduplicated.vcf.gz")
         
         self.run_command(
@@ -642,7 +1035,7 @@ class GenotypeProcessor:
         return output_file
     
     def left_align_variants(self, input_file, output_dir):
-        """Left-align variants (requires reference genome)"""
+        """Left-align variants (requires reference genome) - ORIGINAL FUNCTION"""
         output_file = os.path.join(output_dir, "left_aligned.vcf.gz")
         
         # Check if reference genome is available
@@ -675,7 +1068,7 @@ class GenotypeProcessor:
         return output_file
     
     def generate_qc_reports(self, vcf_file, output_dir):
-        """Generate comprehensive QC reports"""
+        """Generate comprehensive QC reports - ORIGINAL FUNCTION"""
         logger.info("📊 Generating QC reports...")
         
         # Basic stats
@@ -699,7 +1092,7 @@ class GenotypeProcessor:
         logger.info("✅ QC reports generated")
     
     def prepare_final_file(self, input_file, output_dir):
-        """Prepare final genotype file for analysis"""
+        """Prepare final genotype file for analysis - ORIGINAL FUNCTION"""
         final_file = os.path.join(output_dir, "final_genotypes.vcf.gz")
         
         # Copy to final location
@@ -734,7 +1127,7 @@ class GenotypeProcessor:
         return final_file
     
     def validate_vcf(self, vcf_file):
-        """Validate VCF file structure"""
+        """Validate VCF file structure - ORIGINAL FUNCTION"""
         logger.info("🔍 Validating VCF file structure...")
         
         # Check if VCF is valid
@@ -750,7 +1143,7 @@ class GenotypeProcessor:
         logger.info("✅ VCF validation completed successfully")
     
     def run_command(self, cmd, description, check=True):
-        """Run shell command with comprehensive error handling"""
+        """Run shell command with comprehensive error handling - ORIGINAL FUNCTION"""
         logger.info(f"Executing: {description}")
         logger.debug(f"Command: {cmd}")
         
@@ -794,8 +1187,8 @@ def process_genotypes(config):
         logger.info("🚀 Starting genotype processing module...")
         
         # Get input parameters from config
-        input_file = config['genotype_processing']['input_file']
-        output_dir = config['output_dir']
+        input_file = config['input_files']['genotypes']
+        output_dir = config['results_dir']
         
         # Initialize processor
         processor = GenotypeProcessor(config)
@@ -814,6 +1207,65 @@ def process_genotypes(config):
         logger.error(f"❌ Genotype processing module failed: {e}")
         logger.debug(traceback.format_exc())
         return False
+
+# Additional tensorQTL-specific utility functions
+def validate_tensorqtl_genotypes(genotype_file):
+    """Validate that genotype files are ready for tensorQTL analysis"""
+    logger.info(f"🔍 Validating tensorQTL genotype files: {genotype_file}")
+    
+    try:
+        if genotype_file.endswith('.bed'):
+            base_name = genotype_file.replace('.bed', '')
+            required_files = [f'{base_name}.bed', f'{base_name}.bim', f'{base_name}.fam']
+            
+            for file_path in required_files:
+                if not os.path.exists(file_path):
+                    logger.error(f"❌ Missing tensorQTL file: {file_path}")
+                    return False
+            
+            # Check if files are readable
+            try:
+                fam_df = pd.read_csv(f'{base_name}.fam', sep='\s+', header=None)
+                bim_df = pd.read_csv(f'{base_name}.bim', sep='\s+', header=None)
+                
+                logger.info(f"✅ TensorQTL validation: {len(fam_df)} samples, {len(bim_df)} variants")
+                return True
+                
+            except Exception as e:
+                logger.error(f"❌ TensorQTL file reading failed: {e}")
+                return False
+        else:
+            logger.warning(f"⚠️ Non-PLINK format may have reduced tensorQTL performance: {genotype_file}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"❌ TensorQTL genotype validation failed: {e}")
+        return False
+
+def get_tensorqtl_sample_list(genotype_file):
+    """Extract sample list from genotype file for tensorQTL alignment"""
+    try:
+        if genotype_file.endswith('.bed'):
+            base_name = genotype_file.replace('.bed', '')
+            fam_file = f'{base_name}.fam'
+            
+            if os.path.exists(fam_file):
+                fam_df = pd.read_csv(fam_file, sep='\s+', header=None, names=['FID', 'IID', 'PID', 'MID', 'Sex', 'Pheno'])
+                return fam_df['IID'].tolist()
+        
+        # For VCF files, use bcftools
+        elif genotype_file.endswith(('.vcf', '.vcf.gz', '.bcf')):
+            cmd = f"bcftools query -l {genotype_file}"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.returncode == 0:
+                return [s.strip() for s in result.stdout.split('\n') if s.strip()]
+        
+        logger.warning("❌ Could not extract sample list from genotype file")
+        return []
+        
+    except Exception as e:
+        logger.error(f"❌ Error extracting tensorQTL sample list: {e}")
+        return []
 
 # Maintain backward compatibility
 if __name__ == "__main__":
