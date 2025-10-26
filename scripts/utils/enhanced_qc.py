@@ -1032,13 +1032,63 @@ class EnhancedQC:
             return False
 
     def _generate_html_report(self, report_dir: Path, validation_results: Dict[str, Any], 
-                            quality_results: Dict[str, Any], overall_status: str, 
-                            status_class: str, passed_checks: int, total_checks: int) -> None:
+                         quality_results: Dict[str, Any], overall_status: str, 
+                         status_class: str, passed_checks: int, total_checks: int) -> None:
         """Generate HTML report content"""
         report_file = report_dir / "data_preparation_report.html"
         
-        # HTML template with placeholders
-        html_template = self._get_report_template()
+        # HTML template with placeholders - FIXED: Proper string formatting
+        html_template = """<!DOCTYPE html>
+    <html>
+    <head>
+        <title>Data Preparation Report</title>
+        <meta charset="UTF-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .header {{ background: #f8f9fa; padding: 20px; border-radius: 5px; }}
+            .status-pass {{ color: #28a745; font-weight: bold; }}
+            .status-warning {{ color: #ffc107; font-weight: bold; }}
+            .status-fail {{ color: #dc3545; font-weight: bold; }}
+            .section {{ margin: 20px 0; padding: 15px; border: 1px solid #dee2e6; border-radius: 5px; }}
+            table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
+            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }}
+            th {{ background-color: #f8f9fa; }}
+            .tensorqtl-note {{ background: #e7f3ff; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>Data Preparation Report</h1>
+            <p>Generated on: {timestamp}</p>
+            <p>Overall Status: <span class="status-{status_class}">{overall_status}</span></p>
+            <p>Checks Passed: {passed_checks} / {total_checks}</p>
+        </div>
+        
+        <div class="tensorqtl-note">
+            <h3>🧬 TensorQTL Compatibility Notes</h3>
+            <p>This pipeline uses <strong>tensorQTL</strong> for QTL analysis. Ensure:</p>
+            <ul>
+                <li>Genotype data is in PLINK format for optimal performance</li>
+                <li>Sample IDs match exactly across all files</li>
+                <li>Phenotype data is properly normalized (VST recommended for RNA-seq)</li>
+                <li>Sufficient common samples exist across all datasets</li>
+            </ul>
+        </div>
+        
+        {validation_table}
+        
+        {quality_table}
+        
+        <div class="section">
+            <h2>Next Steps</h2>
+            <ul>
+                <li><strong>If status is PASS:</strong> Proceed with genotype and expression processing</li>
+                <li><strong>If status is WARNING:</strong> Review warnings and consider addressing issues</li>
+                <li><strong>If status is FAIL:</strong> Fix the reported issues before proceeding</li>
+            </ul>
+        </div>
+    </body>
+    </html>"""
         
         # Generate validation table
         validation_table = self._generate_validation_table(validation_results)
@@ -1046,15 +1096,15 @@ class EnhancedQC:
         # Generate quality table
         quality_table = self._generate_quality_table(quality_results)
         
-        # Fill template
+        # Fill template - FIXED: Use proper string formatting
         html_content = html_template.format(
-            overall_status=overall_status,
+            timestamp=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
             status_class=status_class,
+            overall_status=overall_status,
             passed_checks=passed_checks,
             total_checks=total_checks,
             validation_table=validation_table,
-            quality_table=quality_table,
-            timestamp=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+            quality_table=quality_table
         )
         
         with open(report_file, 'w') as f:
