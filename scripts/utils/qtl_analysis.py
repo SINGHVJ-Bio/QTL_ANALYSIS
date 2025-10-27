@@ -353,12 +353,19 @@ class HardwareOptimizer:
             # Set CPU threads for optimal performance - use your config or auto-detect
             num_threads = self.performance_config.get('num_threads', min(16, os.cpu_count()))
             
-            # Only set torch threads if torch is available
-            if 'torch' in sys.modules:
-                torch.set_num_threads(num_threads)
-                torch.set_num_interop_threads(num_threads)
+            # Only set torch threads if torch is available AND hasn't been initialized yet
+            if 'torch' in sys.modules and not self._torch_already_initialized():
+                try:
+                    torch.set_num_threads(num_threads)
+                    torch.set_num_interop_threads(num_threads)
+                    logger.info(f"🔢 Successfully set torch threads: {num_threads}")
+                except RuntimeError as e:
+                    if "after parallel work has started" in str(e):
+                        logger.warning("⚠️ Torch threads already initialized, using current configuration")
+                    else:
+                        raise e
             
-            # Set environment variables for OpenMP
+            # Set environment variables for OpenMP (safe to do anytime)
             os.environ['OMP_NUM_THREADS'] = str(num_threads)
             os.environ['MKL_NUM_THREADS'] = str(num_threads)
             
@@ -369,6 +376,17 @@ class HardwareOptimizer:
         except Exception as e:
             logger.warning(f"⚠️ CPU optimization failed: {e}")
             return None
+    
+    def _torch_already_initialized(self):
+        """Check if torch has already been initialized (to avoid runtime errors)"""
+        if 'torch' not in sys.modules:
+            return False
+        try:
+            # Try to get current thread settings - if this fails, torch isn't fully initialized
+            torch.get_num_threads()
+            return True
+        except:
+            return False
     
     def setup_memory_optimization(self, device_info):
         """Setup memory optimization parameters based on available resources"""
@@ -637,12 +655,19 @@ class PhenotypeProcessor:
     def _load_phenotype_data(self, file_path, qtl_type):
         """Load phenotype data with robust error handling and format detection"""
         try:
+            # NEW: Log file information before loading
+            logger.info(f"📁 Loading {qtl_type} phenotype file: {file_path}")
+            
             # Try different encodings and separators
             for sep in ['\t', ',', ' ']:
                 try:
                     df = pd.read_csv(file_path, sep=sep, index_col=0)
                     if not df.empty:
                         logger.info(f"✅ Successfully loaded {qtl_type} data with separator '{sep}'")
+                        
+                        # NEW: Log file preview and dimensions
+                        self._log_file_preview(df, f"{qtl_type} phenotype", max_cols=5, max_rows=3)
+                        
                         # Ensure all data is numeric
                         df = df.apply(pd.to_numeric, errors='coerce')
                         return df
@@ -653,6 +678,9 @@ class PhenotypeProcessor:
             df = pd.read_csv(file_path, index_col=0)
             if df.empty:
                 raise ValueError(f"Could not read {qtl_type} file with any standard separator")
+            
+            # NEW: Log file preview and dimensions
+            self._log_file_preview(df, f"{qtl_type} phenotype", max_cols=5, max_rows=3)
             
             # Ensure all data is numeric
             df = df.apply(pd.to_numeric, errors='coerce')
@@ -665,12 +693,19 @@ class PhenotypeProcessor:
     def _load_covariate_data(self, covariate_file):
         """Load covariate data with dynamic format handling"""
         try:
+            # NEW: Log file information before loading
+            logger.info(f"📁 Loading covariate file: {covariate_file}")
+            
             # Try different separators
             for sep in ['\t', ',', ' ']:
                 try:
                     df = pd.read_csv(covariate_file, sep=sep, index_col=0)
                     if not df.empty:
                         logger.info(f"✅ Successfully loaded covariate data with separator '{sep}'")
+                        
+                        # NEW: Log file preview and dimensions
+                        self._log_file_preview(df, "covariate", max_cols=5, max_rows=3)
+                        
                         # Ensure all data is numeric
                         df = df.apply(pd.to_numeric, errors='coerce')
                         return df
@@ -679,6 +714,10 @@ class PhenotypeProcessor:
             
             # Fallback
             df = pd.read_csv(covariate_file, index_col=0)
+            
+            # NEW: Log file preview and dimensions
+            self._log_file_preview(df, "covariate", max_cols=5, max_rows=3)
+            
             # Ensure all data is numeric
             df = df.apply(pd.to_numeric, errors='coerce')
             return df
@@ -686,6 +725,41 @@ class PhenotypeProcessor:
         except Exception as e:
             logger.warning(f"⚠️ Error loading covariate data: {e}")
             return pd.DataFrame()
+    
+    def _log_file_preview(self, df, file_type, max_cols=5, max_rows=3):
+        """NEW: Log file preview with dimensions and sample data"""
+        try:
+            rows, cols = df.shape
+            logger.info(f"📊 {file_type} file dimensions: {rows} rows × {cols} columns")
+            
+            # Show limited preview
+            preview_cols = min(cols, max_cols)
+            preview_rows = min(rows, max_rows)
+            
+            if preview_cols > 0 and preview_rows > 0:
+                logger.info(f"🔍 {file_type} file preview (first {preview_cols} columns, {preview_rows} rows):")
+                
+                # Get preview data
+                preview_df = df.iloc[:preview_rows, :preview_cols]
+                
+                # Create formatted preview
+                preview_str = str(preview_df)
+                
+                # Log in chunks if too long
+                lines = preview_str.split('\n')
+                for line in lines[:preview_rows + 2]:  # +2 for header and separator
+                    logger.info(f"   {line}")
+                
+                if len(lines) > preview_rows + 2:
+                    logger.info(f"   ... (showing first {preview_rows} rows and {preview_cols} columns)")
+            
+            # Log data types summary
+            numeric_cols = df.select_dtypes(include=[np.number]).shape[1]
+            non_numeric_cols = df.select_dtypes(exclude=[np.number]).shape[1]
+            logger.info(f"📋 {file_type} data types: {numeric_cols} numeric, {non_numeric_cols} non-numeric columns")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Could not generate file preview for {file_type}: {e}")
     
     def _apply_qc_filters(self, pheno_df, qtl_type):
         """Apply comprehensive quality control filters with FIXED variable initialization"""
@@ -989,11 +1063,18 @@ class PhenotypeProcessor:
         annotation_file = self.config['input_files']['annotations']
         
         try:
+            # NEW: Log annotation file information
+            logger.info(f"📁 Loading annotation file: {annotation_file}")
+            
             # Try different comment characters for annotation file
             try:
                 annot_df = pd.read_csv(annotation_file, sep='\t', comment='#')
             except:
                 annot_df = pd.read_csv(annotation_file, sep='\t')
+                
+            # NEW: Log annotation file preview
+            self._log_file_preview(annot_df, "annotation", max_cols=5, max_rows=3)
+                
         except Exception as e:
             logger.warning(f"⚠️ Could not read annotation file: {e}, creating default positions")
             annot_df = pd.DataFrame()
@@ -1050,8 +1131,11 @@ class GenotypeLoader:
         self.performance_config = config.get('performance', {})
     
     def load_genotypes(self, genotype_file):
-        """Load genotype data with comprehensive error handling and performance optimization"""
+        """Load genotype data with comprehensive error handling and version compatibility"""
         logger.info("🔧 Loading genotype data for tensorQTL...")
+        
+        # NEW: Log genotype file information
+        logger.info(f"📁 Loading genotype file: {genotype_file}")
         
         if not TENSORQTL_AVAILABLE:
             error_msg = "tensorQTL is not available. "
@@ -1067,14 +1151,66 @@ class GenotypeLoader:
                 # Load PLINK data
                 plink_prefix = genotype_file.replace('.bed', '')
                 
+                # NEW: Log PLINK file components
+                for ext in ['.bed', '.bim', '.fam']:
+                    plink_file = plink_prefix + ext
+                    if os.path.exists(plink_file):
+                        file_size = os.path.getsize(plink_file) / (1024**2)  # MB
+                        logger.info(f"📄 PLINK component: {plink_file} ({file_size:.2f} MB)")
+                    else:
+                        logger.warning(f"⚠️ PLINK component not found: {plink_file}")
+                
                 # Hardware optimization for tensorQTL
                 hardware_optimizer = HardwareOptimizer(self.config)
                 device, device_info = hardware_optimizer.setup_hardware()
                 
+                # FIXED: Handle different tensorQTL versions
                 pr = genotypeio.read_plink(plink_prefix)
-                logger.info(f"✅ Loaded PLINK data: {pr.genotypes.shape[0]} variants, {pr.genotypes.shape[1]} samples")
                 
-                return pr
+                # Check if it's a tuple (older tensorQTL versions) or object (newer versions)
+                if isinstance(pr, tuple):
+                    # Older tensorQTL versions return tuple: (genotypes, variants, samples)
+                    logger.info("📦 Detected older tensorQTL version (tuple return format)")
+                    genotypes, variants, samples = pr
+                    
+                    # NEW: Log genotype data dimensions
+                    logger.info(f"📊 Genotype data dimensions: {genotypes.shape[0]} variants × {genotypes.shape[1]} samples")
+                    logger.info(f"📊 Variants info: {variants.shape[0]} variant records")
+                    logger.info(f"📊 Samples info: {len(samples)} samples")
+                    
+                    # NEW: Log genotype data preview
+                    if genotypes.shape[0] > 0 and genotypes.shape[1] > 0:
+                        logger.info("🔍 Genotype data preview (first 3 variants, 5 samples):")
+                        preview_genotypes = genotypes.iloc[:3, :5] if hasattr(genotypes, 'iloc') else genotypes[:3, :5]
+                        logger.info(f"   {preview_genotypes}")
+                    
+                    # Create a mock object with the required attributes for compatibility
+                    class GenotypeContainer:
+                        def __init__(self, genotypes, variants, samples):
+                            self.genotypes = genotypes
+                            self.variants = variants
+                            self.samples = samples
+                    
+                    pr_container = GenotypeContainer(genotypes, variants, samples)
+                    logger.info(f"✅ Loaded PLINK data (old format): {genotypes.shape[0]} variants, {genotypes.shape[1]} samples")
+                    return pr_container
+                else:
+                    # Newer tensorQTL versions return an object with attributes
+                    # NEW: Log genotype data dimensions
+                    logger.info(f"📊 Genotype data dimensions: {pr.genotypes.shape[0]} variants × {pr.genotypes.shape[1]} samples")
+                    if hasattr(pr, 'variants'):
+                        logger.info(f"📊 Variants info: {pr.variants.shape[0]} variant records")
+                    if hasattr(pr, 'samples'):
+                        logger.info(f"📊 Samples info: {len(pr.samples)} samples")
+                    
+                    # NEW: Log genotype data preview
+                    if pr.genotypes.shape[0] > 0 and pr.genotypes.shape[1] > 0:
+                        logger.info("🔍 Genotype data preview (first 3 variants, 5 samples):")
+                        preview_genotypes = pr.genotypes.iloc[:3, :5] if hasattr(pr.genotypes, 'iloc') else pr.genotypes[:3, :5]
+                        logger.info(f"   {preview_genotypes}")
+                    
+                    logger.info(f"✅ Loaded PLINK data (new format): {pr.genotypes.shape[0]} variants, {pr.genotypes.shape[1]} samples")
+                    return pr
             else:
                 raise ValueError(f"Unsupported genotype format: {genotype_file}. Use PLINK format for best performance.")
                 
@@ -1083,26 +1219,36 @@ class GenotypeLoader:
             raise
     
     def optimize_genotype_data(self, genotype_reader):
-        """Optimize genotype data for analysis with comprehensive filtering"""
-        original_count = genotype_reader.genotypes.shape[0]
+        """Optimize genotype data for analysis with comprehensive filtering - FIXED for version compatibility"""
+        # FIXED: Handle both tuple format and object format
+        if hasattr(genotype_reader, 'genotypes'):
+            # Object format (newer tensorQTL)
+            original_count = genotype_reader.genotypes.shape[0]
+            genotypes_obj = genotype_reader.genotypes
+        else:
+            # This shouldn't happen with our fix above, but keep for safety
+            raise AttributeError("Genotype reader doesn't have 'genotypes' attribute")
         
         # Apply MAF filtering
         maf_threshold = self.genotype_processing_config.get('min_maf', 0.01)
         if maf_threshold > 0:
-            maf = genotype_reader.genotypes.maf()
+            maf = genotypes_obj.maf()
             keep_variants = maf >= maf_threshold
-            genotype_reader.genotypes = genotype_reader.genotypes[keep_variants]
-            maf_filtered_count = genotype_reader.genotypes.shape[0]
+            genotypes_obj = genotypes_obj[keep_variants]
+            maf_filtered_count = genotypes_obj.shape[0]
             logger.info(f"🔧 MAF filtering: {maf_filtered_count}/{original_count} variants retained (MAF >= {maf_threshold})")
         
         # Apply call rate filtering if needed
         call_rate_threshold = self.genotype_processing_config.get('min_call_rate', 0.95)
         if call_rate_threshold < 1.0:
-            call_rate = 1 - genotype_reader.genotypes.isnan().mean(axis=1)
+            call_rate = 1 - genotypes_obj.isnan().mean(axis=1)
             keep_variants = call_rate >= call_rate_threshold
-            genotype_reader.genotypes = genotype_reader.genotypes[keep_variants]
-            call_rate_filtered_count = genotype_reader.genotypes.shape[0]
+            genotypes_obj = genotypes_obj[keep_variants]
+            call_rate_filtered_count = genotypes_obj.shape[0]
             logger.info(f"🔧 Call rate filtering: {call_rate_filtered_count} variants retained (call rate >= {call_rate_threshold})")
+        
+        # Update the genotype reader with filtered data
+        genotype_reader.genotypes = genotypes_obj
         
         final_count = genotype_reader.genotypes.shape[0]
         logger.info(f"🔧 Genotype optimization: {final_count}/{original_count} variants retained after filtering")
@@ -1272,7 +1418,18 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         genotype_loader = GenotypeLoader(config)
         pr = genotype_loader.load_genotypes(genotype_file)
         pr = genotype_loader.optimize_genotype_data(pr)
-        genotype_samples = pr.genotypes.columns.tolist()
+        
+        # FIXED: Handle different genotype reader formats safely
+        if hasattr(pr, 'samples'):
+            genotype_samples = pr.samples
+        elif hasattr(pr, 'genotypes') and hasattr(pr.genotypes, 'columns'):
+            genotype_samples = pr.genotypes.columns.tolist()
+        else:
+            # Fallback: try to extract samples from the genotype object
+            try:
+                genotype_samples = list(pr.genotypes.columns)
+            except:
+                raise AttributeError("Cannot extract samples from genotype reader")
         
         # Prepare phenotype data with genotype samples for alignment
         pheno_processor = PhenotypeProcessor(config, results_dir)
@@ -1292,7 +1449,6 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         phenotype_pos_df = pheno_data['phenotype_pos_df']
         
         # Map cis-QTLs with hardware optimization - using proper tensorQTL API
-        # Note: Removed device parameter as it's not supported in newer tensorQTL versions
         cis_df = cis.map_cis(
             pr,  # Pass the genotype reader object directly
             phenotype_df_t, 
@@ -1379,7 +1535,18 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         genotype_loader = GenotypeLoader(config)
         pr = genotype_loader.load_genotypes(genotype_file)
         pr = genotype_loader.optimize_genotype_data(pr)
-        genotype_samples = pr.genotypes.columns.tolist()
+        
+        # FIXED: Handle different genotype reader formats safely
+        if hasattr(pr, 'samples'):
+            genotype_samples = pr.samples
+        elif hasattr(pr, 'genotypes') and hasattr(pr.genotypes, 'columns'):
+            genotype_samples = pr.genotypes.columns.tolist()
+        else:
+            # Fallback: try to extract samples from the genotype object
+            try:
+                genotype_samples = list(pr.genotypes.columns)
+            except:
+                raise AttributeError("Cannot extract samples from genotype reader")
         
         # Prepare phenotype data with genotype samples for alignment
         pheno_processor = PhenotypeProcessor(config, results_dir)
@@ -1398,7 +1565,6 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         phenotype_df_t = pheno_data['phenotype_df'].T  # tensorQTL expects samples x features
         
         # Use chunked processing for large datasets with hardware optimization
-        # Note: Removed device parameter as it's not supported in newer tensorQTL versions
         trans_df = trans.map_trans(
             pr,
             phenotype_df_t,
@@ -1618,8 +1784,8 @@ def run_qtl_mapping(config, genotype_file, qtl_type, results_dir, analysis_mode=
 # Performance monitoring utilities
 def monitor_performance():
     """Monitor current performance metrics"""
+    gpu_memory = None
     if TENSORQTL_AVAILABLE and 'torch' in sys.modules:
-        gpu_memory = None
         if torch.cuda.is_available():
             gpu_memory = torch.cuda.memory_allocated() / (1024**3)  # GB
             
