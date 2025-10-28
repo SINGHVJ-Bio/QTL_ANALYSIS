@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 """
-Final optimized pipeline to prepare QTL input files for tensorQTL
-Generates both BED and TSV expression files, BED + TSV phenotype files, and annotations BED
-Supports both TSV and CSV input files with automatic encoding detection
-Applies count transformation: count = round(count + 1)
-Includes proper WGS batch handling in covariates
-Generates both processed and raw covariate files
+Optimized pipeline to prepare QTL input files for tensorQTL
 """
 
 import pandas as pd
@@ -17,11 +12,9 @@ import yaml
 import argparse
 import sys
 import tempfile
-import multiprocessing
-from concurrent.futures import ThreadPoolExecutor
-import chardet
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+pd.set_option('future.no_silent_downcasting', True)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,34 +24,30 @@ class FinalInputBuilder:
     def __init__(self, config_file):
         self.config = self.load_config(config_file)
         self.setup_paths()
-        self.setup_parallel_config()
         
     def load_config(self, config_file):
-        """Load configuration from YAML file"""
         with open(config_file, 'r') as f:
             return yaml.safe_load(f)
     
     def setup_paths(self):
-        """Setup input and output paths"""
         # Input files
         self.count_file = self.config['input_files']['count_file']
         self.meta_file = self.config['input_files']['meta_file']
         self.pca_file = self.config['input_files'].get('pca_file')
         self.vcf_input = self.config['input_files']['vcf_input']
-        self.gtf_table = self.config['input_files']['gtf_table']
+        self.gtf_file = self.config['input_files']['gtf']
         
-        # Get file separators from config with defaults
+        # File separators
         self.count_file_sep = self.config['input_files'].get('count_file_sep', '\t')
         self.meta_file_sep = self.config['input_files'].get('meta_file_sep', ',')
-        self.gtf_table_sep = self.config['input_files'].get('gtf_table_sep', '\t')
-        self.pca_file_sep = self.config['input_files'].get('pca_file_sep', r'\s+')
+        self.pca_file_sep = self.config['input_files'].get('pca_file_sep', ' ')
         
-        # Get count transformation settings
+        # Count transformation
         self.add_value = self.config.get('count_transformation', {}).get('add_value', 1)
         self.round_counts = self.config.get('count_transformation', {}).get('round_counts', True)
         
-        logger.info(f"File separators - Count: '{self.count_file_sep}', Meta: '{self.meta_file_sep}', GTF: '{self.gtf_table_sep}'")
-        logger.info(f"Count transformation - Add value: {self.add_value}, Round counts: {self.round_counts}")
+        # Sample name optimization - read from output section
+        self.sample_name_optimization = self.config['output'].get('sample_name_optimization', False)
         
         # Output directory
         self.out_dir = self.config['output']['output_dir']
@@ -67,356 +56,443 @@ class FinalInputBuilder:
         # Output files
         self.expression_bed_output = os.path.join(self.out_dir, "expression.bed")
         self.expression_tsv_output = os.path.join(self.out_dir, "expression.tsv")
-        self.expression_tsv_raw_output = os.path.join(self.out_dir, "expression_raw.tsv")  # Keep raw counts for reference
         self.covar_output = os.path.join(self.out_dir, "covariates.txt")
-        self.covar_raw_output = os.path.join(self.out_dir, "covariate_raw.txt")  # NEW: Raw covariates file
-        self.phenotype_bed_output = os.path.join(self.out_dir, "phenotypes.bed")
-        self.phenotype_tsv_output = os.path.join(self.out_dir, "phenotype_data.tsv")
+        self.covar_raw_output = os.path.join(self.out_dir, "covariate_raw.txt")
         self.samples_output = os.path.join(self.out_dir, "samples.txt")
         self.genotype_vcf_output = os.path.join(self.out_dir, "genotypes.vcf.gz")
-        self.mapping_output = os.path.join(self.out_dir, "sample_mapping.tsv")
         self.annotation_bed_output = os.path.join(self.out_dir, "annotations.bed")
+        self.sample_mapping_file = os.path.join(self.out_dir, "sample_mapping.txt")
         
         logger.info(f"Output directory: {self.out_dir}")
-    
-    def setup_parallel_config(self):
-        """Setup parallel processing configuration"""
-        vcf_config = self.config['vcf_processing']
-        
-        # Determine number of threads
-        self.threads = vcf_config.get('threads', 1)
-        if self.threads == 0:
-            self.threads = multiprocessing.cpu_count()
-        
-        self.memory = vcf_config.get('memory', 4000)
-        
-        logger.info(f"Parallel processing: {self.threads} threads, {self.memory}MB memory")
+        if self.sample_name_optimization:
+            logger.info("Sample name optimization: ENABLED")
     
     def run_command(self, cmd, description):
-        """Run shell command with error handling and timing"""
         logger.info(f"Running: {description}")
-        logger.debug(f"Command: {' '.join(cmd)}")
-        
-        import time
-        start_time = time.time()
-        
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            elapsed_time = time.time() - start_time
-            logger.info(f"✅ {description} completed in {elapsed_time:.1f}s")
+            logger.info(f"✅ {description} completed")
             return result
         except subprocess.CalledProcessError as e:
-            elapsed_time = time.time() - start_time
-            logger.error(f"❌ {description} failed after {elapsed_time:.1f}s: {e}")
-            logger.error(f"Error output: {e.stderr}")
+            logger.error(f"❌ {description} failed: {e}")
+            if e.stderr:
+                logger.error(f"Error output: {e.stderr}")
             raise
     
-    def detect_encoding(self, file_path):
-        """Detect file encoding using chardet"""
-        try:
-            with open(file_path, 'rb') as f:
-                raw_data = f.read()
-                result = chardet.detect(raw_data)
-                encoding = result['encoding']
-                confidence = result['confidence']
-                logger.info(f"Detected encoding for {file_path}: {encoding} (confidence: {confidence:.2f})")
-                return encoding
-        except Exception as e:
-            logger.warning(f"Could not detect encoding for {file_path}: {e}, defaulting to utf-8")
-            return 'utf-8'
+    def optimize_sample_name(self, sample_id):
+        """Extract only the first part before any underscore"""
+        if pd.isna(sample_id):
+            return sample_id
+        return str(sample_id).split('_')[0]
     
-    def read_csv_with_encoding_fallback(self, file_path, sep, **kwargs):
-        """Read CSV/TSV file with encoding fallback"""
-        encodings_to_try = ['utf-8', 'latin-1', 'windows-1252', 'iso-8859-1']
+    def normalize_sample_name(self, sample_id):
+        """Apply both normalization and optimization"""
+        normalized = str(sample_id).strip().replace('.0', '')
+        if self.sample_name_optimization:
+            normalized = self.optimize_sample_name(normalized)
+        return normalized
+    
+    def apply_sample_mapping(self, df, sample_column):
+        """Apply sample mapping to a dataframe column"""
+        if sample_column in df.columns:
+            df[sample_column] = df[sample_column].apply(self.normalize_sample_name)
+        return df
+    
+    def read_file(self, file_path, sep, **kwargs):
+        """Read file with encoding fallback and error handling"""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
         
-        for encoding in encodings_to_try:
+        encodings = ['utf-8', 'latin-1', 'windows-1252', 'iso-8859-1']
+        
+        for encoding in encodings:
             try:
-                logger.info(f"Trying to read {file_path} with encoding: {encoding}")
                 df = pd.read_csv(file_path, sep=sep, encoding=encoding, **kwargs)
-                logger.info(f"✅ Successfully read {file_path} with {encoding} encoding")
                 return df
-            except UnicodeDecodeError as e:
-                logger.warning(f"Failed to read {file_path} with {encoding}: {e}")
+            except UnicodeDecodeError:
                 continue
-            except Exception as e:
-                logger.warning(f"Unexpected error reading {file_path} with {encoding}: {e}")
+            except Exception:
                 continue
         
-        # If all else fails, try with encoding detection
+        return pd.read_csv(file_path, sep=sep, encoding='utf-8', **kwargs)
+    
+    def get_vcf_samples(self):
+        """Extract sample IDs from VCF file"""
+        bcftools_path = subprocess.run(["which", "bcftools"], capture_output=True, text=True).stdout.strip()
+        
+        # Check if VCF file is valid and indexed
+        cmd_check = [bcftools_path, "index", "-s", self.vcf_input]
         try:
-            detected_encoding = self.detect_encoding(file_path)
-            if detected_encoding and detected_encoding not in encodings_to_try:
-                logger.info(f"Trying detected encoding: {detected_encoding}")
-                df = pd.read_csv(file_path, sep=sep, encoding=detected_encoding, **kwargs)
-                logger.info(f"✅ Successfully read {file_path} with detected encoding {detected_encoding}")
-                return df
-        except Exception as e:
-            logger.error(f"Failed to read with detected encoding: {e}")
+            subprocess.run(cmd_check, check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            logger.warning("VCF file might not be indexed, trying to index...")
+            cmd_index = [bcftools_path, "index", self.vcf_input]
+            subprocess.run(cmd_index, check=True, capture_output=True)
         
-        # Final fallback with error replacement
-        logger.warning("Using final fallback with error replacement")
-        return pd.read_csv(file_path, sep=sep, encoding='utf-8', errors='replace', **kwargs)
+        # Extract samples
+        cmd = [bcftools_path, "query", "-l", self.vcf_input]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        vcf_samples = [sample.strip() for sample in result.stdout.strip().split('\n') if sample.strip()]
+        
+        logger.info(f"Found {len(vcf_samples)} samples in VCF")
+        return set(vcf_samples)
+    
+    def create_sample_mapping(self, vcf_samples):
+        """Create mapping from original VCF samples to optimized names"""
+        sample_mapping = {}
+        
+        for sample in vcf_samples:
+            optimized_sample = self.normalize_sample_name(sample)
+            sample_mapping[sample] = optimized_sample
+        
+        # Write mapping file for bcftools reheader
+        with open(self.sample_mapping_file, 'w') as f:
+            for old_name, new_name in sample_mapping.items():
+                f.write(f"{old_name}\t{new_name}\n")
+        
+        logger.info(f"Created sample mapping for {len(sample_mapping)} samples")
+        return sample_mapping
+    
+    def rename_vcf_samples(self):
+        """Rename VCF samples using bcftools reheader"""
+        logger.info("Renaming VCF samples...")
+        
+        bcftools_path = subprocess.run(["which", "bcftools"], capture_output=True, text=True).stdout.strip()
+        
+        # Create temporary VCF with renamed samples
+        temp_vcf = os.path.join(self.out_dir, "genotypes_renamed.vcf.gz")
+        
+        cmd = [
+            bcftools_path, "reheader",
+            "-s", self.sample_mapping_file,
+            self.vcf_input,
+            "-o", temp_vcf
+        ]
+        
+        self.run_command(cmd, "Renaming VCF samples with bcftools reheader")
+        
+        # Index the renamed VCF
+        cmd_index = [bcftools_path, "index", "-t", temp_vcf]
+        self.run_command(cmd_index, "Indexing renamed VCF")
+        
+        return temp_vcf
+    
+    def check_sample_overlap(self, vcf_samples, expression_samples):
+        """Check if samples match between VCF and expression data"""
+        vcf_set = set(vcf_samples)
+        expr_set = set(expression_samples)
+        
+        common_samples = vcf_set & expr_set
+        vcf_only = vcf_set - expr_set
+        expr_only = expr_set - vcf_set
+        
+        logger.info(f"Sample overlap: {len(common_samples)} common, {len(vcf_only)} VCF-only, {len(expr_only)} expression-only")
+        
+        if len(common_samples) == 0:
+            raise ValueError("No common samples found between VCF and expression data")
+        
+        return common_samples, vcf_only, expr_only
+    
+    def subset_vcf_if_needed(self, vcf_file, samples_to_keep):
+        """Subset VCF only if necessary"""
+        bcftools_path = subprocess.run(["which", "bcftools"], capture_output=True, text=True).stdout.strip()
+        
+        # Get current samples in VCF
+        cmd = [bcftools_path, "query", "-l", vcf_file]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        current_samples = set([sample.strip() for sample in result.stdout.strip().split('\n') if sample.strip()])
+        
+        # Check if subsetting is needed
+        if current_samples == samples_to_keep:
+            logger.info("VCF samples already match target samples - no subsetting needed")
+            return vcf_file
+        
+        logger.info(f"Subsetting VCF from {len(current_samples)} to {len(samples_to_keep)} samples")
+        
+        # Write samples to keep
+        samples_file = os.path.join(self.out_dir, "samples_to_keep.txt")
+        with open(samples_file, 'w') as f:
+            for sample in samples_to_keep:
+                f.write(f"{sample}\n")
+        
+        # Subset VCF
+        cmd_subset = [
+            bcftools_path, "view",
+            "-S", samples_file,
+            vcf_file,
+            "-Oz", "-o", self.genotype_vcf_output
+        ]
+        
+        self.run_command(cmd_subset, "Subsetting VCF to common samples")
+        
+        # Index the subsetted VCF
+        cmd_index = [bcftools_path, "index", "-t", self.genotype_vcf_output]
+        self.run_command(cmd_index, "Indexing subsetted VCF")
+        
+        # Clean up temporary files
+        if vcf_file != self.vcf_input:  # Don't delete original input
+            os.remove(vcf_file)
+            os.remove(vcf_file + '.tbi')
+        os.remove(samples_file)
+        
+        return self.genotype_vcf_output
     
     def transform_count_matrix(self, count_df):
-        """Apply count transformation: add value and round"""
-        logger.info("Applying count transformation...")
-        
-        # Identify sample columns (all columns except 'gene_id')
         sample_cols = [col for col in count_df.columns if col != 'gene_id']
-        
-        # Create a copy to avoid modifying the original
         transformed_df = count_df.copy()
         
-        # Store original statistics for logging
-        original_stats = transformed_df[sample_cols].describe()
-        
-        # Apply transformation: count = count + add_value
-        logger.info(f"Adding {self.add_value} to all count values")
         transformed_df[sample_cols] = transformed_df[sample_cols] + self.add_value
-        
         if self.round_counts:
-            logger.info("Rounding count values to nearest integer")
             transformed_df[sample_cols] = np.round(transformed_df[sample_cols]).astype(int)
-        else:
-            logger.info("Skipping rounding (keeping as floats)")
         
-        # Log transformation summary
-        transformed_stats = transformed_df[sample_cols].describe()
-        
-        logger.info("Count transformation summary:")
-        logger.info(f"  Original - Min: {original_stats.loc['min'].min():.2f}, Max: {original_stats.loc['max'].max():.2f}, Mean: {original_stats.loc['mean'].mean():.2f}")
-        logger.info(f"  Transformed - Min: {transformed_stats.loc['min'].min():.2f}, Max: {transformed_stats.loc['max'].max():.2f}, Mean: {transformed_stats.loc['mean'].mean():.2f}")
-        
+        logger.info("Count transformation applied")
         return transformed_df
     
-    def normalize_ids(self, s):
-        """Normalize sample IDs for consistency"""
-        return s.astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
-    
-    def validate_input_files(self):
-        """Validate all input files exist"""
-        logger.info("Validating input files...")
+    def parse_gtf_for_gene_coordinates(self, gtf_file, gene_types=None):
+        gene_coords = {}
         
-        files_to_check = {
-            'Count file': self.count_file,
-            'Metadata file': self.meta_file,
-            'VCF file': self.vcf_input,
-            'GTF annotation': self.gtf_table
-        }
+        with open(gtf_file, 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                    
+                fields = line.strip().split('\t')
+                if len(fields) < 9 or fields[2] != 'gene':
+                    continue
+                    
+                attributes = {}
+                for attr in fields[8].split(';'):
+                    attr = attr.strip()
+                    if ' ' in attr:
+                        key, value = attr.split(' ', 1)
+                        attributes[key] = value.strip('"')
+                
+                gene_id = attributes.get('gene_id', '').split('.')[0]
+                gene_type = attributes.get('gene_type', '')
+                
+                if gene_types and gene_type not in gene_types:
+                    continue
+                    
+                if gene_id:
+                    chrom = fields[0]
+                    start = int(fields[3])
+                    end = int(fields[4])
+                    strand = fields[6]
+                    
+                    tss = start if strand == '+' else end
+                    bed_start = tss
+                    bed_end = tss + 1
+                    
+                    gene_coords[gene_id] = {
+                        'chr': chrom, 'start': bed_start, 'end': bed_end, 'strand': strand,
+                        'gene_name': attributes.get('gene_name', gene_id),
+                        'gene_type': gene_type
+                    }
         
-        for file_type, file_path in files_to_check.items():
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"{file_type} not found: {file_path}")
-            logger.info(f"✅ {file_type}: {file_path}")
-        
-        if self.pca_file and not os.path.exists(self.pca_file):
-            logger.warning(f"⚠️ PCA file not found: {self.pca_file}")
-        
-        logger.info("✅ All input files validated")
-    
+        logger.info(f"Found coordinates for {len(gene_coords)} genes")
+        return gene_coords
+
     def create_annotation_bed(self):
-        """Create annotations.bed file with gene information"""
         logger.info("Creating annotations.bed file...")
         
-        try:
-            # Load GTF data with configurable separator and encoding handling
-            logger.info(f"Reading GTF table with separator: '{self.gtf_table_sep}'")
-            gtf_df = self.read_csv_with_encoding_fallback(self.gtf_table, self.gtf_table_sep)
-            
-            # Get annotation configuration
-            annotation_config = self.config['annotations']
-            feature_type = annotation_config.get('feature_type', 'gene')
-            gene_types = annotation_config.get('gene_types', ['protein_coding'])
-            additional_columns = annotation_config.get('additional_columns', ['gene_name', 'gene_type'])
-            
-            # Filter genes by feature type and gene type
-            genes = gtf_df[gtf_df["feature"] == feature_type].copy()
-            
-            if gene_types:
-                genes = genes[genes["gene_type"].isin(gene_types)]
-            
-            # Clean gene_id (remove version numbers)
-            genes["gene_id"] = genes["gene_id"].astype(str).str.replace(r"\.\d+$", "", regex=True)
-            
-            # Select required columns
-            required_columns = ["chr", "start", "end", "gene_id", "strand"]
-            available_columns = required_columns + [col for col in additional_columns if col in genes.columns]
-            
-            # Create annotations BED
-            annotation_bed = genes[available_columns].copy()
-            
-            # Ensure proper data types
-            annotation_bed['start'] = annotation_bed['start'].astype(int)
-            annotation_bed['end'] = annotation_bed['end'].astype(int)
-            
-            # Sort by chromosome and position
-            annotation_bed = annotation_bed.sort_values(['chr', 'start'])
-            
-            # Save annotations BED file
-            annotation_bed.to_csv(self.annotation_bed_output, sep="\t", index=False)
-            logger.info(f"✅ Annotations BED created: {annotation_bed.shape[0]} genes")
-            
-            self.annotation_bed = annotation_bed
-            return annotation_bed
-            
-        except Exception as e:
-            logger.error(f"Failed to create annotations BED: {e}")
-            raise
+        annotation_config = self.config['annotations']
+        gene_types = annotation_config.get('gene_types', ['protein_coding'])
+        additional_columns = annotation_config.get('additional_columns', ['gene_name', 'gene_type'])
+        
+        gene_coords = self.parse_gtf_for_gene_coordinates(self.gtf_file, gene_types)
+        
+        annotation_data = []
+        for gene_id, coords in gene_coords.items():
+            row = {
+                'chr': coords['chr'], 'start': coords['start'], 'end': coords['end'],
+                'gene_id': gene_id, 'strand': coords['strand']
+            }
+            for col in additional_columns:
+                if col in coords:
+                    row[col] = coords[col]
+            annotation_data.append(row)
+        
+        annotation_bed = pd.DataFrame(annotation_data)
+        annotation_bed['start'] = annotation_bed['start'].astype(int)
+        annotation_bed['end'] = annotation_bed['end'].astype(int)
+        
+        # Sort by chromosome and position
+        chrom_order = {f'chr{i}': i for i in range(1, 23)}
+        chrom_order.update({'chrX': 23, 'chrY': 24, 'chrM': 25})
+        annotation_bed['chrom_num'] = annotation_bed['chr'].map(chrom_order)
+        annotation_bed = annotation_bed.sort_values(['chrom_num', 'start']).drop('chrom_num', axis=1)
+        
+        annotation_bed.to_csv(self.annotation_bed_output, sep="\t", index=False)
+        logger.info(f"✅ Annotations BED created: {annotation_bed.shape[0]} genes")
+        
+        self.annotation_bed = annotation_bed
+        self.gene_coords = gene_coords
+        return annotation_bed
     
     def process_expression_data(self):
-        """Process expression data - creates both BED and TSV files"""
         logger.info("Processing expression data...")
         
-        # Load files in parallel with configurable separators and encoding handling
-        def load_count_data():
-            logger.info(f"Reading count file with separator: '{self.count_file_sep}'")
-            return self.read_csv_with_encoding_fallback(self.count_file, self.count_file_sep)
-        
-        def load_meta_data():
-            logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
-            return self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep)
-        
-        def load_gtf_data():
-            logger.info(f"Reading GTF file with separator: '{self.gtf_table_sep}'")
-            return self.read_csv_with_encoding_fallback(self.gtf_table, self.gtf_table_sep)
-        
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            count_future = executor.submit(load_count_data)
-            meta_future = executor.submit(load_meta_data)
-            gtf_future = executor.submit(load_gtf_data)
-            
-            count_df = count_future.result()
-            meta_df = meta_future.result()
-            gtf_df = gtf_future.result()
+        count_df = self.read_file(self.count_file, self.count_file_sep)
         
         if 'gene_id' not in count_df.columns:
             raise ValueError("Count matrix must contain 'gene_id' column")
         
+        count_df['gene_id'] = count_df['gene_id'].astype(str).str.replace(r"\.\d+$", "", regex=True)
         count_samples = [c for c in count_df.columns if c != "gene_id"]
-        logger.info(f"Count matrix: {count_df.shape[0]} genes, {len(count_samples)} samples")
         
-        # Save raw counts for reference
-        count_df.to_csv(self.expression_tsv_raw_output, sep="\t", index=False)
-        logger.info(f"✅ Raw expression TSV saved: {self.expression_tsv_raw_output}")
-        
-        # Apply count transformation: add 1 and round
+        # Apply count transformation
         count_df = self.transform_count_matrix(count_df)
         
-        # Build mapping RNASeq_Library -> WGS_Library
+        # Build sample mapping
         metadata_config = self.config['metadata_columns']
         rnaseq_col = metadata_config['rnaseq_library']
         wgs_col = metadata_config['wgs_library']
         
-        # Normalize IDs
-        meta_df[rnaseq_col] = self.normalize_ids(meta_df[rnaseq_col])
-        meta_df[wgs_col] = self.normalize_ids(meta_df[wgs_col])
+        meta_df = self.read_file(self.meta_file, self.meta_file_sep)
         
-        meta_map = meta_df[[rnaseq_col, wgs_col]].dropna()
-        meta_map = meta_map.rename(columns={wgs_col: "IID"})
+        # Apply sample name normalization to metadata
+        meta_df[rnaseq_col] = meta_df[rnaseq_col].apply(self.normalize_sample_name)
+        meta_df[wgs_col] = meta_df[wgs_col].apply(self.normalize_sample_name)
         
-        # Create mapping dictionary
+        meta_map = meta_df[[rnaseq_col, wgs_col]].dropna().rename(columns={wgs_col: "IID"})
         rename_dict = meta_map.set_index(rnaseq_col)["IID"].to_dict()
         
-        # Filter to valid mappings
-        valid_samples = [c for c in count_samples if c in rename_dict and pd.notna(rename_dict[c]) and len(str(rename_dict[c])) > 0]
-        rename_dict = {k: v for k, v in rename_dict.items() if k in valid_samples}
-        
-        logger.info(f"Matched {len(rename_dict)} samples between count matrix and metadata")
-        
-        if len(rename_dict) == 0:
-            raise ValueError("No sample matches found between count matrix and metadata")
+        # Apply sample name normalization to count matrix column names
+        count_df_renamed = count_df.copy()
+        count_df_renamed.columns = [self.normalize_sample_name(col) if col != 'gene_id' else col for col in count_df.columns]
         
         # Filter count matrix and rename to IID
-        count_keep_cols = ["gene_id"] + list(rename_dict.keys())
-        filtered_count_df = count_df[count_keep_cols].copy()
-        filtered_count_df = filtered_count_df.rename(columns=rename_dict)
-        
-        # Save TSV file (gene_id + samples only, no genomic info)
+        count_keep_cols = ["gene_id"] + [c for c in count_df_renamed.columns if c in rename_dict and c != 'gene_id']
+        filtered_count_df = count_df_renamed[count_keep_cols].copy().rename(columns=rename_dict)
         filtered_count_df.to_csv(self.expression_tsv_output, sep="\t", index=False)
-        logger.info(f"✅ Transformed expression TSV created: {self.expression_tsv_output}")
         
-        # Create BED format with genomic coordinates
-        logger.info("Creating BED format expression file...")
+        # Create BED format
+        if not hasattr(self, 'gene_coords'):
+            gene_types = self.config['annotations'].get('gene_types', ['protein_coding'])
+            self.gene_coords = self.parse_gtf_for_gene_coordinates(self.gtf_file, gene_types)
         
-        # Filter genes
-        genes = gtf_df[gtf_df["feature"] == "gene"].copy()
-        genes["gene_id"] = genes["gene_id"].astype(str).str.replace(r"\.\d+$", "", regex=True)
+        bed_data = []
+        for _, row in filtered_count_df.iterrows():
+            gene_id = row['gene_id']
+            if gene_id in self.gene_coords:
+                coords = self.gene_coords[gene_id]
+                bed_row = {
+                    '#chr': coords['chr'], 'start': coords['start'], 'end': coords['end'],
+                    'gene_id': gene_id, 'score': 0, 'strand': coords['strand']
+                }
+                for sample in filtered_count_df.columns:
+                    if sample != 'gene_id':
+                        bed_row[sample] = row[sample]
+                bed_data.append(bed_row)
         
-        # Merge with expression data
-        expression_bed = filtered_count_df.merge(
-            genes[['gene_id', 'chr', 'start', 'end', 'strand']], 
-            on='gene_id', 
-            how='left'
-        )
-        
-        # Handle missing positions
-        missing_positions = expression_bed['chr'].isna()
-        if missing_positions.any():
-            missing_count = missing_positions.sum()
-            logger.warning(f"Missing genomic positions for {missing_count} genes")
-            
-            expression_bed.loc[missing_positions, 'chr'] = 'chr1'
-            expression_bed.loc[missing_positions, 'start'] = range(1, missing_count + 1)
-            expression_bed.loc[missing_positions, 'end'] = range(1001, missing_count + 1001)
-            expression_bed.loc[missing_positions, 'strand'] = '+'
-        
-        # Prepare BED columns
+        expression_bed = pd.DataFrame(bed_data)
         sample_cols = [col for col in filtered_count_df.columns if col != 'gene_id']
-        expression_bed['score'] = 0
+        bed_columns = ['#chr', 'start', 'end', 'gene_id', 'score', 'strand'] + sample_cols
+        expression_bed = expression_bed[bed_columns]
         
-        # Ensure proper data types
-        expression_bed['start'] = expression_bed['start'].astype(int)
-        expression_bed['end'] = expression_bed['end'].astype(int)
+        # Sort by chromosomal coordinates
+        chrom_order = {f'chr{i}': i for i in range(1, 23)}
+        chrom_order.update({'chrX': 23, 'chrY': 24, 'chrM': 25})
+        expression_bed['chrom_num'] = expression_bed['#chr'].map(chrom_order)
+        expression_bed = expression_bed.sort_values(['chrom_num', 'start']).drop('chrom_num', axis=1)
         
-        # Create final BED dataframe
-        bed_columns = ['chr', 'start', 'end', 'gene_id', 'score', 'strand'] + sample_cols
-        expression_bed = expression_bed[bed_columns].sort_values(['chr', 'start'])
-        
-        # Save BED file
         expression_bed.to_csv(self.expression_bed_output, sep="\t", index=False)
         logger.info(f"✅ Expression BED created: {expression_bed.shape[0]} genes, {len(sample_cols)} samples")
         
         self.expression_samples = sample_cols
         self.expression_bed = expression_bed
-        self.filtered_count_df = filtered_count_df
         return expression_bed
     
     def load_pca_data(self):
-        """Load PCA data from eigenvec file"""
         if not self.pca_file or not os.path.exists(self.pca_file):
             return None
         
         try:
-            logger.info(f"Reading PCA file with separator: '{self.pca_file_sep}'")
-            pca_df = self.read_csv_with_encoding_fallback(self.pca_file, self.pca_file_sep, header=None, engine='python')
+            # Try reading with different approaches for PCA files
+            logger.info(f"Reading PCA file: {self.pca_file}")
+            
+            # Approach 1: Try reading with tab separator (most common for eigenvec)
+            try:
+                pca_df = pd.read_csv(self.pca_file, sep='\t', engine='python')
+                logger.info("Successfully read PCA file with tab separator")
+            except:
+                # Approach 2: Try reading with space separator
+                try:
+                    pca_df = pd.read_csv(self.pca_file, sep='\\s+', engine='python')
+                    logger.info("Successfully read PCA file with space separator")
+                except:
+                    # Approach 3: Try reading with any whitespace
+                    pca_df = pd.read_csv(self.pca_file, delim_whitespace=True, engine='python')
+                    logger.info("Successfully read PCA file with whitespace delimiter")
+            
+            # Check and clean column names
+            pca_df.columns = [col.strip().replace('#', '') for col in pca_df.columns]
+            
+            # Debug: log the columns found
+            logger.info(f"PCA file columns are like: {list(pca_df.columns[:5])}")
+            logger.info(f"PCA file shape: {pca_df.shape}")
+            
             pca_count = self.config['covariates'].get('pca_count', 5)
             
-            # Assign column names
-            pca_columns = ['FID', 'IID'] + [f'PC{i}' for i in range(1, pca_count + 1)]
-            pca_df = pca_df.iloc[:, :len(pca_columns)]
-            pca_df.columns = pca_columns
+            # Check if we have PC columns
+            available_pcs = [col for col in pca_df.columns if col.startswith('PC')]
+            logger.info(f"Available PC columns are like: {available_pcs[:5]}")
             
-            pca_df['IID'] = self.normalize_ids(pca_df['IID'])
-            logger.info(f"Loaded PCA data with {pca_df.shape[0]} samples")
-            return pca_df
+            if len(available_pcs) < pca_count:
+                logger.warning(f"Requested {pca_count} PCs but only {len(available_pcs)} available in PCA file")
+                pca_count = len(available_pcs)
             
+            if pca_count == 0:
+                logger.error("No PC columns found in PCA file")
+                return None
+            
+            # Select the required columns: FID, IID and the first pca_count PCs
+            required_columns = []
+            
+            # Add FID and IID if they exist
+            if 'FID' in pca_df.columns:
+                required_columns.append('FID')
+            if 'IID' in pca_df.columns:
+                required_columns.append('IID')
+            
+            # Add the PC columns
+            pc_columns = [f'PC{i}' for i in range(1, pca_count + 1)]
+            required_columns.extend(pc_columns)
+            
+            # Check if all required columns exist
+            missing_columns = set(required_columns) - set(pca_df.columns)
+            if missing_columns:
+                logger.warning(f"Missing columns in PCA file: {missing_columns}")
+                # Use only available columns
+                required_columns = [col for col in required_columns if col in pca_df.columns]
+            
+            pca_df = pca_df[required_columns]
+            
+            # Apply sample name normalization to PCA data
+            if 'IID' in pca_df.columns:
+                pca_df['IID'] = pca_df['IID'].apply(self.normalize_sample_name)
+                logger.info(f"Loaded PCA data with {pca_df.shape[0]} samples, {pca_count} PCs")
+                return pca_df
+            else:
+                logger.error("No IID column found in PCA file after processing")
+                return None
+                
         except Exception as e:
             logger.error(f"Failed to load PCA data: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
-    
-    def build_covariates(self):
-        """Build comprehensive covariate files including both processed and raw versions"""
-        logger.info("Building comprehensive covariate files...")
         
-        logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
-        meta_df = self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep, low_memory=False)
+    def build_covariates(self):
+        logger.info("Building covariate files...")
+        
+        meta_df = self.read_file(self.meta_file, self.meta_file_sep, low_memory=False)
         metadata_config = self.config['metadata_columns']
         wgs_col = metadata_config['wgs_library']
         
-        # Normalize IDs
-        meta_df[wgs_col] = self.normalize_ids(meta_df[wgs_col])
+        # Apply sample name normalization to metadata
+        meta_df[wgs_col] = meta_df[wgs_col].apply(self.normalize_sample_name)
         
-        # Get covariate columns from config
         covariate_config = self.config['covariates']
         meta_covariates = covariate_config.get('include', [])
         pca_covariates = covariate_config.get('pca_include', [])
@@ -427,408 +503,127 @@ class FinalInputBuilder:
             pca_df = self.load_pca_data()
             if pca_df is not None:
                 available_pca_cols = [col for col in pca_covariates if col in pca_df.columns]
-                pca_data = pca_df[["IID"] + available_pca_cols]
+                if available_pca_cols:
+                    pca_data = pca_df[["IID"] + available_pca_cols]
         
-        # Prepare base covariates - use the columns specified in config
+        # Prepare base covariates
         available_meta_cols = [col for col in meta_covariates if col in meta_df.columns]
-        missing_cols = set(meta_covariates) - set(available_meta_cols)
-        if missing_cols:
-            logger.warning(f"Missing covariate columns in metadata: {missing_cols}")
+        base_covariates = meta_df[[wgs_col] + available_meta_cols].copy().rename(columns={wgs_col: "ID"})
         
-        base_covariates = meta_df[[wgs_col] + available_meta_cols].copy()
-        base_covariates = base_covariates.rename(columns={wgs_col: "ID"})
+        # Filter to expression samples
+        base_covariates = base_covariates[base_covariates["ID"].isin(self.expression_samples)].drop_duplicates(subset=["ID"]).dropna()
         
-        # Create RAW covariates file (no transformations)
-        logger.info("Creating raw covariates file...")
+        # Create RAW covariates file
         raw_covariates = base_covariates.copy()
-        
-        # Merge with PCA data for raw covariates
         if pca_data is not None:
             raw_covariates = raw_covariates.merge(pca_data.rename(columns={"IID": "ID"}), on="ID", how="left")
         
-        # Filter to expression samples and remove duplicates
-        raw_covariates = raw_covariates[raw_covariates["ID"].isin(self.expression_samples)]
-        raw_covariates = raw_covariates.drop_duplicates(subset=["ID"])
-        
-        # Handle missing values by dropping
-        original_count = raw_covariates.shape[0]
-        raw_covariates = raw_covariates.dropna()
-        if original_count - raw_covariates.shape[0] > 0:
-            logger.warning(f"Dropped {original_count - raw_covariates.shape[0]} samples with missing covariate values")
-        
-        # Transpose for raw covariates format
         raw_covar_matrix = raw_covariates.set_index("ID").T
         raw_covar_matrix.index.name = "covariate"
-        
-        # Save raw covariate file
         raw_covar_matrix.to_csv(self.covar_raw_output, sep="\t", index=True)
         logger.info(f"✅ Raw covariates created: {raw_covar_matrix.shape[0]} covariates, {raw_covar_matrix.shape[1]} samples")
         
-        # Now create PROCESSED covariates file (with one-hot encoding and standardization)
-        logger.info("Creating processed covariates file for TensorQTL...")
+        # Create PROCESSED covariates file
         processed_covariates = base_covariates.copy()
         
-        # Auto-detect and one-hot encode categorical variables
-        categorical_cols = []
-        continuous_cols = []
-        
-        for col in available_meta_cols:
-            if processed_covariates[col].dtype == 'object' or processed_covariates[col].nunique() < 10:
-                categorical_cols.append(col)
-            else:
-                continuous_cols.append(col)
-        
-        # One-hot encode categorical variables (drop first category to avoid collinearity)
+        # One-hot encode categorical variables
+        categorical_cols = [col for col in available_meta_cols if processed_covariates[col].dtype == 'object' or processed_covariates[col].nunique() < 10]
         if categorical_cols:
-            logger.info(f"One-hot encoding categorical variables: {categorical_cols}")
             processed_covariates = pd.get_dummies(processed_covariates, columns=categorical_cols, drop_first=True)
         
-        # Merge with PCA data for processed covariates
         if pca_data is not None:
             processed_covariates = processed_covariates.merge(pca_data.rename(columns={"IID": "ID"}), on="ID", how="left")
         
-        # Filter to expression samples and remove duplicates
-        processed_covariates = processed_covariates[processed_covariates["ID"].isin(self.expression_samples)]
-        processed_covariates = processed_covariates.drop_duplicates(subset=["ID"])
-        
-        # Handle missing values by dropping
-        processed_covariates = processed_covariates.dropna()
-        
-        # Standardize continuous covariates (excluding dummy variables)
+        # Standardize continuous covariates
         cols_to_standardize = []
         for col in processed_covariates.columns:
-            if col != 'ID' and processed_covariates[col].dtype in ['float64', 'int64']:
-                # Only standardize if it's not a dummy variable (dummy variables are 0/1)
-                if processed_covariates[col].nunique() > 2:
-                    cols_to_standardize.append(col)
+            if col != 'ID' and processed_covariates[col].dtype in ['float64', 'int64'] and processed_covariates[col].nunique() > 2:
+                cols_to_standardize.append(col)
         
         if cols_to_standardize:
-            logger.info(f"Standardizing continuous covariates: {cols_to_standardize}")
             scaler = StandardScaler()
             processed_covariates[cols_to_standardize] = scaler.fit_transform(processed_covariates[cols_to_standardize])
         
-        # Transpose for tensorQTL format (covariates × samples)
         processed_covar_matrix = processed_covariates.set_index("ID").T
-        processed_covar_matrix.index.name = "id"  # TensorQTL expects 'id' as first column name
-        
+        processed_covar_matrix.index.name = "id"
+
+        # Convert any True/False values to 1/0
+        processed_covar_matrix = processed_covar_matrix.replace({True: 1, False: 0})
         # Save processed covariate file in proper TensorQTL format
         processed_covar_matrix.to_csv(self.covar_output, sep="\t", index=True)
         logger.info(f"✅ Processed covariates created: {processed_covar_matrix.shape[0]} covariates, {processed_covar_matrix.shape[1]} samples")
         
-        # Log the covariates that were included
-        processed_covariate_list = list(processed_covar_matrix.index)
-        raw_covariate_list = list(raw_covar_matrix.index)
-        logger.info(f"Processed covariates included: {processed_covariate_list}")
-        logger.info(f"Raw covariates included: {raw_covariate_list}")
-        
         self.covariate_samples = processed_covar_matrix.columns.tolist()
-        self.covar_matrix = processed_covar_matrix
-        self.raw_covar_matrix = raw_covar_matrix
         return processed_covar_matrix
-
-    def create_phenotype_data(self):
-        """Create phenotype data in BED format for tensorQTL and TSV format for analysis"""
-        logger.info("Creating phenotype data...")
-        
-        logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
-        meta_df = self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep, low_memory=False)
-        metadata_config = self.config['metadata_columns']
-        wgs_col = metadata_config['wgs_library']
-        
-        meta_df[wgs_col] = self.normalize_ids(meta_df[wgs_col])
-        
-        # Get phenotype columns
-        phenotype_config = self.config.get('phenotypes', {})
-        phenotype_columns = phenotype_config.get('include', [])
-        
-        if not phenotype_columns:
-            logger.info("No phenotype columns specified, skipping")
-            return None
-        
-        # Filter to available phenotypes
-        available_phenotypes = [col for col in phenotype_columns if col in meta_df.columns]
-        
-        if not available_phenotypes:
-            logger.warning("No valid phenotype columns found")
-            return None
-        
-        # Create phenotype dataframe
-        phenotype_df = meta_df[[wgs_col] + available_phenotypes].copy()
-        phenotype_df = phenotype_df.rename(columns={wgs_col: "ID"})
-        
-        # Filter to common samples and remove duplicates
-        common_samples = set(self.expression_samples) & set(self.covariate_samples)
-        phenotype_df = phenotype_df[phenotype_df["ID"].isin(common_samples)]
-        phenotype_df = phenotype_df.drop_duplicates(subset=["ID"])
-        
-        # Handle missing values
-        phenotype_df = phenotype_df.dropna()
-        
-        # Save TSV format (samples as rows, phenotypes as columns)
-        phenotype_tsv = phenotype_df.set_index("ID")
-        phenotype_tsv.to_csv(self.phenotype_tsv_output, sep="\t")
-        logger.info(f"✅ Phenotype TSV created: {phenotype_tsv.shape[1]} phenotypes, {phenotype_tsv.shape[0]} samples")
-        
-        # Transpose to get phenotypes as rows, samples as columns for BED format
-        phenotype_matrix = phenotype_df.set_index("ID").T
-        phenotype_matrix.index.name = "phenotype_id"
-        
-        # Convert to BED format for tensorQTL
-        bed_data = []
-        start_pos = 1000
-        
-        for i, phenotype_id in enumerate(phenotype_matrix.index):
-            bed_row = {
-                'chr': 'chr1',
-                'start': start_pos + (i * 1000),
-                'end': start_pos + (i * 1000) + 1000,
-                'phenotype_id': phenotype_id,
-                'score': 0,
-                'strand': '+'
-            }
-            # Add sample values
-            for sample in phenotype_matrix.columns:
-                bed_row[sample] = phenotype_matrix.loc[phenotype_id, sample]
-            
-            bed_data.append(bed_row)
-        
-        # Create BED dataframe
-        bed_columns = ['chr', 'start', 'end', 'phenotype_id', 'score', 'strand'] + phenotype_matrix.columns.tolist()
-        phenotype_bed = pd.DataFrame(bed_data, columns=bed_columns)
-        
-        # Ensure proper data types
-        phenotype_bed['start'] = phenotype_bed['start'].astype(int)
-        phenotype_bed['end'] = phenotype_bed['end'].astype(int)
-        
-        # Save in BED format
-        phenotype_bed.to_csv(self.phenotype_bed_output, sep="\t", index=False)
-        logger.info(f"✅ Phenotype BED created: {phenotype_bed.shape[0]} phenotypes, {phenotype_bed.shape[1]-6} samples")
-        
-        self.phenotype_samples = phenotype_matrix.columns.tolist()
-        self.phenotype_bed = phenotype_bed
-        self.phenotype_tsv = phenotype_tsv
-        return phenotype_bed
     
-    def create_sample_mapping(self):
-        """Create sample mapping file for cross-checking"""
-        logger.info("Creating sample mapping file...")
+    def process_genotypes(self):
+        """Optimized genotype processing with sample renaming first"""
+        logger.info("Processing genotype data...")
         
-        logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
-        meta_df = self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep, low_memory=False)
-        metadata_config = self.config['metadata_columns']
-        rnaseq_col = metadata_config['rnaseq_library']
-        wgs_col = metadata_config['wgs_library']
+        # Get VCF samples
+        vcf_samples = self.get_vcf_samples()
         
-        # Normalize IDs
-        meta_df[rnaseq_col] = self.normalize_ids(meta_df[rnaseq_col])
-        meta_df[wgs_col] = self.normalize_ids(meta_df[wgs_col])
+        # Create sample mapping and rename VCF samples
+        sample_mapping = self.create_sample_mapping(vcf_samples)
+        renamed_vcf = self.rename_vcf_samples()
         
-        # Get common samples across all data types
-        common_samples = set(self.expression_samples) & set(self.covariate_samples)
-        if hasattr(self, 'phenotype_samples'):
-            common_samples &= set(self.phenotype_samples)
+        # Get the renamed samples (normalized names)
+        renamed_vcf_samples = set(sample_mapping.values())
         
-        # Create mapping file
-        mapping_df = meta_df[meta_df[wgs_col].isin(common_samples)][[rnaseq_col, wgs_col]].copy()
-        mapping_df = mapping_df.rename(columns={rnaseq_col: "RNASeq_Library", wgs_col: "WGS_Library"})
+        # Check sample overlap
+        common_samples, vcf_only, expr_only = self.check_sample_overlap(renamed_vcf_samples, self.expression_samples)
         
-        # Add data presence flags
-        mapping_df['in_expression'] = True
-        mapping_df['in_covariates'] = mapping_df['WGS_Library'].isin(self.covariate_samples)
-        if hasattr(self, 'phenotype_samples'):
-            mapping_df['in_phenotypes'] = mapping_df['WGS_Library'].isin(self.phenotype_samples)
-        
-        mapping_df.to_csv(self.mapping_output, sep="\t", index=False)
-        logger.info(f"✅ Sample mapping created: {mapping_df.shape[0]} samples")
-        
-        return mapping_df
-    
-    def process_genotypes_parallel(self):
-        """Process genotype data with multi-threading for maximum speed"""
-        logger.info("Processing genotype data with parallel processing...")
-        
-        # Find bcftools
-        bcftools_path = subprocess.run(["which", "bcftools"], capture_output=True, text=True)
-        if bcftools_path.returncode != 0:
-            raise RuntimeError("bcftools not found in PATH")
-        
-        bcftools_path = bcftools_path.stdout.strip()
-        
-        # Get common samples
-        common_samples = set(self.expression_samples) & set(self.covariate_samples)
-        if hasattr(self, 'phenotype_samples'):
-            common_samples &= set(self.phenotype_samples)
-        
-        self.common_samples = list(common_samples)
-        logger.info(f"Common samples: {len(self.common_samples)}")
-        
-        if len(self.common_samples) == 0:
-            raise ValueError("No common samples found across data types")
-        
-        # Write sample list
-        with open(self.samples_output, "w") as f:
-            for sample in self.common_samples:
+        # Write final sample list
+        with open(self.samples_output, 'w') as f:
+            for sample in common_samples:
                 f.write(f"{sample}\n")
         
-        # VCF processing configuration
-        vcf_config = self.config['vcf_processing']
-        regions = vcf_config.get('regions', [f"chr{i}" for i in range(1, 23)])
-        biallelic_only = vcf_config.get('biallelic_only', True)
-        variant_type = vcf_config.get('variant_type', 'snps')
+        # Subset VCF only if needed
+        final_vcf = self.subset_vcf_if_needed(renamed_vcf, common_samples)
         
-        logger.info(f"VCF processing: biallelic_only={biallelic_only}, variant_type={variant_type}")
-        logger.info(f"Using {self.threads} threads for VCF processing")
-        
-        if biallelic_only:
-            # Simple case: only keep biallelic SNPs with parallel processing
-            cmd_filter = [
-                bcftools_path,
-                "view", 
-                "--threads", str(self.threads),
-                "-S", self.samples_output,
-                "-r", ",".join(regions),
-                "-m2", "-M2",
-                "-v", variant_type,
-                self.vcf_input, 
-                "-Oz", "-o", self.genotype_vcf_output
-            ]
-            self.run_command(cmd_filter, "Filtering VCF for biallelic sites (parallel)")
-            
-        else:
-            # Complex case: handle multiallelic sites by splitting them with parallel processing
-            logger.info("Processing multiallelic sites with parallel splitting...")
-            
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_filtered_vcf = os.path.join(temp_dir, "temp_filtered.vcf.gz")
-                
-                # First filter: samples, regions, variant type
-                cmd_first_filter = [
-                    bcftools_path,
-                    "view",
-                    "--threads", str(self.threads),
-                    "-S", self.samples_output,
-                    "-r", ",".join(regions),
-                    "-v", variant_type,
-                    self.vcf_input,
-                    "-Oz", "-o", temp_filtered_vcf
-                ]
-                self.run_command(cmd_first_filter, "Initial VCF filtering (parallel)")
-                
-                # Index the temporary VCF
-                cmd_index_temp = [bcftools_path, "index", "-t", temp_filtered_vcf]
-                self.run_command(cmd_index_temp, "Indexing temporary VCF")
-                
-                # Split multiallelic sites into biallelic records
-                cmd_split = [
-                    bcftools_path,
-                    "norm",
-                    "--threads", str(self.threads),
-                    "-m", "-any",
-                    temp_filtered_vcf,
-                    "-Oz", "-o", self.genotype_vcf_output
-                ]
-                self.run_command(cmd_split, "Splitting multiallelic sites (parallel)")
-        
-        # Index the final VCF
-        cmd_index = [bcftools_path, "index", "-t", self.genotype_vcf_output]
-        self.run_command(cmd_index, "Indexing final VCF")
+        if final_vcf != self.genotype_vcf_output:
+            # If we didn't create a new file, copy the renamed VCF to final location
+            if final_vcf == renamed_vcf and renamed_vcf != self.vcf_input:
+                os.rename(renamed_vcf, self.genotype_vcf_output)
+                os.rename(renamed_vcf + '.tbi', self.genotype_vcf_output + '.tbi')
         
         logger.info(f"✅ Genotype VCF created: {self.genotype_vcf_output}")
+        self.common_samples = list(common_samples)
         return self.common_samples
     
     def run_pipeline(self):
-        """Execute the complete input building pipeline"""
-        logger.info("Starting final tensorQTL input building pipeline...")
+        logger.info("Starting tensorQTL input building pipeline...")
         
         try:
-            self.validate_input_files()
             self.create_annotation_bed()
             self.process_expression_data()
             self.build_covariates()
-            self.create_phenotype_data()
-            self.process_genotypes_parallel()
-            self.create_sample_mapping()
+            self.process_genotypes()
             
-            self.generate_summary()
             logger.info("🎉 Pipeline completed successfully!")
+            self.generate_summary()
             
         except Exception as e:
             logger.error(f"❌ Pipeline failed: {e}")
             raise
     
     def generate_summary(self):
-        """Generate pipeline summary"""
-        logger.info("\n" + "="*60)
-        logger.info("=== FINAL PIPELINE SUMMARY ===")
-        logger.info("="*60)
-        
-        logger.info(f"📊 EXPRESSION DATA")
-        logger.info(f"  BED file (tensorQTL): {self.expression_bed_output}")
-        logger.info(f"  TSV file (transformed): {self.expression_tsv_output}")
-        logger.info(f"  TSV file (raw counts): {self.expression_tsv_raw_output}")
-        logger.info(f"  Transformation: count = count + {self.add_value}" + (" + round" if self.round_counts else ""))
-        logger.info(f"  Genes: {self.expression_bed.shape[0]}")
-        logger.info(f"  Samples: {len(self.expression_samples)}")
-        
-        logger.info(f"📈 COVARIATES")
-        logger.info(f"  Processed file (tensorQTL): {self.covar_output}")
-        logger.info(f"  Raw file (reference): {self.covar_raw_output}")
-        logger.info(f"  Format: TSV (covariates × samples)")
-        logger.info(f"  Processed covariates: {self.covar_matrix.shape[0]}")
-        logger.info(f"  Raw covariates: {self.raw_covar_matrix.shape[0]}")
-        logger.info(f"  Samples: {self.covar_matrix.shape[1]}")
-        logger.info(f"  Processed covariate list: {list(self.covar_matrix.index)}")
-        logger.info(f"  Raw covariate list: {list(self.raw_covar_matrix.index)}")
-        
-        if hasattr(self, 'phenotype_bed'):
-            logger.info(f"🏥 PHENOTYPES")
-            logger.info(f"  BED file (tensorQTL): {self.phenotype_bed_output}")
-            logger.info(f"  TSV file (analysis): {self.phenotype_tsv_output}")
-            logger.info(f"  Phenotypes: {self.phenotype_bed.shape[0]}")
-            logger.info(f"  Samples: {len(self.phenotype_samples)}")
-        
-        logger.info(f"🧬 GENOTYPES")
-        logger.info(f"  VCF: {self.genotype_vcf_output}")
-        vcf_config = self.config['vcf_processing']
-        logger.info(f"  Biallelic only: {vcf_config.get('biallelic_only', True)}")
-        logger.info(f"  Variant type: {vcf_config.get('variant_type', 'snps')}")
-        logger.info(f"  Threads used: {self.threads}")
-        logger.info(f"  Samples: {len(self.common_samples)}")
-        
-        logger.info(f"📝 ANNOTATIONS")
-        logger.info(f"  File: {self.annotation_bed_output}")
-        logger.info(f"  Genes: {self.annotation_bed.shape[0]}")
-        
-        logger.info(f"📋 SAMPLE MAPPING")
-        logger.info(f"  File: {self.mapping_output}")
-        
-        logger.info("="*60)
-        logger.info("=== TENSORQTL USAGE ===")
-        logger.info("python3 -m tensorqtl \\")
-        logger.info(f"  {self.genotype_vcf_output} \\")
-        logger.info(f"  {self.expression_bed_output} \\")
-        logger.info(f"  output_prefix \\")
-        logger.info(f"  --covariates {self.covar_output} \\")
-        if hasattr(self, 'phenotype_bed'):
-            logger.info(f"  --phenotypes {self.phenotype_bed_output} \\")
-        logger.info(f"  --mode cis")
-        logger.info("="*60)
+        logger.info("\n" + "="*50)
+        logger.info("=== PIPELINE SUMMARY ===")
+        logger.info("="*50)
+        logger.info(f"Expression: {self.expression_bed.shape[0]} genes, {len(self.expression_samples)} samples")
+        logger.info(f"Covariates: {len(self.covariate_samples)} samples")
+        logger.info(f"Genotypes: {len(self.common_samples)} samples")
+        logger.info(f"Sample ID optimization: {'ENABLED' if self.sample_name_optimization else 'DISABLED'}")
+        logger.info("="*50)
 
 def main():
-    parser = argparse.ArgumentParser(description='Build final tensorQTL input files with parallel processing')
+    parser = argparse.ArgumentParser(description='Build tensorQTL input files')
     parser.add_argument('--config', required=True, help='Path to configuration YAML file')
-    parser.add_argument('--threads', type=int, help='Override number of threads (0=all cores)')
-    
     args = parser.parse_args()
     
     try:
         builder = FinalInputBuilder(args.config)
-        
-        # Override threads if provided
-        if args.threads is not None:
-            builder.threads = args.threads
-            logger.info(f"Overriding threads to: {builder.threads}")
-        
         builder.run_pipeline()
     except Exception as e:
         logger.error(f"Pipeline execution failed: {e}")
