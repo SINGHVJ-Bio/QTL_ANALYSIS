@@ -760,7 +760,21 @@ class PhenotypeProcessor:
         return df.apply(pd.to_numeric, errors='coerce')
     
     def _load_covariate_data(self):
-        """Load covariate data"""
+        """Load covariate data from either exp_covariate_design or original covariates file"""
+        # Check for new covariate design structure first
+        batch_config = self.config.get('batch_correction', {})
+        exp_covariate_design_file = batch_config.get('exp_covariate_design')
+        
+        if exp_covariate_design_file and os.path.exists(exp_covariate_design_file):
+            logger.info(f"Loading covariate design from: {exp_covariate_design_file}")
+            try:
+                cov_df = self._load_data_file(exp_covariate_design_file, "covariate design")
+                logger.info(f"Loaded covariate design: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+                return cov_df
+            except Exception as e:
+                logger.warning(f"Failed to load exp_covariate_design file: {e}, falling back to original covariates")
+        
+        # Fallback to original covariates file
         covariates_file = self.config['input_files'].get('covariates')
         if not covariates_file or not os.path.exists(covariates_file):
             return pd.DataFrame()
@@ -1062,7 +1076,20 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
         logger.info(f"Loaded pre-processed covariates: {cov_df.shape[1]} samples")
         return cov_df.T
     
-    # Fallback to original covariate file
+    # Fallback to original covariate file or exp_covariate_design
+    batch_config = config.get('batch_correction', {})
+    exp_covariate_design_file = batch_config.get('exp_covariate_design')
+    
+    if exp_covariate_design_file and os.path.exists(exp_covariate_design_file):
+        logger.info(f"Loading covariate design from: {exp_covariate_design_file}")
+        try:
+            cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
+            logger.info(f"Loaded covariate design: {cov_df.shape[0]} samples, {cov_df.shape[1]} covariates")
+            return cov_df.T
+        except Exception as e:
+            logger.warning(f"Failed to load exp_covariate_design file: {e}")
+    
+    # Final fallback to original covariates file
     covariates_file = config['input_files'].get('covariates')
     if not covariates_file or not os.path.exists(covariates_file):
         logger.warning("No covariate file found")

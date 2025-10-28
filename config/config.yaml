@@ -208,6 +208,17 @@ enhanced_qc:
   pca_covariates: true
   num_pc_covariates: 5
 
+# Batch correction parameters
+batch_correction:
+  enabled:
+    eqtl: true
+    pqtl: false  
+    sqtl: false
+  exp_covariates:
+    categorical: ["Batch", "Sex"]
+    linear: ["Age", "RIN", "PC1", "PC2"]
+  exp_covariate_design: "/home/ubuntu/covariate_matrix.tsv"
+
 # Interaction analysis using tensorQTL
 interaction_analysis:
   enable: false
