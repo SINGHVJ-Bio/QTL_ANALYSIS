@@ -1,0 +1,434 @@
+2025-10-28 23:49:30,282 - INFO - ✅ Configuration loaded from: config/config.yaml
+2025-10-28 23:49:30,282 - INFO - ✅ Directory structure verified
+2025-10-28 23:49:30,282 - INFO - 🚀 Starting Modular QTL Pipeline at 2025-10-28 23:49:30
+2025-10-28 23:49:30,282 - INFO - 🎯 Target modules: data_preparation, genotype_processing, expression_processing, quality_control, qtl_mapping, fine_mapping, interaction_analysis, visualization, report_generation
+2025-10-28 23:49:30,282 - INFO - 
+📦 Progress: [1/9] - data_preparation
+2025-10-28 23:49:30,282 - INFO - ▶️  Starting module: data_preparation
+2025-10-28 23:49:30,282 - INFO - 
+============================================================
+2025-10-28 23:49:30,282 - INFO - 🚀 RUNNING DATA PREPARATION MODULE
+2025-10-28 23:49:30,282 - INFO - ============================================================
+2025-10-28 23:49:30,995 - WARNING - ⚠️ Batch correction module not available: No module named 'batch_correction'
+2025-10-28 23:49:30,995 - WARNING - ⚠️ DESeq2 VST Python module not available: No module named 'deseq2_vst_python'
+2025-10-28 23:49:31,651 - INFO - ✅ PyTorch successfully imported (version: 2.6.0)
+2025-10-28 23:49:31,652 - INFO - 🔢 CUDA not available, using CPU
+2025-10-28 23:49:32,199 - INFO - cffi mode is CFFI_MODE.ANY
+2025-10-28 23:49:32,199 - INFO - R home found: /Library/Frameworks/R.framework/Resources
+2025-10-28 23:49:32,320 - INFO - R library path: /Library/Frameworks/R.framework/Resources/lib
+2025-10-28 23:49:32,320 - INFO - LD_LIBRARY_PATH: /Library/Frameworks/R.framework/Resources/lib
+2025-10-28 23:49:32,334 - INFO - Default options to initialize R: rpy2, --quiet, --no-save
+2025-10-28 23:51:55,497 - INFO - ✅ Configuration loaded from: config/config.yaml
+2025-10-28 23:51:55,497 - INFO - ✅ Directory structure verified
+2025-10-28 23:51:55,497 - INFO - 🚀 Starting Modular QTL Pipeline at 2025-10-28 23:51:55
+2025-10-28 23:51:55,497 - INFO - 🎯 Target modules: data_preparation, genotype_processing, expression_processing, quality_control, qtl_mapping, fine_mapping, interaction_analysis, visualization, report_generation
+2025-10-28 23:51:55,497 - INFO - 
+📦 Progress: [1/9] - data_preparation
+2025-10-28 23:51:55,497 - INFO - ▶️  Starting module: data_preparation
+2025-10-28 23:51:55,497 - INFO - 
+============================================================
+2025-10-28 23:51:55,497 - INFO - 🚀 RUNNING DATA PREPARATION MODULE
+2025-10-28 23:51:55,497 - INFO - ============================================================
+2025-10-28 23:51:56,343 - WARNING - ⚠️ Batch correction module not available: No module named 'batch_correction'
+2025-10-28 23:51:56,343 - WARNING - ⚠️ DESeq2 VST Python module not available: No module named 'deseq2_vst_python'
+2025-10-28 23:51:57,063 - INFO - ✅ PyTorch successfully imported (version: 2.6.0)
+2025-10-28 23:51:57,063 - INFO - 🔢 CUDA not available, using CPU
+2025-10-28 23:51:57,877 - INFO - ✅ tensorQTL v1.0.10 successfully imported
+2025-10-28 23:51:58,591 - WARNING - Batch correction module not available, batch correction will be disabled
+2025-10-28 23:51:58,591 - WARNING - ⚠️ DESeq2 VST Python module not available: No module named 'deseq2_vst_python'
+2025-10-28 23:51:59,989 - INFO - 📋 Validating inputs...
+2025-10-28 23:51:59,990 - INFO - Starting comprehensive input validation
+2025-10-28 23:51:59,990 - INFO - Validating genotype file: /Users/singhvj/QTL_ANALYSIS_OUTPUT/genotypes.vcf.gz
+2025-10-28 23:52:00,014 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:00,628 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:00,628 - INFO - 🔍 Analyzing covariate structure and composition...
+2025-10-28 23:52:00,629 - INFO - ✅ Covariate analysis: 6 numeric, 0 categorical, 1 binary covariates
+2025-10-28 23:52:00,640 - INFO - 🔍 Analyzing eqtl phenotype data structure...
+2025-10-28 23:52:00,661 - INFO - ✅ eqtl analysis: 1000 features, 226 samples, 0.00% missing
+2025-10-28 23:52:00,954 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:00,970 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,019 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,027 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,034 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,041 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,049 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,056 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,064 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,071 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,079 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,087 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,096 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,104 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,112 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,120 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,128 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,136 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,144 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,152 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,160 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,168 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,176 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,184 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,192 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,201 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,209 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,217 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,225 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,233 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,241 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,249 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,258 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,265 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,273 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,282 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,290 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,298 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,307 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,315 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,323 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,330 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,338 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,346 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,354 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,362 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,370 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,378 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,386 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,394 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,402 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,410 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,418 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,427 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,435 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,443 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,451 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,459 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,467 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,475 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,483 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,491 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,499 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,508 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,516 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,523 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,531 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,539 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,548 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,556 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,563 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,571 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,579 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,665 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,673 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,681 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,688 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,696 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,704 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,712 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,719 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,726 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,734 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,741 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,749 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,757 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,765 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,772 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,780 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,788 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,795 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,802 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,809 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,817 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,825 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,832 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,840 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,848 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,856 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,864 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,871 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,878 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,886 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,893 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,901 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,909 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,917 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,925 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,933 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,941 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,949 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,957 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,964 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,972 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,980 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,989 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:01,997 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,006 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,014 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,022 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,030 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,037 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,045 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,054 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,062 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,070 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,078 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,086 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,093 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,102 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,110 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,119 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,127 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,135 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,143 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,151 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,159 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,167 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,175 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,184 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,192 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,200 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,208 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,216 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,224 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,232 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,240 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,248 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,256 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,264 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,272 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,279 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,287 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,296 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,304 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,312 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,320 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,328 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,336 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,344 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,352 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,360 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,368 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,377 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,384 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,393 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,401 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,409 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,417 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,425 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,434 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,442 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,450 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,459 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,467 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,475 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,483 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,491 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,499 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,507 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,516 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,524 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,531 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,539 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,547 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,555 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,562 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,570 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,578 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,586 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,594 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,602 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,610 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,617 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,626 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,633 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,641 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,648 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,656 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,663 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,671 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,679 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,686 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,694 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,702 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,709 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,717 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,725 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,733 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,741 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,749 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,756 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,763 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,771 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,780 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,788 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,796 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,804 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,812 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,820 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,827 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,835 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,842 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,850 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,858 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,866 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,874 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,882 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,885 - INFO - Generated sample mapping with 226 samples
+2025-10-28 23:52:02,885 - INFO - Validation report saved: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results/input_validation_report.json
+2025-10-28 23:52:02,885 - INFO - Text report saved: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results/input_validation_report.txt
+2025-10-28 23:52:02,885 - INFO - Sample mapping saved: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results/sample_mapping.txt
+2025-10-28 23:52:02,885 - INFO - Input validation completed: 5 warnings, 39 info messages
+2025-10-28 23:52:02,885 - INFO - 🔍 Running enhanced QC...
+2025-10-28 23:52:02,886 - INFO - ✅ QC directory structure created
+2025-10-28 23:52:02,886 - INFO - 🚀 Starting data preparation module...
+2025-10-28 23:52:02,886 - INFO - 📋 Validating input files
+2025-10-28 23:52:02,886 - INFO - 🔍 Validating input files...
+2025-10-28 23:52:02,886 - INFO -   ✅ genotypes: /Users/singhvj/QTL_ANALYSIS_OUTPUT/genotypes.vcf.gz (31.03 GB)
+2025-10-28 23:52:02,928 - INFO -   ✅ covariates: /Users/singhvj/QTL_ANALYSIS_OUTPUT/covariates.txt (0.00 GB)
+2025-10-28 23:52:02,931 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,931 - INFO -   ✅ annotations: /Users/singhvj/QTL_ANALYSIS_OUTPUT/annotations.bed (0.00 GB)
+2025-10-28 23:52:02,931 - INFO -   ✅ expression: /Users/singhvj/QTL_ANALYSIS_OUTPUT/expression.tsv (0.02 GB)
+2025-10-28 23:52:02,934 - INFO -   ⚠️  protein: Optional (not configured)
+2025-10-28 23:52:02,934 - INFO -   ⚠️  splicing: Optional (not configured)
+2025-10-28 23:52:02,934 - INFO -   ⚠️  gwas_phenotype: Optional (not configured)
+2025-10-28 23:52:02,934 - INFO - 🔍 Performing basic data quality checks
+2025-10-28 23:52:02,934 - INFO - 🔍 Performing basic data quality checks...
+2025-10-28 23:52:02,935 - INFO -   🧬 Checking genotype file: /Users/singhvj/QTL_ANALYSIS_OUTPUT/genotypes.vcf.gz
+2025-10-28 23:52:02,941 - INFO -   📊 Checking eqtl file: /Users/singhvj/QTL_ANALYSIS_OUTPUT/expression.tsv
+2025-10-28 23:52:02,942 - INFO -   📈 Checking covariates file: /Users/singhvj/QTL_ANALYSIS_OUTPUT/covariates.txt
+2025-10-28 23:52:02,944 - INFO -   📖 Checking annotations file: /Users/singhvj/QTL_ANALYSIS_OUTPUT/annotations.bed
+2025-10-28 23:52:02,949 - INFO -     ✅ Annotations file: 1000 annotations - 4/4 checks passed
+2025-10-28 23:52:02,951 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:52:02,953 - INFO -     ✅ covariates file: 7 rows, 226 samples - 6/6 checks passed
+2025-10-28 23:52:02,953 - INFO -     📊 Covariate types: 7 numeric, 0 categorical
+2025-10-28 23:52:03,126 - INFO -     ✅ eqtl file: 19122 features, 226 samples - 5/7 checks passed
+2025-10-28 23:54:33,918 - INFO - 📊 Extracted 226 samples from genotype file
+2025-10-28 23:54:33,919 - INFO -     ✅ Genotype file checks: 5/5 passed
+2025-10-28 23:54:33,919 - INFO - 📊 Generating data preparation report
+2025-10-28 23:54:33,919 - INFO - 📝 Generating data preparation report...
+2025-10-28 23:54:33,922 - INFO - ✅ Data preparation report generated
+2025-10-28 23:54:33,922 - INFO - 👥 Creating sample mapping files
+2025-10-28 23:54:33,922 - INFO - 👥 Creating sample mapping files...
+2025-10-28 23:54:33,937 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:54:33,938 - INFO - 📊 Sample Overlap Statistics:
+2025-10-28 23:54:33,938 - INFO -    GENOTYPES: 226 total, 226 common (100.0%)
+2025-10-28 23:54:33,938 - INFO -    EQTL: 226 total, 226 common (100.0%)
+2025-10-28 23:54:33,938 - INFO -    COVARIATES: 226 total, 226 common (100.0%)
+2025-10-28 23:54:33,938 - INFO - ✅ TensorQTL will use 226 common samples for analysis
+2025-10-28 23:54:33,938 - INFO - 🔧 Checking tensorQTL compatibility
+2025-10-28 23:54:33,938 - INFO - 🔧 Checking tensorQTL compatibility...
+2025-10-28 23:54:33,938 - INFO - ✅ Genotype samples: 226 samples found
+2025-10-28 23:54:34,113 - INFO - ✅ EQTL compatibility: 226 samples, 226 overlap with genotypes
+2025-10-28 23:54:34,116 - INFO - Successfully read covariates file with standard tab separation
+2025-10-28 23:54:34,116 - INFO - ✅ Covariates compatibility: 226 samples, 226 overlap with genotypes
+2025-10-28 23:54:34,116 - INFO - ✅ TensorQTL compatibility report generated: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results/tensorqtl_compatibility/tensorqtl_compatibility_report.html
+2025-10-28 23:54:34,116 - INFO - ✅ All data formats are compatible with tensorQTL
+2025-10-28 23:54:34,116 - INFO - ✅ Data preparation module completed successfully
+2025-10-28 23:54:34,196 - INFO - ✅ data_preparation completed successfully in 158.70 seconds
+2025-10-28 23:54:34,196 - INFO - ✅ data_preparation completed successfully
+2025-10-28 23:54:34,196 - INFO - 
+📦 Progress: [2/9] - genotype_processing
+2025-10-28 23:54:34,196 - INFO - ▶️  Starting module: genotype_processing
+2025-10-28 23:54:34,196 - INFO - 
+============================================================
+2025-10-28 23:54:34,196 - INFO - 🚀 RUNNING GENOTYPE PROCESSING MODULE
+2025-10-28 23:54:34,196 - INFO - ============================================================
+2025-10-28 23:54:34,196 - INFO - 🚀 Starting genotype processing module...
+2025-10-28 23:54:34,196 - INFO - 🔧 Processing genotype file: /Users/singhvj/QTL_ANALYSIS_OUTPUT/genotypes.vcf.gz
+2025-10-28 23:54:34,196 - INFO - 📊 Input file size: 31.03 GB
+2025-10-28 23:54:34,196 - INFO - 🔍 Performing quick validation for large file...
+2025-10-28 23:54:34,198 - INFO - ✅ Gzip integrity check passed
+2025-10-28 23:54:34,198 - INFO - Executing: Checking VCF header for tensorQTL
+2025-10-28 23:54:34,240 - WARNING - ⚠️ VCF header check failed: VCF file missing #CHROM line - invalid format for tensorQTL
+2025-10-28 23:54:34,240 - INFO - 🔍 Checking system resources...
+2025-10-28 23:54:34,240 - INFO - ✅ System check: 32.0 GB RAM, 1540.3 GB disk free
+2025-10-28 23:54:34,240 - INFO - 📁 Detected input format: vcf.gz
+2025-10-28 23:54:34,240 - INFO - 📊 Using PLINK format for optimal tensorQTL performance (31.0 GB)
+2025-10-28 23:54:34,241 - INFO - 🎯 Using PLINK format for optimal tensorQTL performance
+2025-10-28 23:54:34,241 - INFO - 🔄 Converting directly to PLINK format for tensorQTL optimization...
+2025-10-28 23:54:34,241 - INFO - 🔧 Converting VCF to PLINK with tensorQTL optimization...
+2025-10-28 23:54:34,241 - INFO - 🔍 Extracting chromosome list...
+2025-10-28 23:54:34,241 - INFO - Executing: Extracting chromosomes
+2025-10-28 23:54:34,283 - INFO - Executing: Extracting chromosomes fallback
+2025-10-28 23:54:34,656 - INFO - 📊 Found chromosomes: chr1
+2025-10-28 23:54:34,656 - INFO - Executing: Converting VCF to PLINK for tensorQTL
+2025-10-29 00:01:32,198 - INFO - ✅ Converting VCF to PLINK for tensorQTL completed successfully
+2025-10-29 00:01:32,199 - INFO - ✅ PLINK conversion completed for tensorQTL: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results/genotype_processing/genotypes
+2025-10-29 00:01:32,199 - INFO - 🔧 Applying tensorQTL-optimized processing...
+2025-10-29 00:01:32,199 - INFO - Executing: Applying tensorQTL-optimized filters
+2025-10-29 00:01:48,804 - INFO - ✅ Applying tensorQTL-optimized filters completed successfully
+2025-10-29 00:01:48,807 - INFO - ✅ Extracted 226 samples for tensorQTL alignment
+2025-10-29 00:01:48,807 - INFO - 📊 Generating tensorQTL QC reports...
+2025-10-29 00:01:48,807 - INFO - Executing: Generating MAF statistics
+2025-10-29 00:01:51,113 - INFO - ✅ Generating MAF statistics completed successfully
+2025-10-29 00:01:51,113 - INFO - Executing: Generating missingness statistics
+2025-10-29 00:01:53,241 - INFO - ✅ Generating missingness statistics completed successfully
+2025-10-29 00:01:53,241 - INFO - Executing: Generating HWE statistics
+2025-10-29 00:01:56,649 - INFO - ✅ Generating HWE statistics completed successfully
+2025-10-29 00:02:01,601 - INFO - ✅ TensorQTL compatibility report generated: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results/genotype_processing/tensorqtl_qc_reports/tensorqtl_compatibility_report.html
+2025-10-29 00:02:01,601 - INFO - ✅ TensorQTL QC reports generated
+2025-10-29 00:02:01,601 - INFO - Executing: Creating final .bed file
+2025-10-29 00:02:01,741 - INFO - ✅ Creating final .bed file completed successfully
+2025-10-29 00:02:01,741 - INFO - Executing: Creating final .bim file
+2025-10-29 00:02:01,800 - INFO - ✅ Creating final .bim file completed successfully
+2025-10-29 00:02:01,800 - INFO - Executing: Creating final .fam file
+2025-10-29 00:02:01,825 - INFO - ✅ Creating final .fam file completed successfully
+2025-10-29 00:02:01,825 - INFO - 🔍 Validating tensorQTL genotype files...
+2025-10-29 00:02:01,826 - INFO - ✅ TensorQTL validation: 226 samples confirmed
+2025-10-29 00:02:03,547 - INFO - ✅ TensorQTL validation: 9066264 variants confirmed
+2025-10-29 00:02:03,547 - INFO - ✅ All tensorQTL genotype files validated successfully
+2025-10-29 00:02:05,115 - INFO - 📊 TensorQTL Final Statistics:
+2025-10-29 00:02:05,115 - INFO -    🧬 Samples: 226
+2025-10-29 00:02:05,115 - INFO -    🧬 Variants: 9066264
+2025-10-29 00:02:05,115 - INFO -    💾 Total size: 0.65 GB
+2025-10-29 00:02:05,115 - INFO -    🔧 Format: PLINK (optimized for tensorQTL)
+2025-10-29 00:02:05,115 - INFO -    ⚡ Ready for tensorQTL analysis
+2025-10-29 00:02:05,137 - INFO - ✅ Genotype processing completed: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results/genotype_processing/final_genotypes_tensorqtl.bed
+2025-10-29 00:02:05,137 - INFO - ✅ Genotype processing completed successfully: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results/genotype_processing/final_genotypes_tensorqtl.bed
+2025-10-29 00:02:05,137 - INFO - ✅ genotype_processing completed successfully in 450.94 seconds
+2025-10-29 00:02:05,137 - INFO - ✅ genotype_processing completed successfully
+2025-10-29 00:02:05,137 - INFO - 
+📦 Progress: [3/9] - expression_processing
+2025-10-29 00:02:05,137 - INFO - ▶️  Starting module: expression_processing
+2025-10-29 00:02:05,137 - INFO - 
+============================================================
+2025-10-29 00:02:05,137 - INFO - 🚀 RUNNING EXPRESSION PROCESSING MODULE
+2025-10-29 00:02:05,137 - INFO - ============================================================
+2025-10-29 00:02:05,137 - WARNING - results_dir not provided, using config value: /Users/singhvj/QTL_ANALYSIS_OUTPUT/results
+2025-10-29 00:02:05,137 - INFO - 🔧 Preparing eqtl phenotype data...
+2025-10-29 00:02:05,139 - INFO - 📁 Loading eqtl phenotype file: /Users/singhvj/QTL_ANALYSIS_OUTPUT/expression.tsv
+2025-10-29 00:02:05,306 - INFO - ✅ Successfully loaded with separator '	'
+2025-10-29 00:02:05,316 - INFO - 📊 Loaded eqtl data: 19122 features, 226 samples
+2025-10-29 00:02:05,317 - INFO - 📁 Loading covariate file: /Users/singhvj/QTL_ANALYSIS_OUTPUT/covariates.txt
+2025-10-29 00:02:05,322 - INFO - ✅ Successfully loaded covariates with separator '	'
+2025-10-29 00:02:05,326 - INFO - 📊 Loaded covariates: 7 covariates
+2025-10-29 00:02:05,326 - INFO - 🔍 Validating eqtl phenotype data...
+2025-10-29 00:02:05,344 - WARNING - ⚠️ Removing 620 constant features
+2025-10-29 00:02:05,355 - INFO - ✅ eqtl validation: 18502 features, 226 samples
+2025-10-29 00:02:05,603 - INFO - 🔧 QC filtering: 16303/18502 features retained
+2025-10-29 00:02:05,603 - INFO - 🔍 Filtering lowly expressed genes based on QTL best practices...
+2025-10-29 00:02:05,613 - INFO - 🔧 Low expression filtering: 16303/16303 genes retained (threshold: 0.1, max low samples: 10%, removed: 0)
+2025-10-29 00:02:05,614 - INFO - 🚀 Using enhanced pipeline for eqtl
+2025-10-29 00:02:05,614 - INFO - 🔄 Running enhanced pipeline for eqtl...
+2025-10-29 00:02:05,614 - INFO - 🔧 Using normalization method for eqtl: vst
+2025-10-29 00:02:05,614 - INFO - 🔧 Normalization method: vst
+2025-10-29 00:02:05,614 - INFO - 🔄 Applying vst normalization for eqtl
+2025-10-29 00:02:05,614 - INFO - 🔢 Applying DESeq2 VST normalization (Python implementation)...
+2025-10-29 00:02:05,614 - ERROR - ❌ Enhanced pipeline failed: DESeq2 VST Python implementation not available, falling back to standard normalization
+2025-10-29 00:02:05,614 - INFO - 🔄 Applying vst normalization for eqtl
+2025-10-29 00:02:05,614 - INFO - 🔢 Applying DESeq2 VST normalization (Python implementation)...
+2025-10-29 00:02:05,614 - ERROR - ❌ Phenotype preparation failed for eqtl: DESeq2 VST Python implementation not available
+2025-10-29 00:02:05,614 - ERROR - ❌ Expression processing failed: DESeq2 VST Python implementation not available
+2025-10-29 00:02:05,619 - ERROR - ❌ expression_processing failed!
+2025-10-29 00:02:05,619 - INFO - 💡 Use --force to continue with other modules
+2025-10-29 00:02:05,619 - INFO - 
+============================================================
+2025-10-29 00:02:05,619 - INFO - ⏱️  EXECUTION TIME SUMMARY
+2025-10-29 00:02:05,619 - INFO - ============================================================
+2025-10-29 00:02:05,619 - INFO -   data_preparation          -   158.70s (  2.64m)
+2025-10-29 00:02:05,619 - INFO -   genotype_processing       -   450.94s (  7.52m)
+2025-10-29 00:02:05,619 - INFO -   Total                     -   609.64s ( 10.16m)
+2025-10-29 00:02:05,619 - INFO - 
+⏱️  Total pipeline time: 610.12s (10.17m)
+2025-10-29 00:02:05,619 - ERROR - ❌ Modular pipeline completed with errors
+2025-10-29 00:02:05,619 - INFO - 💡 Check the logs for detailed error information

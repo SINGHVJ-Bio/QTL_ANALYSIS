@@ -4,6 +4,8 @@ Final optimized pipeline to prepare QTL input files for tensorQTL
 Generates both BED and TSV expression files, BED + TSV phenotype files, and annotations BED
 Supports both TSV and CSV input files with automatic encoding detection
 Applies count transformation: count = round(count + 1)
+Includes proper WGS batch handling in covariates
+Generates both processed and raw covariate files
 """
 
 import pandas as pd
@@ -19,6 +21,7 @@ import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 import chardet
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -66,6 +69,7 @@ class FinalInputBuilder:
         self.expression_tsv_output = os.path.join(self.out_dir, "expression.tsv")
         self.expression_tsv_raw_output = os.path.join(self.out_dir, "expression_raw.tsv")  # Keep raw counts for reference
         self.covar_output = os.path.join(self.out_dir, "covariates.txt")
+        self.covar_raw_output = os.path.join(self.out_dir, "covariate_raw.txt")  # NEW: Raw covariates file
         self.phenotype_bed_output = os.path.join(self.out_dir, "phenotypes.bed")
         self.phenotype_tsv_output = os.path.join(self.out_dir, "phenotype_data.tsv")
         self.samples_output = os.path.join(self.out_dir, "samples.txt")
@@ -401,8 +405,8 @@ class FinalInputBuilder:
             return None
     
     def build_covariates(self):
-        """Build covariate file with correct samples"""
-        logger.info("Building covariate file...")
+        """Build comprehensive covariate files including both processed and raw versions"""
+        logger.info("Building comprehensive covariate files...")
         
         logger.info(f"Reading metadata file with separator: '{self.meta_file_sep}'")
         meta_df = self.read_csv_with_encoding_fallback(self.meta_file, self.meta_file_sep, low_memory=False)
@@ -412,7 +416,7 @@ class FinalInputBuilder:
         # Normalize IDs
         meta_df[wgs_col] = self.normalize_ids(meta_df[wgs_col])
         
-        # Get covariate columns
+        # Get covariate columns from config
         covariate_config = self.config['covariates']
         meta_covariates = covariate_config.get('include', [])
         pca_covariates = covariate_config.get('pca_include', [])
@@ -425,39 +429,102 @@ class FinalInputBuilder:
                 available_pca_cols = [col for col in pca_covariates if col in pca_df.columns]
                 pca_data = pca_df[["IID"] + available_pca_cols]
         
-        # Prepare base covariates
+        # Prepare base covariates - use the columns specified in config
         available_meta_cols = [col for col in meta_covariates if col in meta_df.columns]
+        missing_cols = set(meta_covariates) - set(available_meta_cols)
+        if missing_cols:
+            logger.warning(f"Missing covariate columns in metadata: {missing_cols}")
+        
         base_covariates = meta_df[[wgs_col] + available_meta_cols].copy()
         base_covariates = base_covariates.rename(columns={wgs_col: "ID"})
         
-        # Merge with PCA data
+        # Create RAW covariates file (no transformations)
+        logger.info("Creating raw covariates file...")
+        raw_covariates = base_covariates.copy()
+        
+        # Merge with PCA data for raw covariates
         if pca_data is not None:
-            base_covariates = base_covariates.merge(pca_data.rename(columns={"IID": "ID"}), on="ID", how="left")
+            raw_covariates = raw_covariates.merge(pca_data.rename(columns={"IID": "ID"}), on="ID", how="left")
         
         # Filter to expression samples and remove duplicates
-        base_covariates = base_covariates[base_covariates["ID"].isin(self.expression_samples)]
-        base_covariates = base_covariates.drop_duplicates(subset=["ID"])
+        raw_covariates = raw_covariates[raw_covariates["ID"].isin(self.expression_samples)]
+        raw_covariates = raw_covariates.drop_duplicates(subset=["ID"])
         
         # Handle missing values by dropping
-        original_count = base_covariates.shape[0]
-        base_covariates = base_covariates.dropna()
-        if original_count - base_covariates.shape[0] > 0:
-            logger.warning(f"Dropped {original_count - base_covariates.shape[0]} samples with missing covariate values")
+        original_count = raw_covariates.shape[0]
+        raw_covariates = raw_covariates.dropna()
+        if original_count - raw_covariates.shape[0] > 0:
+            logger.warning(f"Dropped {original_count - raw_covariates.shape[0]} samples with missing covariate values")
         
-        # Add intercept
-        base_covariates['intercept'] = 1.0
+        # Transpose for raw covariates format
+        raw_covar_matrix = raw_covariates.set_index("ID").T
+        raw_covar_matrix.index.name = "covariate"
         
-        # Transpose for tensorQTL format
-        covar_matrix = base_covariates.set_index("ID").T
-        covar_matrix.index.name = "covariate"
+        # Save raw covariate file
+        raw_covar_matrix.to_csv(self.covar_raw_output, sep="\t", index=True)
+        logger.info(f"✅ Raw covariates created: {raw_covar_matrix.shape[0]} covariates, {raw_covar_matrix.shape[1]} samples")
         
-        # Save covariate file
-        covar_matrix.to_csv(self.covar_output, sep="\t")
-        logger.info(f"✅ Covariates created: {covar_matrix.shape[0]} covariates, {covar_matrix.shape[1]} samples")
+        # Now create PROCESSED covariates file (with one-hot encoding and standardization)
+        logger.info("Creating processed covariates file for TensorQTL...")
+        processed_covariates = base_covariates.copy()
         
-        self.covariate_samples = covar_matrix.columns.tolist()
-        self.covar_matrix = covar_matrix
-        return covar_matrix
+        # Auto-detect and one-hot encode categorical variables
+        categorical_cols = []
+        continuous_cols = []
+        
+        for col in available_meta_cols:
+            if processed_covariates[col].dtype == 'object' or processed_covariates[col].nunique() < 10:
+                categorical_cols.append(col)
+            else:
+                continuous_cols.append(col)
+        
+        # One-hot encode categorical variables (drop first category to avoid collinearity)
+        if categorical_cols:
+            logger.info(f"One-hot encoding categorical variables: {categorical_cols}")
+            processed_covariates = pd.get_dummies(processed_covariates, columns=categorical_cols, drop_first=True)
+        
+        # Merge with PCA data for processed covariates
+        if pca_data is not None:
+            processed_covariates = processed_covariates.merge(pca_data.rename(columns={"IID": "ID"}), on="ID", how="left")
+        
+        # Filter to expression samples and remove duplicates
+        processed_covariates = processed_covariates[processed_covariates["ID"].isin(self.expression_samples)]
+        processed_covariates = processed_covariates.drop_duplicates(subset=["ID"])
+        
+        # Handle missing values by dropping
+        processed_covariates = processed_covariates.dropna()
+        
+        # Standardize continuous covariates (excluding dummy variables)
+        cols_to_standardize = []
+        for col in processed_covariates.columns:
+            if col != 'ID' and processed_covariates[col].dtype in ['float64', 'int64']:
+                # Only standardize if it's not a dummy variable (dummy variables are 0/1)
+                if processed_covariates[col].nunique() > 2:
+                    cols_to_standardize.append(col)
+        
+        if cols_to_standardize:
+            logger.info(f"Standardizing continuous covariates: {cols_to_standardize}")
+            scaler = StandardScaler()
+            processed_covariates[cols_to_standardize] = scaler.fit_transform(processed_covariates[cols_to_standardize])
+        
+        # Transpose for tensorQTL format (covariates × samples)
+        processed_covar_matrix = processed_covariates.set_index("ID").T
+        processed_covar_matrix.index.name = "id"  # TensorQTL expects 'id' as first column name
+        
+        # Save processed covariate file in proper TensorQTL format
+        processed_covar_matrix.to_csv(self.covar_output, sep="\t", index=True)
+        logger.info(f"✅ Processed covariates created: {processed_covar_matrix.shape[0]} covariates, {processed_covar_matrix.shape[1]} samples")
+        
+        # Log the covariates that were included
+        processed_covariate_list = list(processed_covar_matrix.index)
+        raw_covariate_list = list(raw_covar_matrix.index)
+        logger.info(f"Processed covariates included: {processed_covariate_list}")
+        logger.info(f"Raw covariates included: {raw_covariate_list}")
+        
+        self.covariate_samples = processed_covar_matrix.columns.tolist()
+        self.covar_matrix = processed_covar_matrix
+        self.raw_covar_matrix = raw_covar_matrix
+        return processed_covar_matrix
 
     def create_phenotype_data(self):
         """Create phenotype data in BED format for tensorQTL and TSV format for analysis"""
@@ -614,15 +681,14 @@ class FinalInputBuilder:
         
         if biallelic_only:
             # Simple case: only keep biallelic SNPs with parallel processing
-            # Note: --threads flag goes after the subcommand, not as global option
             cmd_filter = [
                 bcftools_path,
                 "view", 
-                "--threads", str(self.threads),  # Threads flag after subcommand
-                "-S", self.samples_output,      # Filter samples
-                "-r", ",".join(regions),        # Filter regions
-                "-m2", "-M2",                   # Biallelic only
-                "-v", variant_type,             # SNP/indel filter
+                "--threads", str(self.threads),
+                "-S", self.samples_output,
+                "-r", ",".join(regions),
+                "-m2", "-M2",
+                "-v", variant_type,
                 self.vcf_input, 
                 "-Oz", "-o", self.genotype_vcf_output
             ]
@@ -632,7 +698,6 @@ class FinalInputBuilder:
             # Complex case: handle multiallelic sites by splitting them with parallel processing
             logger.info("Processing multiallelic sites with parallel splitting...")
             
-            # Use temporary directory for intermediate files
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_filtered_vcf = os.path.join(temp_dir, "temp_filtered.vcf.gz")
                 
@@ -640,10 +705,10 @@ class FinalInputBuilder:
                 cmd_first_filter = [
                     bcftools_path,
                     "view",
-                    "--threads", str(self.threads),  # Threads flag after subcommand
-                    "-S", self.samples_output,      # Filter samples
-                    "-r", ",".join(regions),        # Filter regions
-                    "-v", variant_type,             # SNP/indel filter
+                    "--threads", str(self.threads),
+                    "-S", self.samples_output,
+                    "-r", ",".join(regions),
+                    "-v", variant_type,
                     self.vcf_input,
                     "-Oz", "-o", temp_filtered_vcf
                 ]
@@ -653,12 +718,12 @@ class FinalInputBuilder:
                 cmd_index_temp = [bcftools_path, "index", "-t", temp_filtered_vcf]
                 self.run_command(cmd_index_temp, "Indexing temporary VCF")
                 
-                # Split multiallelic sites into biallelic records with parallel processing
+                # Split multiallelic sites into biallelic records
                 cmd_split = [
                     bcftools_path,
                     "norm",
-                    "--threads", str(self.threads),  # Threads flag after subcommand
-                    "-m", "-any",                   # Split multiallelic sites
+                    "--threads", str(self.threads),
+                    "-m", "-any",
                     temp_filtered_vcf,
                     "-Oz", "-o", self.genotype_vcf_output
                 ]
@@ -677,10 +742,10 @@ class FinalInputBuilder:
         
         try:
             self.validate_input_files()
-            self.create_annotation_bed()     # Create annotations first
-            self.process_expression_data()   # Creates both BED and TSV
+            self.create_annotation_bed()
+            self.process_expression_data()
             self.build_covariates()
-            self.create_phenotype_data()     # Creates both BED and TSV
+            self.create_phenotype_data()
             self.process_genotypes_parallel()
             self.create_sample_mapping()
             
@@ -706,10 +771,14 @@ class FinalInputBuilder:
         logger.info(f"  Samples: {len(self.expression_samples)}")
         
         logger.info(f"📈 COVARIATES")
-        logger.info(f"  File: {self.covar_output}")
+        logger.info(f"  Processed file (tensorQTL): {self.covar_output}")
+        logger.info(f"  Raw file (reference): {self.covar_raw_output}")
         logger.info(f"  Format: TSV (covariates × samples)")
-        logger.info(f"  Covariates: {self.covar_matrix.shape[0]}")
+        logger.info(f"  Processed covariates: {self.covar_matrix.shape[0]}")
+        logger.info(f"  Raw covariates: {self.raw_covar_matrix.shape[0]}")
         logger.info(f"  Samples: {self.covar_matrix.shape[1]}")
+        logger.info(f"  Processed covariate list: {list(self.covar_matrix.index)}")
+        logger.info(f"  Raw covariate list: {list(self.raw_covar_matrix.index)}")
         
         if hasattr(self, 'phenotype_bed'):
             logger.info(f"🏥 PHENOTYPES")
@@ -740,7 +809,8 @@ class FinalInputBuilder:
         logger.info(f"  {self.expression_bed_output} \\")
         logger.info(f"  output_prefix \\")
         logger.info(f"  --covariates {self.covar_output} \\")
-        logger.info(f"  --phenotypes {self.phenotype_bed_output} \\")
+        if hasattr(self, 'phenotype_bed'):
+            logger.info(f"  --phenotypes {self.phenotype_bed_output} \\")
         logger.info(f"  --mode cis")
         logger.info("="*60)
 

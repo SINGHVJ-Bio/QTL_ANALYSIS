@@ -1,14 +1,8 @@
 # Optimized Input Build Configuration for tensorQTL
 input_files:
-  count_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Datasets/TRANSCRIPTOMICS_ENABLE300/FULL/Count/count_transcriptomics_300.csv"
-  meta_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Datasets/TRANSCRIPTOMICS_ENABLE300/FULL/Clinical/meta_transcriptomics_300.csv"
-  pca_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/pca_result_cohort.eigenvec"
-  vcf_input: "/home/ubuntu/DATA_DRIVE/qtl_analysis/ENABL_merged_280_cohort.snp.recalibrated.vcf.gz"
-  gtf_table: "/home/ubuntu/DATA_DRIVE/qtl_analysis/gencode.v38.annotation.gtf.full.table.txt"
-
-  count_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Datasets/TRANSCRIPTOMICS_ENABLE300/FULL/Count/count_transcriptomics_300.csv"
-  count_file_sep: ","  # Specify comma for CSV, tab for TSV
-  meta_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Datasets/TRANSCRIPTOMICS_ENABLE300/FULL/Clinical/meta_transcriptomics_300.csv"
+  count_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Merge_Pre_EMULSION_ENABL150_ENABL300_count_protein_coding.tsv"
+  count_file_sep: "\t"  # Specify comma for CSV, tab for TSV
+  meta_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/meta_wgs_rnaseq.csv"
   meta_file_sep: ","   # Specify comma for CSV, tab for TSV
   pca_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/pca_result_cohort.eigenvec"
   pca_file_sep: " "    # Usually space for PCA files
@@ -21,14 +15,14 @@ count_transformation:
   round_counts: true     # Whether to round to nearest integer (default: true)
   
 output:
-  output_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data"
+  output_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input"
 
 metadata_columns:
   rnaseq_library: "RNASeq_Library"
   wgs_library: "WGS_Library"
 
 covariates:
-  include: ["Age", "Sex", "RNASeq_RIN", "RNASeq_Batch"]
+  include: ["Age", "Sex", "RNASeq_RIN", "RNASeq_Batch", "WGS_Batch"]
   pca_include: ["PC1", "PC2", "PC3", "PC4", "PC5"]
   pca_count: 5
 

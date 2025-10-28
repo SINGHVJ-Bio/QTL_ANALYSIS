@@ -6,6 +6,7 @@ Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
 Enhanced with parallel processing, memory optimization, and comprehensive reporting.
+Now includes batch correction pipeline integration and Python-based DESeq2 VST.
 """
 
 import os
@@ -22,6 +23,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import lru_cache
 import gc
 import psutil
+import yaml
+import subprocess
+import tempfile
 
 # Conditional imports for interactive plots
 try:
@@ -34,6 +38,22 @@ except ImportError:
     PLOTLY_AVAILABLE = False
     logging.warning("Plotly not available, interactive plots will be disabled")
 
+try:
+    from scripts.utils.batch_correction import run_batch_correction_pipeline
+    BATCH_CORRECTION_AVAILABLE = True
+except ImportError:
+    BATCH_CORRECTION_AVAILABLE = False
+    logging.warning("Batch correction module not available, batch correction will be disabled")
+
+# Import DESeq2 VST Python implementation
+try:
+    from scripts.utils.deseq2_vst_python import deseq2_vst_python, simple_vst_fallback
+    DESEQ2_VST_AVAILABLE = True
+    logging.info("✅ DESeq2 VST Python module successfully imported")
+except ImportError as e:
+    DESEQ2_VST_AVAILABLE = False
+    logging.warning(f"⚠️ DESeq2 VST Python module not available: {e}")
+   
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
@@ -50,6 +70,10 @@ class NormalizationComparison:
         self.max_features = config.get('performance', {}).get('max_comparison_features', 100)
         self.parallel_processing = config.get('performance', {}).get('parallel_comparison', True)
         self.num_workers = min(4, config.get('performance', {}).get('num_threads', 4))
+        
+        # Enhanced pipeline settings
+        self.enable_enhanced_pipeline = config.get('enhanced_pipeline', {}).get('enable', True)
+        self.enable_batch_correction = config.get('batch_correction', {}).get('enabled', {}).get('eqtl', True)
         
         # Setup plotting style
         plt.style.use('seaborn-v0_8')
@@ -110,6 +134,364 @@ class NormalizationComparison:
         except Exception as e:
             logger.error(f"❌ Error generating normalization comparison for {qtl_type}: {e}")
             return {'plots_generated': []}
+    
+    def generate_enhanced_pipeline_comparison(self, qtl_type, raw_data, normalization_method=None):
+        """
+        Enhanced pipeline: Filtering → Normalization → Batch Correction → Comparisons
+        Maintains backward compatibility while adding new functionality
+        """
+        try:
+            logger.info(f"🚀 Starting enhanced pipeline for {qtl_type}...")
+            
+            # Get normalization method from config if not provided
+            if normalization_method is None:
+                normalization_method = self._get_normalization_method(qtl_type)
+            
+            # Step 1: Run normalization pipeline
+            normalized_file, normalized_data = self._run_normalization_pipeline(raw_data, qtl_type, normalization_method)
+            
+            # Step 2: Run batch correction if enabled
+            batch_correction_results = self._run_batch_correction_pipeline(normalized_data, qtl_type, normalization_method)
+            
+            # Step 3: Run comparisons
+            comparison_results = self._run_enhanced_comparisons(
+                qtl_type, raw_data, normalized_data, batch_correction_results, normalization_method
+            )
+            
+            # Save pipeline summary
+            self._save_enhanced_pipeline_summary(qtl_type, normalization_method, batch_correction_results, comparison_results)
+            
+            logger.info(f"✅ Enhanced pipeline completed for {qtl_type}")
+            return comparison_results
+            
+        except Exception as e:
+            logger.error(f"❌ Enhanced pipeline failed for {qtl_type}: {e}")
+            # Fall back to basic comparison
+            return self.generate_comprehensive_comparison(qtl_type, raw_data, raw_data, normalization_method)
+    
+    def _get_normalization_method(self, qtl_type):
+        """Get normalization method from config for specific QTL type"""
+        normalization_config = self.config.get('normalization', {})
+        qtl_config = normalization_config.get(qtl_type, {})
+        
+        method = qtl_config.get('method', 'vst')
+        logger.info(f"🔧 Using normalization method for {qtl_type}: {method}")
+        return method
+    
+    def _run_normalization_pipeline(self, raw_data, qtl_type, method):
+        """Run normalization pipeline using Python instead of R"""
+        try:
+            logger.info(f"🔧 Running {method} normalization using Python for {qtl_type}...")
+            
+            # Create temporary directory for processing
+            temp_dir = os.path.join(self.results_dir, "temp_normalization")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Apply normalization using Python
+            if method == 'vst':
+                normalized_data = self._apply_vst_normalization_python(raw_data, qtl_type)
+            elif method == 'log2':
+                normalized_data = self._apply_log2_normalization_python(raw_data, qtl_type)
+            elif method == 'quantile':
+                normalized_data = self._apply_quantile_normalization_python(raw_data, qtl_type)
+            elif method == 'zscore':
+                normalized_data = self._apply_zscore_normalization_python(raw_data, qtl_type)
+            elif method == 'arcsinh':
+                normalized_data = self._apply_arcsinh_normalization_python(raw_data, qtl_type)
+            elif method == 'tpm':
+                normalized_data = self._apply_tpm_normalization_python(raw_data, qtl_type)
+            else:
+                logger.warning(f"⚠️ Unknown normalization method '{method}', using raw data")
+                normalized_data = raw_data.copy()
+            
+            # Save normalized data
+            normalized_file = os.path.join(temp_dir, f"{qtl_type}.normalised.{method}.tsv")
+            normalized_data.to_csv(normalized_file, sep='\t')
+            
+            logger.info(f"✅ Python {method} normalization completed: {normalized_data.shape}")
+            
+            return normalized_file, normalized_data
+            
+        except Exception as e:
+            logger.error(f"❌ Python normalization pipeline failed: {e}")
+            raise
+    
+    def _apply_vst_normalization_python(self, raw_data, qtl_type):
+        """Apply VST normalization using Python implementation"""
+        if qtl_type != 'eqtl':
+            logger.warning("VST normalization is typically for expression data")
+
+        logger.info("🔢 Applying DESeq2 VST normalization (Python implementation)...")
+        
+        if not DESEQ2_VST_AVAILABLE:
+            raise ImportError("DESeq2 VST Python implementation not available")
+        
+        # Get parameters from config
+        normalization_config = self.config.get('normalization', {})
+        qtl_config = normalization_config.get(qtl_type, {})
+        blind = qtl_config.get('vst_blind', True)
+        fit_type = qtl_config.get('fit_type', 'parametric')
+        
+        try:
+            # Ensure data is appropriate for VST (non-negative)
+            if (raw_data < 0).any().any():
+                logger.warning("Negative values found in data. Taking absolute values for VST.")
+                raw_data = raw_data.abs()
+            
+            # Ensure data is numeric and finite
+            raw_data = raw_data.apply(pd.to_numeric, errors='coerce')
+            raw_data = raw_data.replace([np.inf, -np.inf], np.nan)
+            raw_data = raw_data.fillna(0)
+            
+            # Apply VST normalization
+            try:
+                vst_df = deseq2_vst_python(raw_data, blind=blind, fit_type=fit_type)
+                logger.info("✅ DESeq2 VST normalization completed (full implementation)")
+            except Exception as e:
+                logger.warning(f"⚠️ Full VST implementation failed: {e}, using simplified version")
+                vst_df = simple_vst_fallback(raw_data)
+                logger.info("✅ Simplified VST normalization completed")
+            
+            return vst_df
+            
+        except Exception as e:
+            logger.error(f"❌ VST normalization failed: {e}")
+            # Fallback to log2 if VST fails
+            logger.info("🔄 Falling back to log2 normalization")
+            return self._apply_log2_normalization_python(raw_data, qtl_type)
+    
+    def _apply_log2_normalization_python(self, raw_data, qtl_type):
+        """Apply log2 transformation using Python"""
+        normalization_config = self.config.get('normalization', {})
+        qtl_config = normalization_config.get(qtl_type, {})
+        pseudocount = qtl_config.get('log2_pseudocount', 1)
+        remove_zeros = qtl_config.get('remove_zeros', True)
+        
+        if remove_zeros:
+            # Replace zeros with NaN and remove all-zero features
+            original_count = raw_data.shape[0]
+            raw_data = raw_data.replace(0, np.nan)
+            raw_data = raw_data.dropna(how='all')
+            zeros_removed = original_count - raw_data.shape[0]
+            if zeros_removed > 0:
+                logger.info(f"🔧 Removed {zeros_removed} features with all zeros")
+        
+        normalized_df = np.log2(raw_data + pseudocount)
+        logger.info(f"✅ Applied log2 transformation (pseudocount={pseudocount})")
+        return normalized_df
+    
+    def _apply_quantile_normalization_python(self, raw_data, qtl_type):
+        """Apply quantile normalization using Python"""
+        try:
+            from sklearn.preprocessing import quantile_transform
+            
+            # Handle missing values
+            raw_data_filled = raw_data.fillna(raw_data.mean())
+            
+            normalized_array = quantile_transform(raw_data_filled.T, n_quantiles=min(1000, raw_data_filled.shape[0]))
+            normalized_df = pd.DataFrame(normalized_array.T, index=raw_data.index, columns=raw_data.columns)
+            
+            logger.info("✅ Quantile normalization completed")
+            return normalized_df
+        except ImportError:
+            logger.error("scikit-learn not available for quantile normalization")
+            raise
+        except Exception as e:
+            logger.error(f"Quantile normalization failed: {e}")
+            return raw_data
+    
+    def _apply_zscore_normalization_python(self, raw_data, qtl_type):
+        """Apply z-score normalization per feature using Python"""
+        try:
+            # Handle missing values
+            raw_data_filled = raw_data.fillna(raw_data.mean())
+            
+            normalized_df = (raw_data_filled - raw_data_filled.mean(axis=1).values.reshape(-1, 1)) 
+            normalized_df = normalized_df / raw_data_filled.std(axis=1).values.reshape(-1, 1)
+            
+            # Handle constant features (std=0)
+            constant_mask = raw_data_filled.std(axis=1) == 0
+            if constant_mask.any():
+                normalized_df.loc[constant_mask] = 0
+                logger.warning(f"⚠️ Found {constant_mask.sum()} constant features, setting z-score to 0")
+            
+            logger.info("✅ Z-score normalization completed")
+            return normalized_df
+        except Exception as e:
+            logger.error(f"Z-score normalization failed: {e}")
+            return raw_data
+    
+    def _apply_arcsinh_normalization_python(self, raw_data, qtl_type):
+        """Apply arcsinh transformation using Python"""
+        normalization_config = self.config.get('normalization', {})
+        qtl_config = normalization_config.get(qtl_type, {})
+        cofactor = qtl_config.get('arcsinh_cofactor', 1)
+        
+        try:
+            normalized_df = np.arcsinh(raw_data / cofactor)
+            logger.info(f"✅ Arcsinh transformation completed (cofactor={cofactor})")
+            return normalized_df
+        except Exception as e:
+            logger.error(f"Arcsinh normalization failed: {e}")
+            return raw_data
+    
+    def _apply_tpm_normalization_python(self, raw_data, qtl_type):
+        """Apply TPM-like normalization using Python"""
+        try:
+            # Simplified TPM calculation (without gene lengths)
+            rpm_df = raw_data.div(raw_data.sum(axis=0)) * 1e6
+            logger.info("✅ TPM-like normalization completed")
+            return rpm_df
+        except Exception as e:
+            logger.error(f"TPM normalization failed: {e}")
+            return raw_data
+    
+    def _run_batch_correction_pipeline(self, normalized_data, qtl_type, method):
+        """Run batch correction pipeline - ALWAYS save to batch_corrected directory"""
+        # Create batch_corrected directory
+        corrected_dir = os.path.join(self.results_dir, "batch_corrected")
+        os.makedirs(corrected_dir, exist_ok=True)
+        
+        # Always prepare the corrected file path
+        corrected_file = os.path.join(
+            corrected_dir, 
+            f"{qtl_type}.normalised.{method}.corrected.tsv"
+        )
+        
+        if not BATCH_CORRECTION_AVAILABLE:
+            logger.warning("⏭️ Batch correction module not available, saving normalized data as corrected")
+            # Save normalized data as corrected (for consistency)
+            normalized_data.to_csv(corrected_file, sep='\t')
+            return {
+                'batch_correction_skipped': True, 
+                'reason': 'Module not available',
+                'corrected_file': corrected_file,
+                'batch_correction_applied': False
+            }
+        
+        try:
+            # Check if batch correction is enabled for this QTL type
+            batch_config = self.config.get('batch_correction', {})
+            enabled = batch_config.get('enabled', {}).get(qtl_type, True)
+            
+            if not enabled:
+                logger.info(f"⏭️ Batch correction disabled for {qtl_type}, saving normalized data as corrected")
+                # Save normalized data as corrected (for consistency)
+                normalized_data.to_csv(corrected_file, sep='\t')
+                return {
+                    'batch_correction_skipped': True, 
+                    'reason': 'Disabled in config',
+                    'corrected_file': corrected_file,
+                    'batch_correction_applied': False
+                }
+            
+            # Skip batch correction for splicing data but STILL save the file
+            if qtl_type == 'sqtl' and not batch_config.get('enabled', {}).get('sqtl', False):
+                logger.info("⏭️ Skipping batch correction for sQTL data but saving normalized file")
+                normalized_data.to_csv(corrected_file, sep='\t')
+                return {
+                    'batch_correction_skipped': True, 
+                    'reason': 'sQTL typically does not require batch correction',
+                    'corrected_file': corrected_file,
+                    'batch_correction_applied': False
+                }
+            
+            logger.info(f"🔄 Running batch correction for {qtl_type}...")
+            
+            # Run batch correction
+            corrected_data, correction_info = run_batch_correction_pipeline(
+                normalized_data=normalized_data,
+                qtl_type=qtl_type,
+                config=self.config
+            )
+            
+            # Save corrected data
+            if correction_info.get('batch_correction_applied', False):
+                corrected_data.to_csv(corrected_file, sep='\t')
+                correction_info['corrected_file'] = corrected_file
+                logger.info(f"💾 Batch-corrected data saved: {corrected_file}")
+            else:
+                # If batch correction was attempted but not applied, still save normalized data
+                normalized_data.to_csv(corrected_file, sep='\t')
+                correction_info['corrected_file'] = corrected_file
+                correction_info['batch_correction_applied'] = False
+                logger.info(f"💾 Normalized data saved as corrected (no batch effects): {corrected_file}")
+            
+            return correction_info
+            
+        except Exception as e:
+            logger.error(f"❌ Batch correction failed, saving normalized data as corrected: {e}")
+            # On error, still save normalized data to maintain file structure
+            normalized_data.to_csv(corrected_file, sep='\t')
+            return {
+                'batch_correction_failed': True, 
+                'error': str(e),
+                'corrected_file': corrected_file,
+                'batch_correction_applied': False
+            }
+    
+    def _run_enhanced_comparisons(self, qtl_type, raw_data, normalized_data, batch_correction_info, method):
+        """Run enhanced comparisons including batch correction"""
+        comparison_results = {}
+        
+        # Comparison 1: Raw vs Normalized (original functionality)
+        logger.info(f"📊 Comparison 1: Raw vs Normalized ({method})")
+        comparison1 = self.generate_comprehensive_comparison(
+            qtl_type, raw_data, normalized_data, method
+        )
+        comparison_results['raw_vs_normalized'] = comparison1
+        
+        # Comparison 2: Normalized vs "Corrected" (ALWAYS generated now)
+        # Even if no batch correction was applied, we still have a file in batch_corrected
+        corrected_file = batch_correction_info.get('corrected_file')
+        if corrected_file and os.path.exists(corrected_file):
+            logger.info(f"📊 Comparison 2: Normalized vs Batch-Corrected ({method})")
+            
+            corrected_data = pd.read_csv(corrected_file, sep='\t', index_col=0)
+            
+            # Create special directory for batch correction comparisons
+            batch_comp_dir = os.path.join(self.comparison_dir, "batch_correction")
+            os.makedirs(batch_comp_dir, exist_ok=True)
+            
+            # Determine comparison type based on whether batch correction was actually applied
+            if batch_correction_info.get('batch_correction_applied', False):
+                comparison_type = f"{method}_corrected"
+                comparison_name = "Batch-Corrected"
+            else:
+                comparison_type = f"{method}_normalized_as_corrected"
+                comparison_name = "Normalized (as Corrected)"
+            
+            comparison2 = self.generate_comprehensive_comparison(
+                f"{qtl_type}_batch_corrected", 
+                normalized_data, 
+                corrected_data, 
+                comparison_type
+            )
+            comparison_results['normalized_vs_corrected'] = comparison2
+            comparison_results['correction_status'] = batch_correction_info.get('batch_correction_applied', False)
+            comparison_results['correction_reason'] = batch_correction_info.get('reason', 'Unknown')
+        else:
+            logger.warning("⚠️ Corrected data file not found, skipping batch correction comparison")
+            comparison_results['normalized_vs_corrected'] = {'skipped': True, 'reason': 'Corrected data file not found'}
+        
+        return comparison_results
+    
+    def _save_enhanced_pipeline_summary(self, qtl_type, method, batch_correction_info, comparison_results):
+        """Save enhanced pipeline execution summary"""
+        summary = {
+            'qtl_type': qtl_type,
+            'normalization_method': method,
+            'batch_correction_info': batch_correction_info,
+            'comparisons_performed': list(comparison_results.keys()),
+            'timestamp': pd.Timestamp.now().isoformat(),
+            'pipeline_version': 'enhanced_1.0'
+        }
+        
+        summary_file = os.path.join(self.comparison_dir, f"{qtl_type}_enhanced_pipeline_summary.yaml")
+        with open(summary_file, 'w') as f:
+            yaml.dump(summary, f, default_flow_style=False)
+        
+        logger.info(f"💾 Enhanced pipeline summary saved: {summary_file}")
     
     def _sample_data_for_performance(self, raw_data, normalized_data):
         """Sample data for performance optimization"""
@@ -1359,11 +1741,13 @@ class NormalizationComparison:
         
         return html_content
 
-# Utility function for modular pipeline integration
+# Utility function for modular pipeline integration - MAINTAIN EXACT SIGNATURE FOR BACKWARD COMPATIBILITY
 def run_normalization_comparison(config, qtl_type, raw_data, normalized_data, normalization_method, results_dir):
     """
     Main function for normalization comparison module in the modular pipeline
     Returns: dict (comparison results)
+    
+    MAINTAINS EXACT SIGNATURE FOR BACKWARD COMPATIBILITY
     """
     try:
         logger.info(f"🚀 Starting normalization comparison for {qtl_type}...")
@@ -1371,10 +1755,21 @@ def run_normalization_comparison(config, qtl_type, raw_data, normalized_data, no
         # Initialize comparator
         comparator = NormalizationComparison(config, results_dir)
         
-        # Generate comprehensive comparison
-        comparison_results = comparator.generate_comprehensive_comparison(
-            qtl_type, raw_data, normalized_data, normalization_method
-        )
+        # Check if enhanced pipeline should be used
+        enable_enhanced = config.get('enhanced_pipeline', {}).get('enable', False)
+        
+        if enable_enhanced and normalized_data is None:
+            # Use enhanced pipeline if no normalized data provided
+            logger.info("🔧 Using enhanced pipeline with batch correction")
+            comparison_results = comparator.generate_enhanced_pipeline_comparison(
+                qtl_type, raw_data, normalization_method
+            )
+        else:
+            # Use original comparison functionality
+            logger.info("🔧 Using standard normalization comparison")
+            comparison_results = comparator.generate_comprehensive_comparison(
+                qtl_type, raw_data, normalized_data, normalization_method
+            )
         
         if comparison_results and comparison_results.get('plots_generated'):
             logger.info(f"✅ Normalization comparison completed for {qtl_type}")
@@ -1385,6 +1780,34 @@ def run_normalization_comparison(config, qtl_type, raw_data, normalized_data, no
             
     except Exception as e:
         logger.error(f"❌ Normalization comparison module failed: {e}")
+        return {'plots_generated': []}
+
+# NEW: Enhanced pipeline function for explicit enhanced pipeline usage
+def run_enhanced_normalization_pipeline(config, qtl_type, raw_data, normalization_method=None, results_dir='results'):
+    """
+    Enhanced pipeline function with batch correction support
+    Use this for explicit enhanced pipeline execution
+    """
+    try:
+        logger.info(f"🚀 Starting enhanced normalization pipeline for {qtl_type}...")
+        
+        # Initialize comparator
+        comparator = NormalizationComparison(config, results_dir)
+        
+        # Run enhanced pipeline
+        comparison_results = comparator.generate_enhanced_pipeline_comparison(
+            qtl_type, raw_data, normalization_method
+        )
+        
+        if comparison_results:
+            logger.info(f"✅ Enhanced normalization pipeline completed for {qtl_type}")
+            return comparison_results
+        else:
+            logger.error(f"❌ Enhanced normalization pipeline failed for {qtl_type}")
+            return {'plots_generated': []}
+            
+    except Exception as e:
+        logger.error(f"❌ Enhanced normalization pipeline failed: {e}")
         return {'plots_generated': []}
 
 # Maintain backward compatibility
@@ -1401,6 +1824,10 @@ if __name__ == "__main__":
     raw_data = pd.DataFrame(np.random.randn(100, 50))
     normalized_data = pd.DataFrame(np.random.randn(100, 50) * 0.5 + 1)
     
-    # Run comparison
+    # Test standard comparison (backward compatibility)
     results = run_normalization_comparison(config, 'eqtl', raw_data, normalized_data, 'log2', 'test_results')
-    print(f"Comparison completed: {len(results.get('plots_generated', []))} plots generated")
+    print(f"Standard comparison completed: {len(results.get('plots_generated', []))} plots generated")
+    
+    # Test enhanced pipeline
+    enhanced_results = run_enhanced_normalization_pipeline(config, 'eqtl', raw_data, 'vst', 'test_enhanced_results')
+    print(f"Enhanced pipeline completed: {len(enhanced_results.get('plots_generated', []))} plots generated")

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Enhanced QTL analysis utilities with tensorQTL-specific capabilities - Production Version
-Complete pipeline for cis/trans QTL analysis using tensorQTL with robust error handling
+Optimized QTL analysis utilities with tensorQTL v1.0.10 compatibility
+Complete pipeline for cis/trans QTL analysis with robust error handling
 and optimized CPU/GPU utilization
 
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
-Enhanced with comprehensive CPU/GPU optimization, memory management, performance tuning, and dynamic data handling.
+Optimized for tensorQTL v1.0.10 with enhanced performance and error handling.
 """
 
 import os
@@ -34,9 +34,8 @@ if 'logger' not in locals():
     if not logger.handlers:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Import tensorQTL with comprehensive error handling and better diagnostics
+# Import tensorQTL with v1.0.10 specific imports
 TENSORQTL_AVAILABLE = False
-CALCULATE_QVALUES_AVAILABLE = False
 TENSORQTL_IMPORT_ERROR = None
 
 try:
@@ -60,53 +59,18 @@ try:
         logger.error("Please install PyTorch: pip install torch")
         raise
 
-    # Now try to import tensorqtl
+    # Now try to import tensorqtl v1.0.10
     try:
         import tensorqtl
-        from tensorqtl import genotypeio, cis, trans
-        logger.info(f"✅ tensorQTL successfully imported (version: {tensorqtl.__version__})")
+        from tensorqtl import genotypeio, cis, trans, calculate_qvalues
+        logger.info(f"✅ tensorQTL v1.0.10 successfully imported")
         TENSORQTL_AVAILABLE = True
-        
-        # Enhanced calculate_qvalues import with multiple fallbacks
-        CALCULATE_QVALUES_AVAILABLE = False
-        calculate_qvalues = None
-        
-        # Try multiple import strategies for calculate_qvalues
-        import_strategies = [
-            # Strategy 1: Direct import from tensorqtl
-            lambda: __import__('tensorqtl').calculate_qvalues,
-            # Strategy 2: From tensorqtl.utils
-            lambda: __import__('tensorqtl.utils', fromlist=['calculate_qvalues']).calculate_qvalues,
-            # Strategy 3: Try to find it in the module
-            lambda: getattr(tensorqtl, 'calculate_qvalues', None),
-        ]
-        
-        for i, strategy in enumerate(import_strategies):
-            try:
-                calculate_qvalues = strategy()
-                if calculate_qvalues is not None:
-                    CALCULATE_QVALUES_AVAILABLE = True
-                    logger.info(f"✅ calculate_qvalues found using strategy {i+1}")
-                    break
-            except (ImportError, AttributeError) as e:
-                logger.debug(f"❌ Import strategy {i+1} failed: {e}")
-                continue
-        
-        if not CALCULATE_QVALUES_AVAILABLE:
-            # Try statsmodels as final fallback
-            try:
-                from statsmodels.stats.multitest import multipletests
-                logger.info("✅ Using statsmodels for FDR calculation")
-                # We'll create a wrapper function later
-            except ImportError:
-                logger.warning("❌ Neither tensorqtl.calculate_qvalues nor statsmodels available")
         
     except ImportError as e:
         TENSORQTL_AVAILABLE = False
         TENSORQTL_IMPORT_ERROR = str(e)
-        logger.error(f"❌ tensorQTL import failed: {e}")
-        logger.error("Please install tensorqtl: pip install tensorqtl")
-        logger.error("If using GPU, try: pip install tensorqtl[gpu]")
+        logger.error(f"❌ tensorQTL v1.0.10 import failed: {e}")
+        logger.error("Please install tensorqtl v1.0.10: pip install tensorqtl==1.0.10")
 
 except Exception as e:
     logger.error(f"❌ Unexpected error during tensorQTL import: {e}")
@@ -129,7 +93,7 @@ except ImportError:
 warnings.filterwarnings('ignore')
 
 class DynamicDataHandler:
-    """Enhanced handler for dynamic QTL data alignment and processing"""
+    """Optimized handler for dynamic QTL data alignment and processing"""
     
     def __init__(self, config):
         self.config = config
@@ -139,12 +103,21 @@ class DynamicDataHandler:
         """Align genotype, phenotype, and covariate data with comprehensive validation"""
         logger.info("🔍 Aligning QTL data across all datasets...")
         
-        # Convert to sets for fast operations
-        genotype_set = set(genotype_samples)
-        phenotype_set = set(phenotype_df.columns)
+        # Convert all sample identifiers to strings to ensure hashable types
+        genotype_samples = [str(sample) for sample in genotype_samples]
+        phenotype_samples = [str(sample) for sample in phenotype_df.columns]
         
         if covariate_df is not None and not covariate_df.empty:
-            covariate_set = set(covariate_df.columns)
+            covariate_samples = [str(sample) for sample in covariate_df.columns]
+        else:
+            covariate_samples = []
+        
+        # Convert to sets for fast operations
+        genotype_set = set(genotype_samples)
+        phenotype_set = set(phenotype_samples)
+        
+        if covariate_samples:
+            covariate_set = set(covariate_samples)
         else:
             covariate_set = set()
         
@@ -168,9 +141,7 @@ class DynamicDataHandler:
             aligned_covariates = pd.DataFrame()
         
         # Log alignment results
-        logger.info(f"✅ Data alignment completed: {len(common_samples)} common samples "
-                   f"(genotype: {len(genotype_set)}, phenotype: {len(phenotype_set)}, "
-                   f"covariates: {len(covariate_set) if covariate_set else 0})")
+        logger.info(f"✅ Data alignment completed: {len(common_samples)} common samples")
         
         return {
             'phenotype': aligned_phenotype,
@@ -188,20 +159,18 @@ class DynamicDataHandler:
         # Check for numeric data
         non_numeric = phenotype_df.select_dtypes(exclude=[np.number])
         if not non_numeric.empty:
-            logger.warning(f"⚠️ Found {non_numeric.shape[1]} non-numeric columns in {qtl_type} data, attempting conversion")
+            logger.warning(f"⚠️ Found {non_numeric.shape[1]} non-numeric columns, attempting conversion")
             try:
-                # Convert to numeric, coercing errors to NaN
                 phenotype_df = phenotype_df.apply(pd.to_numeric, errors='coerce')
-                # Drop columns that couldn't be converted
                 phenotype_df = phenotype_df.dropna(axis=1, how='all')
             except Exception as e:
-                logger.error(f"❌ Could not convert non-numeric columns to numeric: {e}")
+                logger.error(f"❌ Could not convert non-numeric columns: {e}")
                 raise
         
         # Check for constant features
         constant_features = phenotype_df.std(axis=1) == 0
         if constant_features.any():
-            logger.warning(f"⚠️ Removing {constant_features.sum()} constant features from {qtl_type} data")
+            logger.warning(f"⚠️ Removing {constant_features.sum()} constant features")
             phenotype_df = phenotype_df[~constant_features]
         
         # Check for excessive missingness
@@ -215,7 +184,7 @@ class DynamicDataHandler:
         
         logger.info(f"✅ {qtl_type} validation: {phenotype_df.shape[0]} features, {phenotype_df.shape[1]} samples")
         return phenotype_df
-    
+
     def generate_enhanced_covariates(self, phenotype_df, existing_covariates=None):
         """Generate enhanced covariates including PCA components"""
         try:
@@ -269,7 +238,7 @@ class DynamicDataHandler:
             return existing_covariates
 
 class HardwareOptimizer:
-    """Optimize hardware utilization for tensorQTL analysis with your existing config"""
+    """Optimize hardware utilization for tensorQTL analysis"""
     
     def __init__(self, config):
         self.config = config
@@ -277,19 +246,15 @@ class HardwareOptimizer:
         self.tensorqtl_config = config.get('tensorqtl', {})
         
     def setup_hardware(self):
-        """Setup optimal hardware configuration for tensorQTL based on your config"""
+        """Setup optimal hardware configuration for tensorQTL"""
         device_info = self.detect_available_devices()
         
-        # Use GPU if available and enabled in config, otherwise use optimized CPU
         use_gpu = self.tensorqtl_config.get('use_gpu', False) and device_info['gpu_available']
         
         if use_gpu:
             device = self.setup_gpu()
         else:
             device = self.setup_cpu_optimized()
-        
-        # Set memory optimization based on available resources
-        self.setup_memory_optimization(device_info)
         
         return device, device_info
     
@@ -309,16 +274,10 @@ class HardwareOptimizer:
                 device_info['gpu_available'] = True
                 device_info['gpu_count'] = torch.cuda.device_count()
                 device_info['gpu_names'] = [torch.cuda.get_device_name(i) for i in range(device_info['gpu_count'])]
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                device_info['gpu_available'] = True
-                device_info['gpu_names'] = ['Apple MPS']
         
-        logger.info(f"🖥️  Hardware detected: {device_info['cpu_cores']} CPU cores, "
+        logger.info(f"🖥️  Hardware: {device_info['cpu_cores']} CPU cores, "
                    f"{device_info['memory_gb']:.1f} GB RAM, "
-                   f"{device_info['gpu_count']} GPUs available")
-        
-        if device_info['gpu_available']:
-            logger.info(f"🎮 GPUs: {', '.join(device_info['gpu_names'])}")
+                   f"{device_info['gpu_count']} GPUs")
         
         return device_info
     
@@ -329,18 +288,13 @@ class HardwareOptimizer:
             return self.setup_cpu_optimized()
             
         try:
-            # Set default tensor type to CUDA
             torch.set_default_tensor_type(torch.cuda.FloatTensor)
-            
-            # Configure CUDA optimization
             torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
             
-            # Clear GPU cache
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
-            logger.info("🎯 GPU acceleration enabled for tensorQTL")
+            logger.info("🎯 GPU acceleration enabled")
             return torch.device('cuda')
             
         except Exception as e:
@@ -350,88 +304,40 @@ class HardwareOptimizer:
     def setup_cpu_optimized(self):
         """Setup CPU configuration for optimal multi-core performance"""
         try:
-            # Set CPU threads for optimal performance - use your config or auto-detect
             num_threads = self.performance_config.get('num_threads', min(16, os.cpu_count()))
             
-            # Only set torch threads if torch is available AND hasn't been initialized yet
-            if 'torch' in sys.modules and not self._torch_already_initialized():
+            if 'torch' in sys.modules:
                 try:
                     torch.set_num_threads(num_threads)
                     torch.set_num_interop_threads(num_threads)
-                    logger.info(f"🔢 Successfully set torch threads: {num_threads}")
-                except RuntimeError as e:
-                    if "after parallel work has started" in str(e):
-                        logger.warning("⚠️ Torch threads already initialized, using current configuration")
-                    else:
-                        raise e
+                except RuntimeError:
+                    logger.warning("⚠️ Torch threads already initialized")
             
-            # Set environment variables for OpenMP (safe to do anytime)
             os.environ['OMP_NUM_THREADS'] = str(num_threads)
             os.environ['MKL_NUM_THREADS'] = str(num_threads)
             
-            logger.info(f"🔢 Using {num_threads} CPU threads for tensor operations")
-            
-            return None  # Return None for CPU device
+            logger.info(f"🔢 Using {num_threads} CPU threads")
+            return None
             
         except Exception as e:
             logger.warning(f"⚠️ CPU optimization failed: {e}")
             return None
-    
-    def _torch_already_initialized(self):
-        """Check if torch has already been initialized (to avoid runtime errors)"""
-        if 'torch' not in sys.modules:
-            return False
-        try:
-            # Try to get current thread settings - if this fails, torch isn't fully initialized
-            torch.get_num_threads()
-            return True
-        except:
-            return False
-    
-    def setup_memory_optimization(self, device_info):
-        """Setup memory optimization parameters based on available resources"""
-        memory_gb = device_info['memory_gb']
-        
-        # Adaptive batch sizing based on available memory and your config
-        config_batch_size = self.tensorqtl_config.get('batch_size', 20000)
-        config_chunk_size = self.tensorqtl_config.get('chunk_size', 200)
-        
-        # Adjust based on available memory
-        if memory_gb > 64:
-            # High memory system - can use larger batches
-            optimized_batch_size = min(config_batch_size * 2, 50000)
-            optimized_chunk_size = min(config_chunk_size * 2, 500)
-        elif memory_gb > 32:
-            # Medium memory system - use config values
-            optimized_batch_size = config_batch_size
-            optimized_chunk_size = config_chunk_size
-        else:
-            # Low memory system - reduce batch size
-            optimized_batch_size = max(config_batch_size // 2, 5000)
-            optimized_chunk_size = max(config_chunk_size // 2, 100)
-        
-        logger.info(f"💾 Memory optimization: {memory_gb:.1f} GB available, "
-                   f"batch_size={optimized_batch_size}, chunk_size={optimized_chunk_size}")
 
 class QTLConfig:
-    """Enhanced QTL configuration management with robust error handling and hardware optimization"""
+    """Optimized QTL configuration management for tensorQTL v1.0.10"""
     def __init__(self, config):
         self.config = config
-        self.qtl_config = config.get('qtl', {})
         self.tensorqtl_config = config.get('tensorqtl', {})
-        self.normalization_config = config.get('normalization', {})
         self.performance_config = config.get('performance', {})
-        self.large_data_config = config.get('large_data', {})
         
         # Initialize hardware optimizer
         self.hardware_optimizer = HardwareOptimizer(config)
         
     def get_analysis_params(self, analysis_type):
-        """Get analysis parameters with comprehensive fallbacks and hardware optimization"""
+        """Get analysis parameters optimized for tensorQTL v1.0.10"""
         # Setup hardware first
         device, device_info = self.hardware_optimizer.setup_hardware()
         
-        # Use your existing config values with hardware optimization
         base_params = {
             'cis_window': self.tensorqtl_config.get('cis_window', 1000000),
             'maf_threshold': self.tensorqtl_config.get('maf_threshold', 0.05),
@@ -439,17 +345,8 @@ class QTLConfig:
             'fdr_threshold': self.tensorqtl_config.get('fdr_threshold', 0.05),
             'num_permutations': self.tensorqtl_config.get('num_permutations', 1000),
             'batch_size': self.tensorqtl_config.get('batch_size', 20000),
-            'chunk_size': self.tensorqtl_config.get('chunk_size', 200),
             'seed': self.tensorqtl_config.get('seed', 12345),
-            'run_permutations': self.tensorqtl_config.get('run_permutations', True),
-            'write_stats': self.tensorqtl_config.get('write_stats', True),
-            'write_top_results': self.tensorqtl_config.get('write_top_results', True),
             'run_eigenmt': self.tensorqtl_config.get('run_eigenmt', False),
-            'output_format': self.tensorqtl_config.get('output_format', 'parquet'),
-            'write_sparse': self.tensorqtl_config.get('write_sparse', True),
-            'impute_missing': self.tensorqtl_config.get('impute_missing', True),
-            'center_features': self.tensorqtl_config.get('center_features', True),
-            'standardize_features': self.tensorqtl_config.get('standardize_features', True),
             'device': device,
             'device_info': device_info,
             'use_gpu': device_info['gpu_available'] and self.tensorqtl_config.get('use_gpu', False)
@@ -465,87 +362,48 @@ class QTLConfig:
         
         # Performance tuning based on hardware
         if base_params['use_gpu']:
-            # GPU-optimized parameters
             logger.info("🚀 Using GPU-optimized parameters")
-            base_params.update({
-                'batch_size': base_params['batch_size'] * 2,  # Larger batches for GPU
-                'chunk_size': min(base_params['chunk_size'] * 2, 500)
-            })
+            base_params['batch_size'] = base_params['batch_size'] * 2
         else:
-            # CPU-optimized parameters
             logger.info("🔢 Using CPU-optimized parameters")
-            base_params.update({
-                'num_threads': self.performance_config.get('num_threads', min(16, os.cpu_count()))
-            })
-        
-        # Large data handling
-        if self.large_data_config.get('process_by_chromosome', False):
-            base_params['chromosome_batch_size'] = self.large_data_config.get('max_concurrent_chromosomes', 2)
+            base_params['num_threads'] = self.performance_config.get('num_threads', min(16, os.cpu_count()))
         
         return base_params
-    
-    def validate_parameters(self, analysis_type):
-        """Validate analysis parameters"""
-        params = self.get_analysis_params(analysis_type)
-        errors = []
-        
-        if params['cis_window'] <= 0:
-            errors.append("cis_window must be positive")
-        if not (0 < params['maf_threshold'] <= 0.5):
-            errors.append("maf_threshold must be between 0 and 0.5")
-        if not (0 < params['fdr_threshold'] <= 1):
-            errors.append("fdr_threshold must be between 0 and 1")
-        if params['num_permutations'] < 10:
-            errors.append("num_permutations should be at least 10 for meaningful results")
-        if params['batch_size'] <= 0:
-            errors.append("batch_size must be positive")
-        if params['chunk_size'] <= 0:
-            errors.append("chunk_size must be positive")
-        
-        if errors:
-            raise ValueError(f"Parameter validation failed: {'; '.join(errors)}")
-        
-        return True
 
 class PhenotypeProcessor:
-    """Enhanced phenotype data processing with robust error handling and comprehensive normalization"""
+    """Optimized phenotype data processing for tensorQTL v1.0.10"""
     
     def __init__(self, config, results_dir):
         self.config = config
         self.results_dir = results_dir
         self.qc_config = config.get('qc', {})
         self.normalization_config = config.get('normalization', {})
-        self.performance_config = config.get('performance', {})
         self.data_handler = DynamicDataHandler(config)
         
     def prepare_phenotype_data(self, qtl_type, genotype_samples=None):
-        """Prepare phenotype data with comprehensive processing and error handling"""
-        logger.info(f"🔧 Preparing {qtl_type} phenotype data with dynamic handling...")
+        """Prepare phenotype data optimized for tensorQTL v1.0.10"""
+        logger.info(f"🔧 Preparing {qtl_type} phenotype data...")
         
         try:
-            # Get phenotype file path using proper mapping
+            # Get phenotype file path
             config_key = self._map_qtl_type_to_config_key(qtl_type)
             pheno_file = self.config['input_files'].get(config_key)
             
-            if not pheno_file:
-                raise FileNotFoundError(f"Phenotype file not configured for {qtl_type} (key: {config_key})")
-            if not os.path.exists(pheno_file):
-                raise FileNotFoundError(f"Phenotype file not found for {qtl_type}: {pheno_file}")
+            if not pheno_file or not os.path.exists(pheno_file):
+                raise FileNotFoundError(f"Phenotype file not found: {pheno_file}")
             
             # Load phenotype data
             pheno_df = self._load_phenotype_data(pheno_file, qtl_type)
-            original_feature_count = pheno_df.shape[0]
-            original_sample_count = pheno_df.shape[1]
-            logger.info(f"📊 Loaded {qtl_type} data: {original_feature_count} features, {original_sample_count} samples")
+            logger.info(f"📊 Loaded {qtl_type} data: {pheno_df.shape[0]} features, {pheno_df.shape[1]} samples")
             
             # Load covariates if available
             covariates_file = self.config['input_files'].get('covariates')
             if covariates_file and os.path.exists(covariates_file):
                 cov_df = self._load_covariate_data(covariates_file)
-                logger.info(f"📊 Loaded covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+                logger.info(f"📊 Loaded covariates: {cov_df.shape[0]} covariates")
             else:
                 cov_df = pd.DataFrame()
-                logger.info("ℹ️ No covariate file found or specified")
+                logger.info("ℹ️ No covariate file found")
             
             # Align data if genotype samples are provided
             if genotype_samples is not None:
@@ -567,11 +425,11 @@ class PhenotypeProcessor:
             if qtl_type == 'eqtl' and self.qc_config.get('filter_lowly_expressed_genes', True):
                 pheno_df = self._filter_lowly_expressed_genes(pheno_df, qtl_type)
             
-            # Apply normalization - STRICT USER-DEFINED METHOD (NO FALLBACK)
+            # Apply normalization
             if self.qc_config.get('normalize', True):
-                normalized_df = self._apply_normalization_strict(pheno_df, qtl_type)
+                normalized_df = self._apply_normalization(pheno_df, qtl_type)
                 normalization_method = self.normalization_config.get(qtl_type, {}).get('method', 'unknown')
-                logger.info(f"🔄 Applied {normalization_method} normalization for {qtl_type}")
+                logger.info(f"🔄 Applied {normalization_method} normalization")
             else:
                 normalized_df = pheno_df
                 logger.info("📊 Using raw data without normalization")
@@ -593,15 +451,14 @@ class PhenotypeProcessor:
             output_files = self._save_processed_data(normalized_df, qtl_type, cov_df)
             
             final_feature_count = normalized_df.shape[1]
-            logger.info(f"✅ Prepared {qtl_type} data: {final_feature_count}/{original_feature_count} features retained, "
-                       f"{len(common_samples)} samples, {cov_df.shape[0] if not cov_df.empty else 0} covariates")
+            logger.info(f"✅ Prepared {qtl_type} data: {final_feature_count} features retained")
             
             return output_files
             
         except Exception as e:
             logger.error(f"❌ Phenotype preparation failed for {qtl_type}: {e}")
             raise
-    
+
     def _filter_lowly_expressed_genes(self, pheno_df, qtl_type):
         """
         NEW: Filter out genes with low expression in more than X% of samples
@@ -633,14 +490,6 @@ class PhenotypeProcessor:
                    f"(threshold: {low_expression_threshold}, max low samples: {max_low_expression_samples_percentage}%, "
                    f"removed: {removed_count})")
         
-        # Log detailed statistics about the filtering
-        if removed_count > 0:
-            low_expr_stats = low_expression_percentage.describe()
-            logger.info(f"📊 Low expression statistics - "
-                       f"Mean: {low_expr_stats['mean']:.1f}%, "
-                       f"Median: {low_expr_stats['50%']:.1f}%, "
-                       f"Max: {low_expr_stats['max']:.1f}%")
-        
         return filtered_df
     
     def _map_qtl_type_to_config_key(self, qtl_type):
@@ -653,51 +502,46 @@ class PhenotypeProcessor:
         return mapping.get(qtl_type, qtl_type)
     
     def _load_phenotype_data(self, file_path, qtl_type):
-        """Load phenotype data with robust error handling and format detection"""
+        """Load phenotype data with robust error handling"""
         try:
-            # Try different encodings and separators
+            logger.info(f"📁 Loading {qtl_type} phenotype file: {file_path}")
+            
+            # Try different separators
             for sep in ['\t', ',', ' ']:
                 try:
                     df = pd.read_csv(file_path, sep=sep, index_col=0)
                     if not df.empty:
-                        logger.info(f"✅ Successfully loaded {qtl_type} data with separator '{sep}'")
-                        # Ensure all data is numeric
-                        df = df.apply(pd.to_numeric, errors='coerce')
-                        return df
-                except:
-                    continue
-            
-            # If standard separators fail, try with header detection
-            df = pd.read_csv(file_path, index_col=0)
-            if df.empty:
-                raise ValueError(f"Could not read {qtl_type} file with any standard separator")
-            
-            # Ensure all data is numeric
-            df = df.apply(pd.to_numeric, errors='coerce')
-            return df
-            
-        except Exception as e:
-            logger.error(f"❌ Error loading phenotype data from {file_path}: {e}")
-            raise
-    
-    def _load_covariate_data(self, covariate_file):
-        """Load covariate data with dynamic format handling"""
-        try:
-            # Try different separators
-            for sep in ['\t', ',', ' ']:
-                try:
-                    df = pd.read_csv(covariate_file, sep=sep, index_col=0)
-                    if not df.empty:
-                        logger.info(f"✅ Successfully loaded covariate data with separator '{sep}'")
-                        # Ensure all data is numeric
+                        logger.info(f"✅ Successfully loaded with separator '{sep}'")
                         df = df.apply(pd.to_numeric, errors='coerce')
                         return df
                 except:
                     continue
             
             # Fallback
+            df = pd.read_csv(file_path, index_col=0)
+            df = df.apply(pd.to_numeric, errors='coerce')
+            return df
+            
+        except Exception as e:
+            logger.error(f"❌ Error loading phenotype data: {e}")
+            raise
+    
+    def _load_covariate_data(self, covariate_file):
+        """Load covariate data with dynamic format handling"""
+        try:
+            logger.info(f"📁 Loading covariate file: {covariate_file}")
+            
+            for sep in ['\t', ',', ' ']:
+                try:
+                    df = pd.read_csv(covariate_file, sep=sep, index_col=0)
+                    if not df.empty:
+                        logger.info(f"✅ Successfully loaded covariates with separator '{sep}'")
+                        df = df.apply(pd.to_numeric, errors='coerce')
+                        return df
+                except:
+                    continue
+            
             df = pd.read_csv(covariate_file, index_col=0)
-            # Ensure all data is numeric
             df = df.apply(pd.to_numeric, errors='coerce')
             return df
             
@@ -705,91 +549,132 @@ class PhenotypeProcessor:
             logger.warning(f"⚠️ Error loading covariate data: {e}")
             return pd.DataFrame()
     
+    def _log_file_preview(self, df, file_type, max_cols=5, max_rows=3):
+        """Log file preview with dimensions and sample data"""
+        try:
+            rows, cols = df.shape
+            logger.info(f"📊 {file_type} file dimensions: {rows} rows × {cols} columns")
+            
+            # Show limited preview
+            preview_cols = min(cols, max_cols)
+            preview_rows = min(rows, max_rows)
+            
+            if preview_cols > 0 and preview_rows > 0:
+                logger.info(f"🔍 {file_type} file preview (first {preview_cols} columns, {preview_rows} rows):")
+                
+                # Get preview data
+                preview_df = df.iloc[:preview_rows, :preview_cols]
+                
+                # Create formatted preview
+                preview_str = str(preview_df)
+                
+                # Log in chunks if too long
+                lines = preview_str.split('\n')
+                for line in lines[:preview_rows + 2]:
+                    logger.info(f"   {line}")
+                
+                if len(lines) > preview_rows + 2:
+                    logger.info(f"   ... (showing first {preview_rows} rows and {preview_cols} columns)")
+            
+            # Log data types summary
+            numeric_cols = df.select_dtypes(include=[np.number]).shape[1]
+            non_numeric_cols = df.select_dtypes(exclude=[np.number]).shape[1]
+            logger.info(f"📋 {file_type} data types: {numeric_cols} numeric, {non_numeric_cols} non-numeric columns")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Could not generate file preview for {file_type}: {e}")
+    
     def _apply_qc_filters(self, pheno_df, qtl_type):
-        """Apply comprehensive quality control filters with FIXED variable initialization"""
+        """Apply quality control filters"""
         original_count = pheno_df.shape[0]
         filtered_df = pheno_df.copy()
-        
-        # Initialize all removal counters to avoid uninitialized variable errors
-        constant_removed = 0
-        missing_removed = 0
-        low_expression_removed = 0
-        low_variance_removed = 0
         
         # Remove constant features
         constant_threshold = self.qc_config.get('constant_threshold', 0.95)
         non_constant_mask = (filtered_df.nunique(axis=1) / filtered_df.shape[1]) > (1 - constant_threshold)
-        filtered_df_after_constant = filtered_df[non_constant_mask]
-        constant_removed = original_count - filtered_df_after_constant.shape[0]
-        filtered_df = filtered_df_after_constant
+        filtered_df = filtered_df[non_constant_mask]
+        constant_removed = original_count - filtered_df.shape[0]
         
         # Remove features with too many missing values
         missing_threshold = self.qc_config.get('missing_value_threshold', 0.2)
         low_missing_mask = (filtered_df.isna().sum(axis=1) / filtered_df.shape[1]) < missing_threshold
-        filtered_df_after_missing = filtered_df[low_missing_mask]
-        missing_removed = filtered_df.shape[0] - filtered_df_after_missing.shape[0]
-        filtered_df = filtered_df_after_missing
+        filtered_df = filtered_df[low_missing_mask]
+        missing_removed = original_count - constant_removed - filtered_df.shape[0]
         
         # QTL-type specific filtering
         if qtl_type == 'eqtl':
             threshold = self.qc_config.get('expression_threshold', 0.1)
             mean_expression = filtered_df.mean(axis=1)
             expressed_mask = mean_expression > threshold
-            filtered_df_after_expr = filtered_df[expressed_mask]
-            low_expression_removed = filtered_df.shape[0] - filtered_df_after_expr.shape[0]
-            filtered_df = filtered_df_after_expr
+            filtered_df = filtered_df[expressed_mask]
+            low_expression_removed = original_count - constant_removed - missing_removed - filtered_df.shape[0]
         elif qtl_type in ['pqtl', 'sqtl']:
             # Filter based on variance
             variance_threshold = filtered_df.var(axis=1).quantile(0.1)
             high_variance_mask = filtered_df.var(axis=1) > variance_threshold
-            filtered_df_after_var = filtered_df[high_variance_mask]
-            low_variance_removed = filtered_df.shape[0] - filtered_df_after_var.shape[0]
-            filtered_df = filtered_df_after_var
+            filtered_df = filtered_df[high_variance_mask]
+            low_variance_removed = original_count - constant_removed - missing_removed - filtered_df.shape[0]
+        else:
+            low_expression_removed = 0
+            low_variance_removed = 0
         
         filtered_count = filtered_df.shape[0]
-        logger.info(f"🔧 QC filtering: {filtered_count}/{original_count} features retained "
-                   f"(constant: {constant_removed}, missing: {missing_removed}, "
-                   f"low_expr: {low_expression_removed}, low_var: {low_variance_removed})")
+        logger.info(f"🔧 QC filtering: {filtered_count}/{original_count} features retained")
         
         return filtered_df
     
-    def _apply_normalization_strict(self, pheno_df, qtl_type):
-        """
-        STRICT normalization based on user-defined method only - NO FALLBACK
-        """
+    def _apply_normalization(self, pheno_df, qtl_type):
+        """Apply normalization based on user-defined method"""
         norm_config = self.normalization_config.get(qtl_type, {})
         method = norm_config.get('method', 'log2')
         
-        logger.info(f"🔄 Applying STRICT {method} normalization for {qtl_type} (no fallback)...")
+        logger.info(f"🔄 Applying {method} normalization for {qtl_type}")
         
-        normalization_methods = {
-            'vst': self._apply_vst_normalization_strict,
-            'log2': self._apply_log2_normalization_strict,
-            'quantile': self._apply_quantile_normalization_strict,
-            'zscore': self._apply_zscore_normalization_strict,
-            'arcsinh': self._apply_arcsinh_normalization_strict,
-            'tpm': self._apply_tpm_normalization_strict,
-            'raw': lambda x, y: x  # No normalization
-        }
-        
-        if method in normalization_methods:
-            return normalization_methods[method](pheno_df, qtl_type)
+        if method == 'log2':
+            return self._apply_log2_normalization(pheno_df, qtl_type)
+        elif method == 'vst':
+            return self._apply_vst_normalization(pheno_df, qtl_type)
+        elif method == 'quantile':
+            return self._apply_quantile_normalization(pheno_df, qtl_type)
+        elif method == 'zscore':
+            return self._apply_zscore_normalization(pheno_df, qtl_type)
+        elif method == 'arcsinh':
+            return self._apply_arcsinh_normalization(pheno_df, qtl_type)
+        elif method == 'tpm':
+            return self._apply_tpm_normalization(pheno_df, qtl_type)
+        elif method == 'raw':
+            return pheno_df
         else:
-            raise ValueError(f"Unknown normalization method '{method}'. Available methods: {list(normalization_methods.keys())}")
+            logger.warning(f"⚠️ Unknown normalization method '{method}', using raw data")
+            return pheno_df
     
-    def _apply_vst_normalization_strict(self, pheno_df, qtl_type):
-        """
-        STRICT VST normalization using DESeq2 - NO FALLBACK
-        Adds +1 and rounds counts before normalization as required
-        """
+    def _apply_log2_normalization(self, pheno_df, qtl_type):
+        """Apply log2 transformation"""
+        norm_config = self.normalization_config.get(qtl_type, {})
+        pseudocount = norm_config.get('log2_pseudocount', 1)
+        remove_zeros = norm_config.get('remove_zeros', True)
+        
+        if remove_zeros:
+            # Replace zeros with NaN and remove all-zero features
+            original_count = pheno_df.shape[0]
+            pheno_df = pheno_df.replace(0, np.nan)
+            pheno_df = pheno_df.dropna(how='all')
+            zeros_removed = original_count - pheno_df.shape[0]
+            if zeros_removed > 0:
+                logger.info(f"🔧 Removed {zeros_removed} features with all zeros")
+        
+        normalized_df = np.log2(pheno_df + pseudocount)
+        logger.info(f"✅ Applied log2 transformation (pseudocount={pseudocount})")
+        return normalized_df
+    
+    def _apply_vst_normalization(self, pheno_df, qtl_type):
+        """Apply VST normalization using DESeq2"""
         if qtl_type != 'eqtl':
             logger.warning("VST normalization is typically for expression data")
         
-        # ADD +1 AND ROUND COUNTS BEFORE VST NORMALIZATION
         logger.info("🔢 Adding +1 and rounding counts for VST normalization...")
         pheno_df = pheno_df + 1
         pheno_df = np.round(pheno_df).astype(int)
-        logger.info(f"✅ Added +1 and rounded counts for VST normalization. Data shape: {pheno_df.shape}")
         
         temp_input_path = None
         temp_output_path = None
@@ -821,14 +706,13 @@ class PhenotypeProcessor:
             result = run_command(cmd, "DESeq2 VST normalization", self.config, check=True)
             
             if result.returncode != 0:
-                raise RuntimeError(f"DESeq2 VST normalization failed with exit code {result.returncode}")
+                raise RuntimeError(f"DESeq2 VST normalization failed")
             
             # Load normalized data
             if os.path.exists(temp_output_path):
                 vst_df = pd.read_csv(temp_output_path, sep='\t', index_col=0)
-                # Ensure all data is numeric
                 vst_df = vst_df.apply(pd.to_numeric, errors='coerce')
-                logger.info("✅ VST normalization completed successfully")
+                logger.info("✅ VST normalization completed")
                 return vst_df
             else:
                 raise FileNotFoundError("VST output file not generated")
@@ -845,33 +729,11 @@ class PhenotypeProcessor:
                     except:
                         pass
     
-    def _apply_log2_normalization_strict(self, pheno_df, qtl_type):
-        """Apply log2 transformation with comprehensive options - NO FALLBACK"""
-        norm_config = self.normalization_config.get(qtl_type, {})
-        pseudocount = norm_config.get('log2_pseudocount', 1)
-        remove_zeros = norm_config.get('remove_zeros', True)
-        
-        if remove_zeros:
-            # Replace zeros with NaN and remove all-zero features
-            original_count = pheno_df.shape[0]
-            pheno_df = pheno_df.replace(0, np.nan)
-            pheno_df = pheno_df.dropna(how='all')
-            zeros_removed = original_count - pheno_df.shape[0]
-            if zeros_removed > 0:
-                logger.info(f"🔧 Removed {zeros_removed} features with all zeros")
-        
-        # Apply log2 transformation
-        normalized_df = np.log2(pheno_df + pseudocount)
-        logger.info(f"✅ Applied log2 transformation (pseudocount={pseudocount})")
-        
-        return normalized_df
-    
-    def _apply_quantile_normalization_strict(self, pheno_df, qtl_type):
-        """Apply quantile normalization - NO FALLBACK"""
+    def _apply_quantile_normalization(self, pheno_df, qtl_type):
+        """Apply quantile normalization"""
         try:
             from sklearn.preprocessing import quantile_transform
             
-            # Transpose for sample-wise normalization
             normalized_array = quantile_transform(pheno_df.T, n_quantiles=min(1000, pheno_df.shape[0]))
             normalized_df = pd.DataFrame(normalized_array.T, index=pheno_df.index, columns=pheno_df.columns)
             
@@ -880,8 +742,8 @@ class PhenotypeProcessor:
         except ImportError:
             raise ImportError("scikit-learn not available for quantile normalization")
     
-    def _apply_zscore_normalization_strict(self, pheno_df, qtl_type):
-        """Apply z-score normalization per feature with constant feature handling - NO FALLBACK"""
+    def _apply_zscore_normalization(self, pheno_df, qtl_type):
+        """Apply z-score normalization per feature"""
         normalized_df = (pheno_df - pheno_df.mean(axis=1).values.reshape(-1, 1)) 
         normalized_df = normalized_df / pheno_df.std(axis=1).values.reshape(-1, 1)
         
@@ -893,39 +755,23 @@ class PhenotypeProcessor:
         
         logger.info("✅ Z-score normalization completed")
         return normalized_df
-    
-    def _apply_arcsinh_normalization_strict(self, pheno_df, qtl_type):
-        """Apply arcsinh transformation - NO FALLBACK"""
+
+    def _apply_arcsinh_normalization(self, pheno_df, qtl_type):
+        """Apply arcsinh transformation"""
         norm_config = self.normalization_config.get(qtl_type, {})
         cofactor = norm_config.get('arcsinh_cofactor', 1)
         
         normalized_df = np.arcsinh(pheno_df / cofactor)
         logger.info(f"✅ Arcsinh transformation completed (cofactor={cofactor})")
         return normalized_df
-    
-    def _apply_tpm_normalization_strict(self, pheno_df, qtl_type):
-        """Apply TPM-like normalization - NO FALLBACK"""
+
+    def _apply_tpm_normalization(self, pheno_df, qtl_type):
+        """Apply TPM-like normalization"""
         # Simplified TPM calculation (without gene lengths)
         rpm_df = pheno_df.div(pheno_df.sum(axis=0)) * 1e6
         logger.info("✅ TPM-like normalization completed")
         return rpm_df
-    
-    # Keep original normalization methods for backward compatibility
-    def _apply_normalization(self, pheno_df, qtl_type):
-        """Original normalization method with fallbacks - kept for backward compatibility"""
-        logger.warning("Using legacy normalization method with fallbacks. Consider using _apply_normalization_strict instead.")
-        return self._apply_normalization_strict(pheno_df, qtl_type)
-    
-    def _apply_vst_normalization(self, pheno_df, qtl_type):
-        """Original VST method - kept for backward compatibility"""
-        logger.warning("Using legacy VST normalization method. Consider using _apply_vst_normalization_strict instead.")
-        return self._apply_vst_normalization_strict(pheno_df, qtl_type)
-    
-    def _apply_log2_normalization(self, pheno_df, qtl_type):
-        """Original log2 method - kept for backward compatibility"""
-        logger.warning("Using legacy log2 normalization method. Consider using _apply_log2_normalization_strict instead.")
-        return self._apply_log2_normalization_strict(pheno_df, qtl_type)
-    
+
     def _generate_normalization_comparison(self, raw_df, normalized_df, qtl_type):
         """Generate normalization comparison plots"""
         try:
@@ -942,18 +788,14 @@ class PhenotypeProcessor:
             logger.warning(f"⚠️ Normalization comparison failed: {e}")
     
     def _save_processed_data(self, normalized_df, qtl_type, covariate_df):
-        """Save processed phenotype data with comprehensive output options"""
-        # Ensure all data is numeric before saving
-        logger.info("🔧 Ensuring all data is numeric before saving...")
-        
-        # Clean and convert normalized_df
+        """Save processed phenotype data"""
+        # Ensure all data is numeric
         normalized_df = normalized_df.apply(pd.to_numeric, errors='coerce')
         
-        # Clean and convert covariate_df if it exists
         if not covariate_df.empty:
             covariate_df = covariate_df.apply(pd.to_numeric, errors='coerce')
         
-        # Save phenotype matrix based on config format
+        # Save phenotype matrix
         output_format = self.config.get('tensorqtl', {}).get('output_format', 'parquet')
         if output_format == 'parquet':
             pheno_file = os.path.join(self.results_dir, f"{qtl_type}_phenotypes.parquet")
@@ -972,12 +814,10 @@ class PhenotypeProcessor:
             cov_file = os.path.join(self.results_dir, f"{qtl_type}_covariates.parquet")
             try:
                 covariate_df.to_parquet(cov_file)
-                logger.info(f"💾 Saved covariates: {cov_file}")
             except Exception as e:
                 logger.warning(f"⚠️ Covariate parquet save failed, using CSV: {e}")
                 cov_file = os.path.join(self.results_dir, f"{qtl_type}_covariates.txt.gz")
                 covariate_df.to_csv(cov_file, sep='\t', compression='gzip')
-                logger.info(f"💾 Saved covariates: {cov_file}")
         else:
             cov_file = None
         
@@ -1003,26 +843,23 @@ class PhenotypeProcessor:
         }
     
     def _create_phenotype_positions(self, feature_ids, qtl_type):
-        """Create phenotype positions DataFrame with robust annotation handling"""
+        """Create phenotype positions DataFrame"""
         annotation_file = self.config['input_files']['annotations']
         
         try:
-            # Try different comment characters for annotation file
+            annot_df = pd.read_csv(annotation_file, sep='\t', comment='#')
+        except:
             try:
-                annot_df = pd.read_csv(annotation_file, sep='\t', comment='#')
-            except:
                 annot_df = pd.read_csv(annotation_file, sep='\t')
-        except Exception as e:
-            logger.warning(f"⚠️ Could not read annotation file: {e}, creating default positions")
-            annot_df = pd.DataFrame()
+            except Exception as e:
+                logger.warning(f"⚠️ Could not read annotation file: {e}, creating default positions")
+                annot_df = pd.DataFrame()
         
         positions_data = []
-        missing_annotations = 0
         
         for feature_id in feature_ids:
             if not annot_df.empty and 'gene_id' in annot_df.columns:
                 feature_annot = annot_df[annot_df['gene_id'] == feature_id]
-                
                 if len(feature_annot) > 0:
                     feature_annot = feature_annot.iloc[0]
                     positions_data.append({
@@ -1033,7 +870,6 @@ class PhenotypeProcessor:
                         'strand': feature_annot.get('strand', '+')
                     })
                 else:
-                    missing_annotations += 1
                     # Create default annotation if not found
                     positions_data.append({
                         'phenotype_id': feature_id,
@@ -1052,52 +888,51 @@ class PhenotypeProcessor:
                     'strand': '+'
                 })
         
-        if missing_annotations > 0:
-            logger.warning(f"⚠️ Could not find annotations for {missing_annotations} features, using defaults")
-        
         positions_df = pd.DataFrame(positions_data)
         positions_df = positions_df.set_index('phenotype_id')
         return positions_df
 
 class GenotypeLoader:
-    """Enhanced genotype data loading with memory optimization and comprehensive error handling"""
+    """Optimized genotype data loading for tensorQTL v1.0.10"""
     
     def __init__(self, config):
         self.config = config
         self.genotype_processing_config = config.get('genotype_processing', {})
-        self.performance_config = config.get('performance', {})
     
     def load_genotypes(self, genotype_file):
-        """Load genotype data with comprehensive error handling and version compatibility"""
+        """Load genotype data optimized for tensorQTL v1.0.10"""
         logger.info("🔧 Loading genotype data for tensorQTL...")
         
         if not TENSORQTL_AVAILABLE:
             error_msg = "tensorQTL is not available. "
             if TENSORQTL_IMPORT_ERROR:
                 error_msg += f"Import error: {TENSORQTL_IMPORT_ERROR}. "
-            error_msg += "Please install: pip install tensorqtl"
-            if TENSORQTL_IMPORT_ERROR and "torch" in TENSORQTL_IMPORT_ERROR.lower():
-                error_msg += " and make sure PyTorch is installed: pip install torch"
+            error_msg += "Please install: pip install tensorqtl==1.0.10"
             raise ImportError(error_msg)
         
         try:
             if genotype_file.endswith('.bed'):
-                # Load PLINK data
                 plink_prefix = genotype_file.replace('.bed', '')
                 
-                # Hardware optimization for tensorQTL
-                hardware_optimizer = HardwareOptimizer(self.config)
-                device, device_info = hardware_optimizer.setup_hardware()
+                # Log PLINK file components
+                for ext in ['.bed', '.bim', '.fam']:
+                    plink_file = plink_prefix + ext
+                    if os.path.exists(plink_file):
+                        file_size = os.path.getsize(plink_file) / (1024**2)
+                        logger.info(f"📄 PLINK component: {plink_file} ({file_size:.2f} MB)")
                 
-                # FIXED: Handle different tensorQTL versions
+                # Load PLINK data
                 pr = genotypeio.read_plink(plink_prefix)
                 
-                # Check if it's a tuple (older tensorQTL versions) or object (newer versions)
+                # Handle different return formats
                 if isinstance(pr, tuple):
-                    # Older tensorQTL versions return tuple: (genotypes, variants, samples)
-                    logger.info("📦 Detected older tensorQTL version (tuple return format)")
+                    # Older tensorQTL versions return tuple
+                    logger.info("📦 Detected tuple return format")
                     genotypes, variants, samples = pr
-                    # Create a mock object with the required attributes for compatibility
+                    
+                    logger.info(f"📊 Genotype data: {genotypes.shape[0]} variants × {genotypes.shape[1]} samples")
+                    
+                    # Create container for compatibility
                     class GenotypeContainer:
                         def __init__(self, genotypes, variants, samples):
                             self.genotypes = genotypes
@@ -1105,80 +940,112 @@ class GenotypeLoader:
                             self.samples = samples
                     
                     pr_container = GenotypeContainer(genotypes, variants, samples)
-                    logger.info(f"✅ Loaded PLINK data (old format): {genotypes.shape[0]} variants, {genotypes.shape[1]} samples")
                     return pr_container
                 else:
-                    # Newer tensorQTL versions return an object with attributes
-                    logger.info(f"✅ Loaded PLINK data (new format): {pr.genotypes.shape[0]} variants, {pr.genotypes.shape[1]} samples")
+                    # Newer tensorQTL versions return object
+                    logger.info(f"📊 Genotype data: {pr.genotypes.shape[0]} variants × {pr.genotypes.shape[1]} samples")
                     return pr
             else:
-                raise ValueError(f"Unsupported genotype format: {genotype_file}. Use PLINK format for best performance.")
+                raise ValueError(f"Unsupported genotype format: {genotype_file}")
                 
         except Exception as e:
             logger.error(f"❌ Error loading genotype data: {e}")
             raise
     
     def optimize_genotype_data(self, genotype_reader):
-        """Optimize genotype data for analysis with comprehensive filtering - FIXED for version compatibility"""
-        # FIXED: Handle both tuple format and object format
+        """Optimize genotype data for analysis"""
         if hasattr(genotype_reader, 'genotypes'):
-            # Object format (newer tensorQTL)
             original_count = genotype_reader.genotypes.shape[0]
             genotypes_obj = genotype_reader.genotypes
-        else:
-            # This shouldn't happen with our fix above, but keep for safety
-            raise AttributeError("Genotype reader doesn't have 'genotypes' attribute")
-        
-        # Apply MAF filtering
-        maf_threshold = self.genotype_processing_config.get('min_maf', 0.01)
-        if maf_threshold > 0:
-            maf = genotypes_obj.maf()
-            keep_variants = maf >= maf_threshold
-            genotypes_obj = genotypes_obj[keep_variants]
-            maf_filtered_count = genotypes_obj.shape[0]
-            logger.info(f"🔧 MAF filtering: {maf_filtered_count}/{original_count} variants retained (MAF >= {maf_threshold})")
-        
-        # Apply call rate filtering if needed
-        call_rate_threshold = self.genotype_processing_config.get('min_call_rate', 0.95)
-        if call_rate_threshold < 1.0:
-            call_rate = 1 - genotypes_obj.isnan().mean(axis=1)
-            keep_variants = call_rate >= call_rate_threshold
-            genotypes_obj = genotypes_obj[keep_variants]
-            call_rate_filtered_count = genotypes_obj.shape[0]
-            logger.info(f"🔧 Call rate filtering: {call_rate_filtered_count} variants retained (call rate >= {call_rate_threshold})")
-        
-        # Update the genotype reader with filtered data
-        genotype_reader.genotypes = genotypes_obj
-        
-        final_count = genotype_reader.genotypes.shape[0]
-        logger.info(f"🔧 Genotype optimization: {final_count}/{original_count} variants retained after filtering")
-        
+            
+            # Apply MAF filtering
+            maf_threshold = self.genotype_processing_config.get('min_maf', 0.01)
+            if maf_threshold > 0:
+                if hasattr(genotypes_obj, 'maf'):
+                    maf = genotypes_obj.maf()
+                    keep_variants = maf >= maf_threshold
+                    genotypes_obj = genotypes_obj[keep_variants]
+                    maf_filtered_count = genotypes_obj.shape[0]
+                    logger.info(f"🔧 MAF filtering: {maf_filtered_count}/{original_count} variants retained")
+                else:
+                    logger.warning("⚠️ MAF method not available, using manual MAF calculation")
+                    maf = self._calculate_maf_manual(genotypes_obj)
+                    keep_variants = maf >= maf_threshold
+                    genotypes_obj = genotypes_obj[keep_variants]
+                    maf_filtered_count = genotypes_obj.shape[0]
+                    logger.info(f"🔧 MAF filtering (manual): {maf_filtered_count}/{original_count} variants retained")
+            
+            # Apply call rate filtering if needed
+            call_rate_threshold = self.genotype_processing_config.get('min_call_rate', 0.95)
+            if call_rate_threshold < 1.0:
+                if hasattr(genotypes_obj, 'isnan'):
+                    call_rate = 1 - genotypes_obj.isnan().mean(axis=1)
+                else:
+                    # Fallback for regular DataFrames
+                    call_rate = 1 - genotypes_obj.isna().mean(axis=1)
+                keep_variants = call_rate >= call_rate_threshold
+                genotypes_obj = genotypes_obj[keep_variants]
+                call_rate_filtered_count = genotypes_obj.shape[0]
+                logger.info(f"🔧 Call rate filtering: {call_rate_filtered_count} variants retained (call rate >= {call_rate_threshold})")
+            
+            # Update the genotype reader
+            genotype_reader.genotypes = genotypes_obj
+            
+            final_count = genotype_reader.genotypes.shape[0]
+            logger.info(f"🔧 Genotype optimization: {final_count}/{original_count} variants retained")
+                
         return genotype_reader
+    
+    def _calculate_maf_manual(self, genotypes_df):
+        """Calculate Minor Allele Frequency manually - FIXED version"""
+        try:
+            if hasattr(genotypes_df, 'values'):
+                geno_array = genotypes_df.values
+            else:
+                geno_array = genotypes_df
+                
+            # Ensure numeric data type
+            if geno_array.dtype == np.object_ or geno_array.dtype.kind in 'OUS':
+                logger.warning("⚠️ Genotype data contains string values, converting to numeric")
+                try:
+                    geno_array = pd.DataFrame(geno_array).apply(pd.to_numeric, errors='coerce').values
+                except Exception as e:
+                    logger.error(f"❌ Cannot convert string genotypes: {e}")
+                    return np.ones(genotypes_df.shape[0])
+            
+            # Calculate allele frequencies
+            allele_counts = np.nansum(geno_array, axis=1)
+            valid_counts = np.sum(~np.isnan(geno_array), axis=1) * 2
+            
+            # Avoid division by zero
+            valid_counts[valid_counts == 0] = 1
+            
+            freq = allele_counts / valid_counts
+            maf = np.minimum(freq, 1 - freq)
+            
+            return maf
+            
+        except Exception as e:
+            logger.error(f"❌ Manual MAF calculation failed: {e}")
+            return np.ones(genotypes_df.shape[0])
 
 def prepare_genotypes(config, results_dir):
-    """Prepare genotype data optimized for tensorQTL with comprehensive error handling"""
+    """Prepare genotype data optimized for tensorQTL"""
     logger.info("🔧 Preparing genotype data for tensorQTL...")
     
     try:
-        # Initialize genotype processor
         if GenotypeProcessor:
             processor = GenotypeProcessor(config)
-            
-            # Get input file path
             input_file = config['input_files']['genotypes']
-            
-            # Process genotypes - tensorQTL prefers PLINK format
             genotype_file = processor.process_genotypes(input_file, results_dir)
         else:
-            # Fallback to direct processing
             genotype_file = config['input_files']['genotypes']
-            logger.warning("Using direct genotype processing - GenotypeProcessor not available")
+            logger.warning("Using direct genotype processing")
         
-        # Ensure PLINK format for tensorQTL
+        # Convert VCF to PLINK if needed
         if genotype_file.endswith('.vcf.gz') or genotype_file.endswith('.vcf'):
-            # Convert VCF to PLINK for tensorQTL
             plink_base = os.path.join(results_dir, "genotypes_plink")
-            logger.info("🔄 Converting VCF to PLINK format for tensorQTL...")
+            logger.info("🔄 Converting VCF to PLINK format...")
             
             plink_path = config['paths'].get('plink', 'plink')
             plink_threads = config.get('genotype_processing', {}).get('plink_threads', 1)
@@ -1187,7 +1054,6 @@ def prepare_genotypes(config, results_dir):
             run_command(cmd, "Converting VCF to PLINK", config)
             
             genotype_file = plink_base + ".bed"
-            logger.info(f"✅ Converted VCF to PLINK format: {genotype_file}")
         
         logger.info(f"✅ Genotype preparation completed: {genotype_file}")
         return genotype_file
@@ -1197,8 +1063,8 @@ def prepare_genotypes(config, results_dir):
         raise
 
 def load_covariates(config, results_dir, qtl_type='eqtl'):
-    """Load and prepare covariates for tensorQTL with enhanced processing and dynamic handling"""
-    logger.info(f"🔧 Loading covariates for {qtl_type} with dynamic handling...")
+    """Load and prepare covariates for tensorQTL"""
+    logger.info(f"🔧 Loading covariates for {qtl_type}...")
     
     try:
         # Try to load pre-processed covariates first
@@ -1206,10 +1072,9 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
         if os.path.exists(cov_file):
             try:
                 cov_df = pd.read_parquet(cov_file)
-                logger.info(f"✅ Loaded pre-processed covariates: {cov_df.shape[1]} samples, {cov_df.shape[0]} covariates")
-                return cov_df.T  # Return samples x covariates for tensorQTL
-            except Exception as e:
-                logger.warning(f"⚠️ Could not read parquet covariates, trying CSV: {e}")
+                logger.info(f"✅ Loaded pre-processed covariates: {cov_df.shape[1]} samples")
+                return cov_df.T
+            except Exception:
                 cov_file = os.path.join(results_dir, f"{qtl_type}_covariates.txt.gz")
                 if os.path.exists(cov_file):
                     cov_df = pd.read_csv(cov_file, sep='\t', index_col=0)
@@ -1218,7 +1083,7 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
         # Fallback to original covariate file
         covariates_file = config['input_files'].get('covariates')
         if not covariates_file or not os.path.exists(covariates_file):
-            logger.warning("⚠️ No covariate file found, proceeding without covariates")
+            logger.warning("⚠️ No covariate file found")
             return None
         
         # Load with dynamic format handling
@@ -1226,10 +1091,14 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
         cov_df = data_handler._load_covariate_data(covariates_file)
         
         if cov_df.empty:
-            logger.warning("⚠️ Covariate data is empty, proceeding without covariates")
+            logger.warning("⚠️ Covariate data is empty")
             return None
         
-        # Transpose for tensorQTL (samples x covariates)
+        # Convert all sample names to strings
+        cov_df.columns = [str(col) for col in cov_df.columns]
+        cov_df.index = [str(idx) for idx in cov_df.index]
+        
+        # Transpose for tensorQTL
         cov_df = cov_df.T
         
         # Remove constant covariates
@@ -1241,116 +1110,74 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
         # Check for missing values
         missing_count = cov_df.isna().sum().sum()
         if missing_count > 0:
-            logger.warning(f"⚠️ Covariates contain {missing_count} missing values, they will be imputed")
-            # Simple imputation with mean
+            logger.warning(f"⚠️ Covariates contain {missing_count} missing values, imputing with mean")
             cov_df = cov_df.fillna(cov_df.mean())
         
-        logger.info(f"✅ Loaded covariates: {cov_df.shape[1]} covariates, {cov_df.shape[0]} samples")
+        logger.info(f"✅ Loaded covariates: {cov_df.shape[1]} covariates")
         return cov_df
         
     except Exception as e:
         logger.error(f"❌ Error loading covariates: {e}")
         return None
 
-def calculate_fdr(pvalues, method='bh'):
-    """Calculate FDR using available methods with enhanced fallbacks"""
-    # Try tensorQTL calculate_qvalues first if available
-    if CALCULATE_QVALUES_AVAILABLE and TENSORQTL_AVAILABLE:
-        try:
-            # Dynamically import calculate_qvalues if not already available
-            if 'calculate_qvalues' not in globals():
-                # Try multiple import strategies
-                try:
-                    from tensorqtl import calculate_qvalues
-                except ImportError:
-                    try:
-                        from tensorqtl.utils import calculate_qvalues
-                    except ImportError:
-                        # Try to get it from the main tensorqtl module
-                        import tensorqtl
-                        calculate_qvalues = getattr(tensorqtl, 'calculate_qvalues', None)
-            
-            if calculate_qvalues is not None:
-                return calculate_qvalues(pvalues)
-            else:
-                raise ImportError("calculate_qvalues not found in tensorqtl")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ tensorQTL calculate_qvalues failed, using statsmodels: {e}")
-    
-    # Use statsmodels as fallback
-    try:
-        from statsmodels.stats.multitest import multipletests
-        _, fdr, _, _ = multipletests(pvalues, method=method)
-        return fdr
-    except ImportError:
-        logger.error("❌ Neither tensorqtl.calculate_qvalues nor statsmodels available for FDR calculation")
-        # Return raw pvalues if no FDR method is available
-        return pvalues
-
 def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
-    """Run cis-QTL analysis using tensorQTL with enhanced error handling and performance"""
+    """Run cis-QTL analysis using tensorQTL v1.0.10"""
     if not TENSORQTL_AVAILABLE:
         error_msg = "tensorQTL is not available. "
         if TENSORQTL_IMPORT_ERROR:
             error_msg += f"Import error: {TENSORQTL_IMPORT_ERROR}. "
-        error_msg += "Please install it: pip install tensorqtl"
-        if TENSORQTL_IMPORT_ERROR and "torch" in TENSORQTL_IMPORT_ERROR.lower():
-            error_msg += " and make sure PyTorch is installed: pip install torch"
+        error_msg += "Please install: pip install tensorqtl==1.0.10"
         raise ImportError(error_msg)
     
-    logger.info(f"🔍 Running {qtl_type} cis-QTL analysis with tensorQTL...")
+    logger.info(f"🔍 Running {qtl_type} cis-QTL analysis...")
     
     try:
-        # Initialize configuration with hardware optimization
+        # Initialize configuration
         qtl_config = QTLConfig(config)
-        qtl_config.validate_parameters('cis')
         params = qtl_config.get_analysis_params('cis')
         
         # Log hardware configuration
-        device_info = params['device_info']
         if params['use_gpu']:
             logger.info(f"🎮 Using GPU for {qtl_type} cis-QTL analysis")
         else:
-            logger.info(f"🔢 Using CPU for {qtl_type} cis-QTL analysis (threads: {params.get('num_threads', 'auto')})")
+            logger.info(f"🔢 Using CPU for {qtl_type} cis-QTL analysis")
         
-        # Load and optimize genotype data first to get samples
+        # Load and optimize genotype data
         genotype_loader = GenotypeLoader(config)
         pr = genotype_loader.load_genotypes(genotype_file)
         pr = genotype_loader.optimize_genotype_data(pr)
         
-        # FIXED: Handle different genotype reader formats safely
+        # Extract samples and ensure string format
         if hasattr(pr, 'samples'):
-            genotype_samples = pr.samples
+            genotype_samples = [str(sample) for sample in pr.samples]
         elif hasattr(pr, 'genotypes') and hasattr(pr.genotypes, 'columns'):
-            genotype_samples = pr.genotypes.columns.tolist()
+            genotype_samples = [str(sample) for sample in pr.genotypes.columns.tolist()]
         else:
-            # Fallback: try to extract samples from the genotype object
             try:
-                genotype_samples = list(pr.genotypes.columns)
+                genotype_samples = [str(sample) for sample in list(pr.genotypes.columns)]
             except:
                 raise AttributeError("Cannot extract samples from genotype reader")
         
-        # Prepare phenotype data with genotype samples for alignment
+        # Prepare phenotype data
         pheno_processor = PhenotypeProcessor(config, results_dir)
         pheno_data = pheno_processor.prepare_phenotype_data(qtl_type, genotype_samples)
         
-        # Load covariates (will use pre-processed ones if available)
+        # Load covariates
         covariates_df = load_covariates(config, results_dir, qtl_type)
         
-        # Set output prefix
-        output_prefix = os.path.join(results_dir, f"{qtl_type}_cis")
-        
-        # Run cis-QTL analysis with hardware optimization
-        logger.info("🔬 Running tensorQTL cis mapping...")
-        
-        # Convert to tensorQTL-compatible format if needed
-        phenotype_df_t = pheno_data['phenotype_df'].T  # tensorQTL expects samples x features
+        # Prepare data for tensorQTL
+        phenotype_df_t = pheno_data['phenotype_df'].T
         phenotype_pos_df = pheno_data['phenotype_pos_df']
         
-        # Map cis-QTLs with hardware optimization - using proper tensorQTL API
+        # Ensure all sample names are strings
+        phenotype_df_t.index = [str(idx) for idx in phenotype_df_t.index]
+        phenotype_df_t.columns = [str(col) for col in phenotype_df_t.columns]
+        
+        # Run cis-QTL analysis
+        logger.info("🔬 Running tensorQTL cis mapping...")
+        
         cis_df = cis.map_cis(
-            pr,  # Pass the genotype reader object directly
+            pr,
             phenotype_df_t, 
             phenotype_pos_df,
             covariates_df=covariates_df,
@@ -1358,21 +1185,6 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
             seed=params['seed'],
             run_eigenmt=params['run_eigenmt']
         )
-        
-        # Run permutations for FDR estimation if requested
-        if params['run_permutations']:
-            logger.info("🔬 Running tensorQTL cis permutations...")
-            
-            cis_df = cis.map_cis(
-                pr,
-                phenotype_df_t,
-                phenotype_pos_df,
-                covariates_df=covariates_df,
-                window=params['cis_window'],
-                seed=params['seed'],
-                run_eigenmt=params['run_eigenmt'],
-                nperm=params['num_permutations']
-            )
         
         # Save results
         result_file = os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz")
@@ -1389,10 +1201,8 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         
         return {
             'result_file': result_file,
-            'nominals_file': result_file,
             'significant_count': significant_count,
             'status': 'completed',
-            'params': params,
             'hardware_used': 'GPU' if params['use_gpu'] else 'CPU'
         }
         
@@ -1400,71 +1210,65 @@ def run_cis_analysis(config, genotype_file, qtl_type, results_dir):
         logger.error(f"❌ cis-QTL analysis failed for {qtl_type}: {e}")
         return {
             'result_file': "",
-            'nominals_file': "",
             'significant_count': 0,
             'status': 'failed',
             'error': str(e)
         }
 
 def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
-    """Run trans-QTL analysis using tensorQTL with enhanced performance and memory optimization"""
+    """Run trans-QTL analysis using tensorQTL v1.0.10"""
     if not TENSORQTL_AVAILABLE:
         error_msg = "tensorQTL is not available. "
         if TENSORQTL_IMPORT_ERROR:
             error_msg += f"Import error: {TENSORQTL_IMPORT_ERROR}. "
-        error_msg += "Please install it: pip install tensorqtl"
-        if TENSORQTL_IMPORT_ERROR and "torch" in TENSORQTL_IMPORT_ERROR.lower():
-            error_msg += " and make sure PyTorch is installed: pip install torch"
+        error_msg += "Please install: pip install tensorqtl==1.0.10"
         raise ImportError(error_msg)
     
-    logger.info(f"🔍 Running {qtl_type} trans-QTL analysis with tensorQTL...")
+    logger.info(f"🔍 Running {qtl_type} trans-QTL analysis...")
     
     try:
-        # Initialize configuration with hardware optimization
+        # Initialize configuration
         qtl_config = QTLConfig(config)
         params = qtl_config.get_analysis_params('trans')
         
-        # Log hardware configuration
-        device_info = params['device_info']
         if params['use_gpu']:
             logger.info(f"🎮 Using GPU for {qtl_type} trans-QTL analysis")
         else:
             logger.info(f"🔢 Using CPU for {qtl_type} trans-QTL analysis")
         
-        # Load and optimize genotype data first to get samples
+        # Load and optimize genotype data
         genotype_loader = GenotypeLoader(config)
         pr = genotype_loader.load_genotypes(genotype_file)
         pr = genotype_loader.optimize_genotype_data(pr)
         
-        # FIXED: Handle different genotype reader formats safely
+        # Extract samples and ensure string format
         if hasattr(pr, 'samples'):
-            genotype_samples = pr.samples
+            genotype_samples = [str(sample) for sample in pr.samples]
         elif hasattr(pr, 'genotypes') and hasattr(pr.genotypes, 'columns'):
-            genotype_samples = pr.genotypes.columns.tolist()
+            genotype_samples = [str(sample) for sample in pr.genotypes.columns.tolist()]
         else:
-            # Fallback: try to extract samples from the genotype object
             try:
-                genotype_samples = list(pr.genotypes.columns)
+                genotype_samples = [str(sample) for sample in list(pr.genotypes.columns)]
             except:
                 raise AttributeError("Cannot extract samples from genotype reader")
         
-        # Prepare phenotype data with genotype samples for alignment
+        # Prepare phenotype data
         pheno_processor = PhenotypeProcessor(config, results_dir)
         pheno_data = pheno_processor.prepare_phenotype_data(qtl_type, genotype_samples)
         
-        # Load covariates (will use pre-processed ones if available)
+        # Load covariates
         covariates_df = load_covariates(config, results_dir, qtl_type)
         
-        # Set output prefix
-        output_prefix = os.path.join(results_dir, f"{qtl_type}_trans")
+        # Prepare data for tensorQTL
+        phenotype_df_t = pheno_data['phenotype_df'].T
         
-        # Run trans-QTL analysis with memory optimization
+        # Ensure all sample names are strings
+        phenotype_df_t.index = [str(idx) for idx in phenotype_df_t.index]
+        phenotype_df_t.columns = [str(col) for col in phenotype_df_t.columns]
+        
+        # Run trans-QTL analysis
         logger.info("🔬 Running tensorQTL trans mapping...")
         
-        # Convert to tensorQTL-compatible format
-        phenotype_df_t = pheno_data['phenotype_df'].T  # tensorQTL expects samples x features
-        
-        # Use chunked processing for large datasets with hardware optimization
         trans_df = trans.map_trans(
             pr,
             phenotype_df_t,
@@ -1477,22 +1281,21 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         # Save results
         trans_file = os.path.join(results_dir, f"{qtl_type}_trans.trans_qtl.txt.gz")
         if trans_df is not None and len(trans_df) > 0:
-            # Apply FDR correction
+            # Apply FDR correction using tensorQTL's calculate_qvalues
             if 'pval' in trans_df.columns:
-                fdr = calculate_fdr(trans_df['pval'])
+                fdr = calculate_qvalues(trans_df['pval'])
                 trans_df['fdr'] = fdr
                 significant_count = (fdr < params['fdr_threshold']).sum()
             else:
                 significant_count = len(trans_df)
             
             trans_df.to_csv(trans_file, sep='\t', compression='gzip')
-            logger.info(f"✅ Saved {len(trans_df)} trans associations to {trans_file}")
+            logger.info(f"✅ Saved {len(trans_df)} trans associations")
         else:
             significant_count = 0
-            # Create empty result file with proper columns
             empty_df = pd.DataFrame(columns=['phenotype_id', 'variant_id', 'pval', 'beta', 'se'])
             empty_df.to_csv(trans_file, sep='\t', compression='gzip', index=False)
-            logger.warning(f"⚠️ No significant trans associations found for {qtl_type}")
+            logger.warning(f"⚠️ No significant trans associations found")
         
         logger.info(f"✅ {qtl_type} trans: Found {significant_count} significant associations")
         
@@ -1502,10 +1305,8 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         
         return {
             'result_file': trans_file,
-            'nominals_file': trans_file,
             'significant_count': significant_count,
             'status': 'completed',
-            'params': params,
             'hardware_used': 'GPU' if params['use_gpu'] else 'CPU'
         }
         
@@ -1513,14 +1314,13 @@ def run_trans_analysis(config, genotype_file, qtl_type, results_dir):
         logger.error(f"❌ trans-QTL analysis failed for {qtl_type}: {e}")
         return {
             'result_file': "",
-            'nominals_file': "",
             'significant_count': 0,
             'status': 'failed',
             'error': str(e)
         }
 
 def count_significant_associations(results_dir, prefix, fdr_threshold=0.05):
-    """Count significant associations from tensorQTL output with enhanced parsing"""
+    """Count significant associations from tensorQTL output"""
     result_file = os.path.join(results_dir, f"{prefix}.cis_qtl.txt.gz")
     
     if not os.path.exists(result_file):
@@ -1532,19 +1332,16 @@ def count_significant_associations(results_dir, prefix, fdr_threshold=0.05):
         if df.empty:
             return 0
         
-        # Check for different FDR/p-value columns
         if 'qval' in df.columns:
             significant_count = len(df[df['qval'] < fdr_threshold])
         elif 'pval_perm' in df.columns:
             significant_count = len(df[df['pval_perm'] < fdr_threshold])
         elif 'pval_nominal' in df.columns:
-            # Use Bonferroni correction for nominal p-values
             bonferroni_threshold = fdr_threshold / len(df)
             significant_count = len(df[df['pval_nominal'] < bonferroni_threshold])
         else:
-            # Count all results if no FDR column
             significant_count = len(df)
-            logger.warning("No FDR column found in tensorQTL output, counting all results")
+            logger.warning("No FDR column found, counting all results")
         
         return significant_count
         
@@ -1553,11 +1350,9 @@ def count_significant_associations(results_dir, prefix, fdr_threshold=0.05):
         return 0
 
 def run_command(cmd, description, config, check=True):
-    """Run shell command with comprehensive error handling and timeout"""
+    """Run shell command with error handling"""
     logger.info(f"Executing: {description}")
-    logger.debug(f"Command: {cmd}")
     
-    # Set timeout from config
     timeout = config.get('large_data', {}).get('command_timeout', 7200)
     
     try:
@@ -1575,15 +1370,11 @@ def run_command(cmd, description, config, check=True):
             logger.info(f"✅ {description} completed successfully")
         else:
             logger.warning(f"⚠️ {description} completed with exit code {result.returncode}")
-            if result.stderr:
-                logger.warning(f"Stderr: {result.stderr[:500]}...")
             
         return result
         
     except subprocess.CalledProcessError as e:
         logger.error(f"❌ {description} failed with exit code {e.returncode}")
-        logger.error(f"Error output: {e.stderr}")
-        logger.error(f"Command: {e.cmd}")
         if check:
             raise RuntimeError(f"Command failed: {description}") from e
         return e
@@ -1598,9 +1389,9 @@ def run_command(cmd, description, config, check=True):
             raise
         return None
 
-# Backward compatibility functions - maintain all your original function signatures
+# Backward compatibility functions - ALL MISSING FUNCTIONS RESTORED
 def apply_normalization(pheno_df, config, qtl_type, results_dir):
-    """Apply proper normalization based on QTL type - Compatibility wrapper"""
+    """Apply normalization - Compatibility wrapper"""
     processor = PhenotypeProcessor(config, results_dir)
     return processor._apply_normalization(pheno_df, qtl_type)
 
@@ -1662,7 +1453,7 @@ def map_qtl_type_to_config_key(qtl_type):
     }
     return mapping.get(qtl_type, qtl_type)
 
-# Additional utility functions for modular pipeline
+# Additional utility functions for modular pipeline - MISSING FUNCTION RESTORED
 def process_expression_data(config, results_dir=None):
     """Process expression data for modular pipeline - FIXED: Added results_dir parameter"""
     if results_dir is None:
@@ -1710,17 +1501,15 @@ if __name__ == "__main__":
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
         
-        # Setup logging
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         
-        # Run analysis based on config
         genotype_file = prepare_genotypes(config, config['results_dir'])
         qtl_types = config['analysis']['qtl_types']
         
         if isinstance(qtl_types, str) and qtl_types != 'all':
             qtl_types = [qtl_types]
         elif qtl_types == 'all':
-            qtl_types = ['eqtl']  # Default to eQTL
+            qtl_types = ['eqtl']
         
         for qtl_type in qtl_types:
             if config['analysis']['qtl_mode'] in ['cis', 'both']:

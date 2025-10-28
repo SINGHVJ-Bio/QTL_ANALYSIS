@@ -3,21 +3,21 @@
 # ==============================================
 
 # MANDATORY: Results directory where all output will be stored
-results_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/results"
+results_dir: "/Users/singhvj/QTL_ANALYSIS_OUTPUT/results"
 
 # MANDATORY: Input files section
 input_files:
   # Genotype file - supports VCF, VCF.GZ, BCF, PLINK BED formats
-  genotypes: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data/genotypes.vcf.gz"
+  genotypes: "/Users/singhvj/QTL_ANALYSIS_OUTPUT/genotypes.vcf.gz"
   
   # Covariates file (tab-separated)
-  covariates: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data/covariates.txt"
+  covariates: "/Users/singhvj/QTL_ANALYSIS_OUTPUT/covariates.txt"
   
   # Annotation file (BED format)
-  annotations: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data/annotations.bed"
+  annotations: "/Users/singhvj/QTL_ANALYSIS_OUTPUT/annotations.bed"
   
   # Phenotype files
-  expression: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input_data/expression.tsv"
+  expression: "/Users/singhvj/QTL_ANALYSIS_OUTPUT/expression.tsv"
   protein: ""
   splicing: ""
 
@@ -39,7 +39,6 @@ normalization:
     method: "vst"  # "vst", "log2", "quantile", "tpm", "raw"
     vst_blind: true
     fit_type: "parametric"
-    use_deseq2: true
     
   # pQTL normalization options  
   pqtl:
@@ -311,7 +310,7 @@ qc:
 # Performance settings optimized for tensorQTL
 performance:
   num_threads: 8  # Set to your core count (e.g., 16 for 8-core/16-thread CPU)
-  memory_gb: 62    # Adjust based on your RAM
+  memory_gb: 52    # Adjust based on your RAM
   temp_dir: "temp"
   cleanup_temp: true
   parallel_processing: true

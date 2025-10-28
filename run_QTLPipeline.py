@@ -21,6 +21,16 @@ import traceback
 from datetime import datetime
 import warnings
 
+try:
+    from scripts.utils.enhanced_qc import EnhancedQC
+    from scripts.utils.genotype_processing import process_genotypes
+    from scripts.utils.qtl_analysis import prepare_genotypes, process_expression_data
+    from scripts.analysis.fine_mapping import run_fine_mapping
+    from scripts.analysis.interaction_analysis import run_interaction_analysis
+except ImportError as e:
+    logging.error(f"Import error in modular pipeline: {e}")
+    raise
+
 warnings.filterwarnings('ignore')
 
 # Configure logging

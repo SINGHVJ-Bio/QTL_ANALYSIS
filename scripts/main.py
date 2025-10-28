@@ -22,30 +22,23 @@ import psutil
 
 warnings.filterwarnings('ignore')
 
-# Import utility modules
 try:
-    from utils import validation, plotting, qtl_analysis, gwas_analysis, report_generator
-    from utils.enhanced_qc import EnhancedQC
-    from utils.advanced_plotting import AdvancedPlotter
-    from utils.normalization_comparison import NormalizationComparison
-    from utils.genotype_processing import process_genotypes
-except ImportError:
-    # Try alternative import paths for script organization
-    try:
-        from scripts.utils import validation, plotting, qtl_analysis, gwas_analysis, report_generator
-        from scripts.utils.enhanced_qc import EnhancedQC
-        from scripts.utils.advanced_plotting import AdvancedPlotter
-        from scripts.utils.normalization_comparison import NormalizationComparison
-        from scripts.utils.genotype_processing import process_genotypes
-    except ImportError as e:
-        logging.error(f"Import error: {e}")
-        logging.error("Please ensure all utility modules are available")
-        raise
+    from scripts.utils import validation, plotting, qtl_analysis, gwas_analysis, report_generator
+    from scripts.utils.enhanced_qc import EnhancedQC
+    from scripts.utils.advanced_plotting import AdvancedPlotter
+    from scripts.utils.normalization_comparison import NormalizationComparison
+    from scripts.utils.genotype_processing import process_genotypes
+    from scripts.utils.batch_correction import run_batch_correction_pipeline
+    from scripts.utils.deseq2_vst_python import deseq2_vst_python, simple_vst_fallback
+except ImportError as e:
+    logging.error(f"Import error: {e}")
+    logging.error("Please ensure all utility modules are available")
+    raise
 
 # Import analysis modules
 try:
-    from analysis.interaction_analysis import InteractionAnalysis
-    from analysis.fine_mapping import FineMapping
+    from scripts.analysis.interaction_analysis import InteractionAnalysis
+    from scripts.analysis.fine_mapping import FineMapping
 except ImportError:
     try:
         from scripts.analysis.interaction_analysis import InteractionAnalysis

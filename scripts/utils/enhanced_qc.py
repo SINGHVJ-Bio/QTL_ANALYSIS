@@ -1520,11 +1520,15 @@ class EnhancedQC:
             heterozygosity = {}
             het_file = f"{plink_base}_het.het"
             if os.path.exists(het_file):
-                df = pd.read_csv(het_file, sep='\s+', usecols=['IID', 'O(HOM)', 'N(NM)'])
+                # Read the file and clean column names
+                df = pd.read_csv(het_file, sep='\s+', engine='python')
+                df.columns = df.columns.str.strip().str.lstrip('#')
+                
+                # Use OBS_CT as confirmed by your file format
                 for _, row in df.iterrows():
                     sample_id = row['IID']
                     hom_count = row['O(HOM)']
-                    nm_count = row['N(NM)']
+                    nm_count = row['OBS_CT']  # This is correct for your PLINK version
                     het_rate = (nm_count - hom_count) / nm_count if nm_count > 0 else 0
                     heterozygosity[sample_id] = het_rate
             
@@ -1936,30 +1940,73 @@ class EnhancedQC:
         try:
             # Use PLINK for genotype-based outlier detection
             plink_base = Path(output_dir) / "outlier_detection"
-            cmd = f"{self.config['paths']['plink']} --vcf {vcf_file} --make-bed --out {plink_base} 2>/dev/null"
-            subprocess.run(cmd, shell=True, capture_output=True, executable='/bin/bash')
             
-            # Calculate heterozygosity and identify outliers
-            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --het --out {plink_base}_het 2>/dev/null"
-            subprocess.run(cmd, shell=True, capture_output=True, executable='/bin/bash')
+            # Convert Path object to string for PLINK command
+            plink_base_str = str(plink_base)
+            
+            # Create PLINK binary files from VCF
+            cmd1 = f"{self.config['paths']['plink']} --vcf {vcf_file} --make-bed --out {plink_base_str} 2>/dev/null"
+            result1 = subprocess.run(cmd1, shell=True, capture_output=True, executable='/bin/bash')
+            if result1.returncode != 0:
+                logger.warning(f"PLINK --make-bed failed: {result1.stderr.decode()}")
+                return {}
+            
+            # Calculate heterozygosity
+            cmd2 = f"{self.config['paths']['plink']} --bfile {plink_base_str} --het --out {plink_base_str}_het 2>/dev/null"
+            result2 = subprocess.run(cmd2, shell=True, capture_output=True, executable='/bin/bash')
+            if result2.returncode != 0:
+                logger.warning(f"PLINK --het failed: {result2.stderr.decode()}")
+                return {}
             
             # Read heterozygosity results
-            het_file = f"{plink_base}_het.het"
+            het_file = f"{plink_base_str}_het.het"
             if os.path.exists(het_file):
-                df = pd.read_csv(het_file, sep='\s+', usecols=['IID', 'O(HOM)', 'N(NM)'])
-                het_rates = (df['N(NM)'] - df['O(HOM)']) / df['N(NM)']
+                # Read the file and clean column names
+                df = pd.read_csv(het_file, sep='\s+', engine='python')
+                df.columns = df.columns.str.strip().str.lstrip('#')
                 
-                # Identify heterozygosity outliers
-                mean_het = het_rates.mean()
-                std_het = het_rates.std()
-                outlier_mask = (het_rates < mean_het - 3 * std_het) | (het_rates > mean_het + 3 * std_het)
+                # Calculate heterozygosity rate: (OBS_CT - O(HOM)) / OBS_CT
+                # Handle division by zero properly
+                df['het_rate'] = df.apply(
+                    lambda row: (row['OBS_CT'] - row['O(HOM)']) / row['OBS_CT'] if row['OBS_CT'] > 0 else 0, 
+                    axis=1
+                )
                 
-                outlier_results['heterozygosity_outliers'] = {
-                    'n_outliers': int(outlier_mask.sum()),
-                    'outlier_samples': df[outlier_mask]['IID'].tolist(),
-                    'threshold_low': float(mean_het - 3 * std_het),
-                    'threshold_high': float(mean_het + 3 * std_het)
-                }
+                # Remove any NaN values that might have occurred
+                df = df.dropna(subset=['het_rate'])
+                
+                # Identify heterozygosity outliers using 3 standard deviations
+                if len(df) > 0:
+                    mean_het = df['het_rate'].mean()
+                    std_het = df['het_rate'].std()
+                    
+                    # Avoid division by zero in case all samples have same heterozygosity
+                    if std_het > 0:
+                        outlier_mask = (df['het_rate'] < mean_het - 3 * std_het) | (df['het_rate'] > mean_het + 3 * std_het)
+                    else:
+                        # If no variation, no outliers
+                        outlier_mask = pd.Series(False, index=df.index)
+                    
+                    outlier_results['heterozygosity_outliers'] = {
+                        'n_outliers': int(outlier_mask.sum()),
+                        'outlier_samples': df[outlier_mask]['IID'].tolist(),
+                        'threshold_low': float(mean_het - 3 * std_het),
+                        'threshold_high': float(mean_het + 3 * std_het),
+                        'mean_heterozygosity': float(mean_het),
+                        'std_heterozygosity': float(std_het),
+                        'total_samples': len(df)
+                    }
+                else:
+                    logger.warning("No valid samples found for heterozygosity calculation")
+                    outlier_results['heterozygosity_outliers'] = {
+                        'n_outliers': 0,
+                        'outlier_samples': [],
+                        'threshold_low': 0,
+                        'threshold_high': 0,
+                        'mean_heterozygosity': 0,
+                        'std_heterozygosity': 0,
+                        'total_samples': 0
+                    }
             
             logger.info("✅ Advanced outlier detection completed")
             return outlier_results

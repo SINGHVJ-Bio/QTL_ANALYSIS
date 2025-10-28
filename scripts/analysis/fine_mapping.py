@@ -638,5 +638,57 @@ class FineMapping:
             logger.error(f"❌ Error generating {qtl_type} fine-mapping summary: {e}")
             return {}
 
-# # Export functions for pipeline compatibility
-# __all__ = ['run_fine_mapping', 'FineMapping', 'map_qtl_type_to_config_key']
+# Backward compatibility functions for pipeline integration
+def run_fine_mapping_wrapper(config: Dict[str, Any], qtl_type: str, results_dir: str) -> Dict[str, Any]:
+    """
+    Wrapper function for backward compatibility with pipeline
+    This function provides the expected interface for the pipeline
+    """
+    logger.info(f"🔍 Starting fine-mapping wrapper for {qtl_type}")
+    
+    try:
+        # Construct file paths based on qtl_type and results_dir
+        qtl_results_file = os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz")
+        vcf_file = config['input_files']['genotypes']
+        output_dir = os.path.join(results_dir, f"{qtl_type}_fine_mapping")
+        
+        # Check if QTL results file exists
+        if not os.path.exists(qtl_results_file):
+            logger.warning(f"❌ QTL results file not found: {qtl_results_file}")
+            logger.info("ℹ️ Fine-mapping requires cis-QTL results. Run cis-QTL analysis first.")
+            return {}
+        
+        # Run fine-mapping
+        return run_fine_mapping(config, qtl_results_file, vcf_file, output_dir, qtl_type)
+        
+    except Exception as e:
+        logger.error(f"❌ Fine-mapping wrapper failed for {qtl_type}: {e}")
+        return {}
+
+# Main execution for standalone testing
+if __name__ == "__main__":
+    import yaml
+    import sys
+    
+    if len(sys.argv) > 1:
+        config_file = sys.argv[1]
+    else:
+        config_file = "config/config.yaml"
+    
+    try:
+        with open(config_file, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Setup logging
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        
+        # Example usage
+        qtl_type = "eqtl"
+        results_dir = config.get('results_dir', 'results')
+        
+        results = run_fine_mapping_wrapper(config, qtl_type, results_dir)
+        logger.info(f"✅ Fine-mapping completed for {qtl_type}")
+        
+    except Exception as e:
+        logger.error(f"❌ Fine-mapping failed: {e}")
+        sys.exit(1)
