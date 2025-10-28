@@ -109,6 +109,53 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
+def get_recommended_batch_correction(normalization_method, qtl_type):
+    """
+    Get recommended batch correction method based on normalization and QTL type.
+    
+    Args:
+        normalization_method (str): Normalization method used
+        qtl_type (str): Type of QTL analysis
+        
+    Returns:
+        dict: Batch correction recommendation with method and strength
+    """
+    recommendations = {
+        'vst': {
+            'eqtl': {'method': 'linear_regression', 'strength': 'Strongly recommended for RNA-seq data'},
+            'pqtl': {'method': 'linear_regression', 'strength': 'Recommended for protein data'},
+            'sqtl': {'method': 'linear_regression', 'strength': 'Recommended for splicing data'}
+        },
+        'log2': {
+            'eqtl': {'method': 'linear_regression', 'strength': 'Recommended for log-transformed data'},
+            'pqtl': {'method': 'linear_regression', 'strength': 'Recommended for protein data'},
+            'sqtl': {'method': 'linear_regression', 'strength': 'Recommended for splicing data'}
+        },
+        'quantile': {
+            'eqtl': {'method': 'linear_regression', 'strength': 'Recommended with quantile normalization'},
+            'pqtl': {'method': 'linear_regression', 'strength': 'Recommended for protein data'},
+            'sqtl': {'method': 'linear_regression', 'strength': 'Recommended for splicing data'}
+        },
+        'zscore': {
+            'eqtl': {'method': 'linear_regression', 'strength': 'Recommended with z-score normalization'},
+            'pqtl': {'method': 'linear_regression', 'strength': 'Recommended for protein data'},
+            'sqtl': {'method': 'linear_regression', 'strength': 'Recommended for splicing data'}
+        }
+    }
+    
+    # Get recommendation or use default
+    recommendation = recommendations.get(
+        normalization_method, 
+        recommendations['vst']  # default to vst recommendations
+    ).get(
+        qtl_type,
+        {'method': 'linear_regression', 'strength': 'Standard batch correction recommended'}
+    )
+    
+    logger.info(f"🔧 Batch correction recommendation for {qtl_type} with {normalization_method}: {recommendation['method']}")
+    
+    return recommendation
+
 class PLINKVersionManager:
     """Manage PLINK version detection and command generation"""
     
