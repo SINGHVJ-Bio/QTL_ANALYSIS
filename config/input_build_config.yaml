@@ -1,13 +1,13 @@
 # Optimized Input Build Configuration for tensorQTL
 input_files:
-  count_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/Merge_Pre_EMULSION_ENABL150_ENABL300_count_protein_coding.tsv"
+  count_file: "/Users/singhvj/data/raw/Merge_Pre_EMULSION_ENABL150_ENABL300_count_protein_coding.tsv"
   count_file_sep: "\t"  # Specify comma for CSV, tab for TSV
-  meta_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/meta_wgs_rnaseq.csv"
+  meta_file: "/Users/singhvj/data/raw/meta_wgs_rnaseq.csv"
   meta_file_sep: ","   # Specify comma for CSV, tab for TSV
-  pca_file: "/home/ubuntu/DATA_DRIVE/qtl_analysis/pca_result_cohort.eigenvec"
-  pca_file_sep: " "    # Usually space for PCA files
-  vcf_input: "/home/ubuntu/DATA_DRIVE/qtl_analysis/ENABL_merged_280_cohort.snp.recalibrated.vcf.gz"
-  gtf_table: "/home/ubuntu/DATA_DRIVE/qtl_analysis/gencode.v38.annotation.gtf.full.table.txt"
+  pca_file: "/Users/singhvj/data/raw/pca_result_cohort.eigenvec"
+  pca_file_sep: "\t"    # Usually space for PCA files
+  vcf_input: "/Users/singhvj/data/raw/genotypes.vcf.gz"
+  gtf: "/Users/singhvj/data/raw/gencode.v38.annotation.gtf"
   gtf_table_sep: "\t"  # Usually tab for GTF files
 
 count_transformation:
@@ -15,14 +15,15 @@ count_transformation:
   round_counts: true     # Whether to round to nearest integer (default: true)
   
 output:
-  output_dir: "/home/ubuntu/DATA_DRIVE/qtl_analysis/input"
+  sample_name_optimization: true
+  output_dir: "/Users/singhvj/QTL_ANALYSIS_OUTPUT"
 
 metadata_columns:
   rnaseq_library: "RNASeq_Library"
   wgs_library: "WGS_Library"
 
 covariates:
-  include: ["Age", "Sex", "RNASeq_RIN", "RNASeq_Batch", "WGS_Batch"]
+  include: ["Age", "Sex", "RNASeq_RIN", "RNASeq_Batch"]
   pca_include: ["PC1", "PC2", "PC3", "PC4", "PC5"]
   pca_count: 5
 
@@ -30,10 +31,12 @@ phenotypes:
   include: ["Age", "Sex", "BMI"]
 
 vcf_processing:
+  biallelic_filter:
+    biallelic_only: false
+    biallelic_split: false
   regions: ["chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10",
             "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19",
             "chr20", "chr21", "chr22"]
-  biallelic_only: true
   variant_type: "snps"
   threads: 8
   memory: 8000
