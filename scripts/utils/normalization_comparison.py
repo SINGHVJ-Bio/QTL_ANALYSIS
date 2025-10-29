@@ -449,19 +449,37 @@ class NormalizationComparison:
                     'batch_correction_applied': False
                 }
             
-            # Load covariate design matrix
+            # Load covariate design matrix with format detection
             logger.info(f"📁 Loading covariate design from: {covariate_design_file}")
-            covariate_design = pd.read_csv(covariate_design_file, sep='\t', index_col=0)
+            
+            # First, detect the file format by reading a few lines
+            with open(covariate_design_file, 'r') as f:
+                first_line = f.readline().strip()
+            
+            # Check if first column indicates samples × covariates format
+            first_column = first_line.split('\t')[0].lower()
+            sample_indicators = ['sample', 'id', 'iid', 'individual', 'individual_id', 'subject', 'subject_id']
+            
+            if first_column in sample_indicators:
+                logger.info(f"🔍 Detected samples × covariates format (first column: '{first_line.split('\t')[0]}'), transposing...")
+                # Read as samples × covariates and transpose to covariates × samples
+                covariate_design = pd.read_csv(covariate_design_file, sep='\t', index_col=0)
+                covariate_design = covariate_design.T  # Transpose to covariates × samples
+                logger.info(f"📊 Transposed batch covariates: {covariate_design.shape[0]} covariates, {covariate_design.shape[1]} samples")
+            else:
+                # Assume covariates × samples format
+                covariate_design = pd.read_csv(covariate_design_file, sep='\t', index_col=0)
+                logger.info(f"📊 Loaded batch covariates: {covariate_design.shape[0]} covariates, {covariate_design.shape[1]} samples")
             
             # Get sample IDs from normalized data
             sample_ids = normalized_data.columns.tolist()
             
             # Subset covariate design to available samples
-            available_samples = [s for s in sample_ids if s in covariate_design.index]
+            available_samples = [s for s in sample_ids if s in covariate_design.columns]
             if len(available_samples) != len(sample_ids):
-                logger.warning(f"Only {len(available_samples)}/{len(sample_ids)} samples found in covariate design")
+                logger.warning(f"⚠️ Only {len(available_samples)}/{len(sample_ids)} samples found in covariate design")
             
-            covariate_design = covariate_design.loc[available_samples]
+            covariate_design = covariate_design[available_samples]
             
             # Get categorical and linear covariates from config
             categorical_covariates = exp_covariates.get('categorical', [])
@@ -472,29 +490,29 @@ class NormalizationComparison:
             
             # Check if all specified covariates exist in the design matrix
             all_covariates = categorical_covariates + linear_covariates
-            missing_covariates = [cov for cov in all_covariates if cov not in covariate_design.columns]
+            missing_covariates = [cov for cov in all_covariates if cov not in covariate_design.index]
             
             if missing_covariates:
                 logger.warning(f"⚠️ Missing covariates in design matrix: {missing_covariates}")
                 # Remove missing covariates from lists
-                categorical_covariates = [cov for cov in categorical_covariates if cov in covariate_design.columns]
-                linear_covariates = [cov for cov in linear_covariates if cov in covariate_design.columns]
+                categorical_covariates = [cov for cov in categorical_covariates if cov in covariate_design.index]
+                linear_covariates = [cov for cov in linear_covariates if cov in covariate_design.index]
             
             # Prepare batches (categorical covariates)
             batches = []
             for covariate in categorical_covariates:
-                if covariate in covariate_design.columns:
-                    batch_data = covariate_design[covariate].values
+                if covariate in covariate_design.index:
+                    batch_data = covariate_design.loc[covariate].values
                     batches.append(batch_data)
                     logger.info(f"  - Categorical: {covariate}: {len(np.unique(batch_data))} levels")
             
             # Prepare covariates (linear covariates)
             covariates = None
             if linear_covariates:
-                covariates = covariate_design[linear_covariates].copy()
+                covariates = covariate_design.loc[linear_covariates].copy()
                 # Convert to numeric, coerce errors to NaN
                 for col in linear_covariates:
-                    covariates[col] = pd.to_numeric(covariates[col], errors='coerce')
+                    covariates.loc[col] = pd.to_numeric(covariates.loc[col], errors='coerce')
                 logger.info(f"  - Linear covariates: {linear_covariates}")
             
             # Skip if no batches or covariates found
@@ -1906,7 +1924,7 @@ def run_enhanced_normalization_pipeline(config, qtl_type, raw_data, normalizatio
         # Run enhanced pipeline
         comparison_results = comparator.generate_enhanced_pipeline_comparison(
             qtl_type, raw_data, normalization_method
-        )
+            )
         
         if comparison_results:
             logger.info(f"✅ Enhanced normalization pipeline completed for {qtl_type}")

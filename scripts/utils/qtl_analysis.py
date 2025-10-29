@@ -837,9 +837,12 @@ class PhenotypeProcessor:
                 first_line = f.readline().strip()
                 second_line = f.readline().strip()
             
-            # Check if first column is "Sample" - indicates samples × covariates format
-            if first_line.startswith('Sample') or first_line.split('\t')[0] == 'Sample':
-                logger.info("Detected samples × covariates format for batch correction, transposing...")
+            # Check if first column indicates samples × covariates format
+            first_column = first_line.split('\t')[0].lower()
+            sample_indicators = ['sample', 'id', 'iid', 'individual', 'individual_id', 'subject', 'subject_id']
+            
+            if first_column in sample_indicators:
+                logger.info(f"Detected samples × covariates format (first column: '{first_line.split('\t')[0]}'), transposing...")
                 # Read as samples × covariates and transpose to covariates × samples
                 cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
                 cov_df = cov_df.T  # Transpose to covariates × samples
