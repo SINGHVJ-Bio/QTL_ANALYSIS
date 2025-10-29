@@ -835,23 +835,26 @@ class PhenotypeProcessor:
             # First, detect the file format by reading a few lines
             with open(exp_covariate_design_file, 'r') as f:
                 first_line = f.readline().strip()
-                second_line = f.readline().strip()
             
-            # Check if first column indicates samples × covariates format
+            # Check if first column indicates samples × covariates format (which is CORRECT)
             first_column = first_line.split('\t')[0].lower()
             sample_indicators = ['sample', 'id', 'iid', 'individual', 'individual_id', 'subject', 'subject_id']
             
             if first_column in sample_indicators:
                 first_columnN = first_line.split('\t')[0]
-                logger.info(f"Detected samples × covariates format (first column: '{first_columnN}'), transposing...")
-                # Read as samples × covariates and transpose to covariates × samples
+                logger.info(f"✅ Detected CORRECT samples × covariates format (first column: '{first_columnN}') - keeping as is")
+                # Read as samples × covariates - DO NOT TRANSPOSE, this is the correct format
                 cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
-                cov_df = cov_df.T  # Transpose to covariates × samples
-                logger.info(f"Transposed batch covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+                logger.info(f"✅ Loaded batch covariates: {cov_df.shape[0]} samples, {cov_df.shape[1]} covariates")
+                logger.info(f"✅ Sample IDs are in INDEX, covariate names are in COLUMNS")
+                logger.info(f"✅ First 3 samples: {cov_df.index.tolist()[:3]}")
+                logger.info(f"✅ Covariates: {cov_df.columns.tolist()}")
             else:
-                # Assume covariates × samples format
+                # This would be covariates × samples format (less common)
+                logger.info(f"Detected covariates × samples format (first column: '{first_line.split('\t')[0]}'), transposing...")
                 cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
-                logger.info(f"Loaded batch covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+                cov_df = cov_df.T  # Transpose to samples × covariates
+                logger.info(f"Loaded batch covariates: {cov_df.shape[0]} samples, {cov_df.shape[1]} covariates")
             
             return cov_df
             
@@ -1525,51 +1528,85 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
             cis_window = analysis_config.get('cis_window', 1000000)
             seed = analysis_config.get('seed', 123456)
             
+            # Get analysis configuration
+            run_nominal = analysis_config.get('run_nominal', True)
+            run_permutation = analysis_config.get('run_permutation', True)
+            
+            logger.info(f"🔧 Analysis configuration: run_nominal={run_nominal}, run_permutation={run_permutation}")
+            
+            results = {}
+            
             # Option 1: Run nominal mapping (all variant-phenotype pairs)
-            if analysis_config.get('run_nominal', True):
+            if run_nominal:
                 logger.info("Running cis-QTL nominal mapping...")
                 cis_nominal_prefix = f"{prefix}_nominal"
                 
                 # Run nominal mapping - this writes results by chromosome
                 cis.map_nominal(pr.genotypes, pr.variant_df, phenotype_df, phenotype_pos_df, 
-                               cis_nominal_prefix, covariates_df=covariates_df, window=cis_window)
+                            cis_nominal_prefix, covariates_df=covariates_df, window=cis_window)
                 
-                logger.info(f"Nominal cis-QTL mapping completed. Results written with prefix: {cis_nominal_prefix}")
+                logger.info(f"✅ Nominal cis-QTL mapping completed. Results written with prefix: {cis_nominal_prefix}")
                 results['nominal_prefix'] = cis_nominal_prefix
+                results['nominal_completed'] = True
+            else:
+                logger.info("⏭️ Skipping nominal mapping as configured")
+                results['nominal_completed'] = False
             
-            # Option 2: Run permutation-based mapping (default)
-            logger.info("Running cis-QTL permutation mapping...")
-            cis_df = cis.map_cis(pr.genotypes, pr.variant_df, phenotype_df, phenotype_pos_df,
-                                covariates_df=covariates_df, window=cis_window, seed=seed)
-            
-            # Calculate q-values following documentation example
-            if not cis_df.empty and 'pval_perm' in cis_df.columns:
-                cis_df = post.calculate_qvalues(cis_df, fdr=analysis_config.get('fdr_threshold', 0.05))
-                significant_count = (cis_df['qval'] < analysis_config.get('fdr_threshold', 0.05)).sum()
+            # Option 2: Run permutation-based mapping
+            if run_permutation:
+                logger.info("Running cis-QTL permutation mapping...")
+                cis_df = cis.map_cis(pr.genotypes, pr.variant_df, phenotype_df, phenotype_pos_df,
+                                    covariates_df=covariates_df, window=cis_window, seed=seed)
                 
-                # ENHANCEMENT: Add 'fdr' column for fine-mapping compatibility
-                cis_df['fdr'] = cis_df['qval']
-                logger.info(f"Added 'fdr' column for fine-mapping compatibility")
+                # Calculate q-values following documentation example
+                if not cis_df.empty and 'pval_perm' in cis_df.columns:
+                    cis_df = post.calculate_qvalues(cis_df, fdr=analysis_config.get('fdr_threshold', 0.05))
+                    significant_count = (cis_df['qval'] < analysis_config.get('fdr_threshold', 0.05)).sum()
+                    
+                    # ENHANCEMENT: Add 'fdr' column for fine-mapping compatibility
+                    cis_df['fdr'] = cis_df['qval']
+                    logger.info(f"Added 'fdr' column for fine-mapping compatibility")
+                else:
+                    significant_count = 0
+                
+                # Save permutation results
+                result_file = f"{prefix}.cis_qtl.txt.gz"
+                cis_df.to_csv(result_file, sep='\t', compression='gzip')
+                
+                # ENHANCEMENT: Ensure result file is properly created and log details
+                if os.path.exists(result_file):
+                    file_size = os.path.getsize(result_file) / (1024 * 1024)  # Size in MB
+                    logger.info(f"✅ Permutation cis-QTL results saved: {result_file} ({file_size:.2f} MB)")
+                    logger.info(f"📊 Results contain {len(cis_df)} associations, {significant_count} significant at FDR < 0.05")
+                else:
+                    logger.warning(f"⚠️ Permutation result file not created: {result_file}")
+                
+                results.update({
+                    'permutation_completed': True,
+                    'result_file': result_file,
+                    'significant_count': significant_count,
+                    'cis_df': cis_df
+                })
             else:
-                significant_count = 0
+                logger.info("⏭️ Skipping permutation mapping as configured")
+                results['permutation_completed'] = False
+                
+                # If only nominal was run, set a default result file for compatibility
+                if run_nominal:
+                    result_file = f"{prefix}_nominal.cis_qtl.txt.gz"
+                    results['result_file'] = result_file
+                    results['significant_count'] = 0
+                    logger.info(f"📁 Using nominal results as primary output: {result_file}")
             
-            # Save results
-            result_file = f"{prefix}.cis_qtl.txt.gz"
-            cis_df.to_csv(result_file, sep='\t', compression='gzip')
-            
-            # ENHANCEMENT: Ensure result file is properly created and log details
-            if os.path.exists(result_file):
-                file_size = os.path.getsize(result_file) / (1024 * 1024)  # Size in MB
-                logger.info(f"Cis-QTL results saved: {result_file} ({file_size:.2f} MB)")
-                logger.info(f"Results contain {len(cis_df)} associations, {significant_count} significant at FDR < 0.05")
+            # Summary log
+            if run_nominal and run_permutation:
+                logger.info("✅ Completed both nominal and permutation cis-QTL analysis")
+            elif run_nominal:
+                logger.info("✅ Completed nominal cis-QTL analysis only")
+            elif run_permutation:
+                logger.info("✅ Completed permutation cis-QTL analysis only")
             else:
-                logger.warning(f"Result file not created: {result_file}")
-            
-            results.update({
-                'result_file': result_file,
-                'significant_count': significant_count,
-                'cis_df': cis_df
-            })
+                logger.warning("⚠️ No cis-QTL analysis performed - both nominal and permutation disabled")
             
         else:  # trans
             # Enhanced trans-QTL analysis with filtering options
@@ -1582,8 +1619,8 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
             
             # Run trans mapping with thresholds to limit output size
             trans_df = trans.map_trans(pr.genotypes, phenotype_df, covariates_df=covariates_df,
-                                     batch_size=batch_size, return_sparse=True,
-                                     pval_threshold=pval_threshold, maf_threshold=maf_threshold)
+                                    batch_size=batch_size, return_sparse=True,
+                                    pval_threshold=pval_threshold, maf_threshold=maf_threshold)
             
             # Remove cis associations following documentation example
             if trans_df is not None and len(trans_df) > 0:
@@ -1615,7 +1652,7 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
                 })
                 # Create empty result file
                 pd.DataFrame().to_csv(results['result_file'], sep='\t', compression='gzip')
-        
+
         logger.info(f"{qtl_type} {analysis_mode}: Found {results.get('significant_count', 0)} significant associations")
         
         # Clean up GPU memory

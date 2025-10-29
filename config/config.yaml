@@ -60,6 +60,9 @@ normalization:
 
 # tensorQTL-specific configuration
 tensorqtl:
+  run_nominal: true
+  run_permutation: false
+
   # Basic parameters
   cis_window: 1000000
   maf_threshold: 0.05

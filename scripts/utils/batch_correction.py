@@ -428,6 +428,9 @@ def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covar
         # If batch_covariates is provided from qtl_analysis.py, use it
         if batch_covariates is not None and not batch_covariates.empty:
             logger.info("Using batch covariates provided from qtl_analysis.py")
+            logger.info(f"📊 Batch covariates shape: {batch_covariates.shape}")
+            logger.info(f"📊 Batch covariates index (samples): {batch_covariates.index.tolist()[:3]}...")
+            logger.info(f"📊 Batch covariates columns (covariates): {batch_covariates.columns.tolist()}")
             
             # Convert the provided covariates to our categorical/linear format
             batch_config = config.get('batch_correction', {})
@@ -438,8 +441,55 @@ def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covar
             available_categorical = [var for var in categorical_vars if var in batch_covariates.columns]
             available_linear = [var for var in linear_vars if var in batch_covariates.columns]
             
-            categorical_covariates = batch_covariates[available_categorical] if available_categorical else pd.DataFrame()
-            linear_covariates = batch_covariates[available_linear] if available_linear else pd.DataFrame()
+            logger.info(f"🔧 Available categorical covariates: {available_categorical}")
+            logger.info(f"🔧 Available linear covariates: {available_linear}")
+            
+            # Align samples - batch_covariates has samples as INDEX (correct format)
+            sample_ids = normalized_data.columns.tolist()
+            available_samples = [s for s in sample_ids if s in batch_covariates.index]
+            
+            logger.info(f"🔍 Sample matching: {len(available_samples)}/{len(sample_ids)} samples found in batch covariates")
+            
+            if len(available_samples) != len(sample_ids):
+                logger.warning(f"⚠️ Only {len(available_samples)}/{len(sample_ids)} samples found in batch covariates")
+                logger.info(f"🔍 First 5 expression samples: {sample_ids[:5]}")
+                logger.info(f"🔍 First 5 batch covariate samples: {batch_covariates.index.tolist()[:5]}")
+            
+            if len(available_samples) == 0:
+                logger.error("❌ No overlapping samples found between expression data and batch covariates")
+                logger.error("💡 Check if sample IDs match exactly between expression data and batch covariates file")
+                return normalized_data, {
+                    'batch_correction_skipped': True,
+                    'reason': 'No overlapping samples with batch covariates',
+                    'batch_correction_applied': False
+                }
+            
+            # CRITICAL: Ensure samples are in the SAME ORDER for both expression and covariates
+            # Sort the available samples to maintain consistency
+            available_samples_sorted = sorted(available_samples)
+            
+            # Subset and REORDER data to ensure consistent sample order
+            normalized_data_subset = normalized_data[available_samples_sorted]
+            
+            # Subset and REORDER covariates to match expression data order
+            categorical_covariates = batch_covariates.loc[available_samples_sorted, available_categorical] if available_categorical else pd.DataFrame()
+            linear_covariates = batch_covariates.loc[available_samples_sorted, available_linear] if available_linear else pd.DataFrame()
+            
+            logger.info(f"✅ Data subset: {normalized_data_subset.shape}")
+            logger.info(f"✅ Categorical covariates: {categorical_covariates.shape}")
+            logger.info(f"✅ Linear covariates: {linear_covariates.shape}")
+            
+            # Verify sample alignment
+            expr_samples = normalized_data_subset.columns.tolist()
+            covar_samples = categorical_covariates.index.tolist() if not categorical_covariates.empty else linear_covariates.index.tolist()
+            
+            if expr_samples != covar_samples:
+                logger.error("❌ CRITICAL: Sample order mismatch between expression data and covariates!")
+                logger.error(f"💡 First 3 expression samples: {expr_samples[:3]}")
+                logger.error(f"💡 First 3 covariate samples: {covar_samples[:3]}")
+                raise ValueError("Sample order mismatch between expression data and covariates")
+            else:
+                logger.info("✅ Sample order verified: expression data and covariates are aligned")
             
             # Ensure proper data types
             for col in categorical_covariates.columns:
@@ -449,26 +499,6 @@ def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covar
                 linear_covariates[col] = pd.to_numeric(linear_covariates[col], errors='coerce')
                 if linear_covariates[col].isna().any():
                     linear_covariates[col] = linear_covariates[col].fillna(linear_covariates[col].mean())
-            
-            # Align samples
-            sample_ids = normalized_data.columns.tolist()
-            available_samples = [s for s in sample_ids if s in batch_covariates.index]
-            
-            if len(available_samples) != len(sample_ids):
-                logger.warning(f"Only {len(available_samples)}/{len(sample_ids)} samples found in batch covariates")
-            
-            if len(available_samples) == 0:
-                logger.error("No overlapping samples found between expression data and batch covariates")
-                return normalized_data, {
-                    'batch_correction_skipped': True,
-                    'reason': 'No overlapping samples with batch covariates',
-                    'batch_correction_applied': False
-                }
-            
-            # Subset data and covariates
-            normalized_data_subset = normalized_data[available_samples]
-            categorical_covariates = categorical_covariates.loc[available_samples]
-            linear_covariates = linear_covariates.loc[available_samples]
             
             # Apply batch correction
             corrected_data = remove_batch_effect_optimized(
@@ -484,7 +514,7 @@ def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covar
                 'qtl_type': qtl_type,
                 'input_shape': normalized_data.shape,
                 'output_shape': corrected_data.shape,
-                'samples_used': available_samples,
+                'samples_used': available_samples_sorted,
                 'categorical_covariates': available_categorical,
                 'linear_covariates': available_linear,
                 'covariate_source': 'provided_from_qtl_analysis'
