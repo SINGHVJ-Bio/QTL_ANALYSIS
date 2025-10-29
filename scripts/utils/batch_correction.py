@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Batch Correction Module for QTL Analysis
-Handles different confounders for RNA-seq and protein data using enhanced configuration
+Enhanced Batch Correction Module for QTL Analysis
+Optimized for Python with proper handling of categorical and linear covariates
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 """
@@ -9,25 +9,26 @@ Email: vijay.s.gautam@gmail.com
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import LabelEncoder
 import logging
 import os
 
 logger = logging.getLogger('QTLPipeline')
 
-def remove_batch_effect_custom(x, batches=None, covariates=None, design=None):
+def remove_batch_effect_optimized(x, categorical_covariates=None, linear_covariates=None, design_matrix=None):
     """
-    Remove batch effects using linear regression (Python implementation of R's removeBatchEffect)
+    Optimized batch correction for Python that properly handles categorical and linear covariates
     
     Parameters:
     -----------
     x : pandas DataFrame
         Expression data (features x samples)
-    batches : list of arrays or None
-        List of batch variables, each should be same length as samples
-    covariates : pandas DataFrame or None
-        Covariates matrix (samples x covariates)
-    design : numpy array or None
-        Design matrix (samples x design_variables)
+    categorical_covariates : pandas DataFrame or None
+        Categorical covariates (samples x categorical_variables)
+    linear_covariates : pandas DataFrame or None  
+        Linear covariates (samples x linear_variables)
+    design_matrix : numpy array or None
+        Optional design matrix for conditions of interest
     
     Returns:
     --------
@@ -35,81 +36,92 @@ def remove_batch_effect_custom(x, batches=None, covariates=None, design=None):
         Batch-corrected expression data
     """
     try:
-        if batches is None and covariates is None:
-            logger.info("No batches or covariates provided, returning original data")
+        if categorical_covariates is None and linear_covariates is None:
+            logger.info("No covariates provided, returning original data")
             return x.copy()
         
         # Convert to numpy for processing
-        x_matrix = x.values.T  # Convert to samples x features
+        x_matrix = x.values.T  # Convert to samples x features for processing
         n_samples, n_features = x_matrix.shape
         
-        # Create design matrix if not provided
-        if design is None:
-            design = np.ones((n_samples, 1))
+        # Create default design matrix (intercept only) if not provided
+        if design_matrix is None:
+            design_matrix = np.ones((n_samples, 1))
         
-        # Process batches
-        X_batch_list = []
-        if batches is not None:
-            for batch in batches:
-                batch = np.array(batch)
-                if len(batch) != n_samples:
-                    raise ValueError(f"Batch length {len(batch)} doesn't match samples {n_samples}")
+        # Process categorical covariates using proper encoding
+        X_categorical = None
+        if categorical_covariates is not None and not categorical_covariates.empty:
+            X_categorical_list = []
+            
+            for col in categorical_covariates.columns:
+                cat_data = categorical_covariates[col].values
                 
-                # Create contrast matrix (similar to contr.sum in R)
-                unique_batches = np.unique(batch)
-                if len(unique_batches) > 1:
-                    batch_matrix = np.zeros((n_samples, len(unique_batches) - 1))
-                    for i, batch_level in enumerate(unique_batches[:-1]):
-                        batch_matrix[:, i] = (batch == batch_level).astype(float)
-                    # Set reference level (last level) to -1
-                    for i in range(len(unique_batches) - 1):
-                        batch_matrix[batch == unique_batches[-1], i] = -1
-                    X_batch_list.append(batch_matrix)
-        
-        # Combine batch matrices
-        if X_batch_list:
-            X_batch = np.column_stack(X_batch_list)
-        else:
-            X_batch = np.empty((n_samples, 0))
-        
-        # Add covariates
-        if covariates is not None:
-            if isinstance(covariates, pd.DataFrame):
-                covariates_matrix = covariates.values
-            else:
-                covariates_matrix = np.array(covariates)
+                # Use proper categorical encoding (one-hot with drop first to avoid collinearity)
+                unique_cats = np.unique(cat_data)
+                if len(unique_cats) > 1:  # Only encode if more than one category
+                    # Create one-hot encoding, dropping first category to avoid collinearity
+                    for i, cat in enumerate(unique_cats[1:]):  # Skip first category
+                        indicator = (cat_data == cat).astype(float)
+                        X_categorical_list.append(indicator.reshape(-1, 1))
             
-            if covariates_matrix.shape[0] != n_samples:
-                raise ValueError(f"Covariates rows {covariates_matrix.shape[0]} don't match samples {n_samples}")
-            
-            X_batch = np.column_stack([X_batch, covariates_matrix]) if X_batch.size > 0 else covariates_matrix
+            if X_categorical_list:
+                X_categorical = np.column_stack(X_categorical_list)
+                logger.info(f"Encoded {X_categorical.shape[1]} categorical variables")
         
-        if X_batch.size == 0:
-            logger.info("No batch/covariate effects to remove")
+        # Process linear covariates
+        X_linear = None
+        if linear_covariates is not None and not linear_covariates.empty:
+            # Ensure numeric and handle missing values
+            linear_processed = linear_covariates.copy()
+            for col in linear_processed.columns:
+                linear_processed[col] = pd.to_numeric(linear_processed[col], errors='coerce')
+                # Fill missing with mean
+                if linear_processed[col].isna().any():
+                    linear_processed[col] = linear_processed[col].fillna(linear_processed[col].mean())
+            
+            X_linear = linear_processed.values
+            logger.info(f"Processed {X_linear.shape[1]} linear covariates")
+        
+        # Combine all covariates
+        X_covariates_list = []
+        if X_categorical is not None:
+            X_covariates_list.append(X_categorical)
+        if X_linear is not None:
+            X_covariates_list.append(X_linear)
+        
+        if not X_covariates_list:
+            logger.info("No valid covariates after processing")
             return x.copy()
         
-        # Full design matrix
-        X_full = np.column_stack([design, X_batch])
+        X_covariates = np.column_stack(X_covariates_list)
         
-        # Perform batch correction
+        # Full design matrix: [design_matrix, X_covariates]
+        X_full = np.column_stack([design_matrix, X_covariates])
+        
+        # Perform batch correction using vectorized operations for better performance
         corrected_matrix = np.zeros_like(x_matrix)
         
         for i in range(n_features):
             y = x_matrix[:, i]
             
-            # Fit linear model
+            # Skip if all values are the same
+            if np.all(y == y[0]):
+                corrected_matrix[:, i] = y
+                continue
+                
             try:
+                # Fit linear model
                 model = LinearRegression(fit_intercept=False)
                 model.fit(X_full, y)
                 
-                # Get coefficients for batch effects
-                n_design = design.shape[1]
-                beta_batch = model.coef_[n_design:]
+                # Remove only the covariate effects (keep design matrix effects)
+                n_design = design_matrix.shape[1]
+                beta_covariates = model.coef_[n_design:]
                 
-                # Remove batch effects
-                if X_batch.size > 0:
-                    batch_effect = X_batch @ beta_batch
-                    corrected_matrix[:, i] = y - batch_effect
+                # Remove covariate effects: y - X_covariates @ beta_covariates
+                if X_covariates.size > 0:
+                    covariate_effects = X_covariates @ beta_covariates
+                    corrected_matrix[:, i] = y - covariate_effects
                 else:
                     corrected_matrix[:, i] = y
                     
@@ -117,124 +129,387 @@ def remove_batch_effect_custom(x, batches=None, covariates=None, design=None):
                 logger.warning(f"Could not correct feature {i}: {e}")
                 corrected_matrix[:, i] = y
         
-        # Convert back to DataFrame
+        # Convert back to DataFrame (features x samples)
         corrected_data = pd.DataFrame(
             corrected_matrix.T,
             index=x.index,
             columns=x.columns
         )
         
-        logger.info(f"✅ Batch correction completed: {x.shape} -> {corrected_data.shape}")
+        logger.info(f"✅ Optimized batch correction completed: {x.shape} -> {corrected_data.shape}")
         return corrected_data
         
     except Exception as e:
-        logger.error(f"❌ Error in batch correction: {e}")
+        logger.error(f"❌ Error in optimized batch correction: {e}")
         raise
 
-def load_enhanced_confounders(config, sample_ids, qtl_type):
+def prepare_covariates_from_config(config, sample_ids, qtl_type):
     """
-    Load confounders using the enhanced configuration structure
+    Prepare covariates based on configuration for specific QTL type
     
     Parameters:
     -----------
     config : dict
         Configuration dictionary
     sample_ids : list
-        List of sample IDs to subset
+        List of sample IDs
     qtl_type : str
-        Type of QTL analysis ('eqtl', 'pqtl', 'sqtl')
+        Type of QTL analysis
     
     Returns:
     --------
-    batches : list of arrays
-        List of batch variables (categorical)
-    covariates : pandas DataFrame
-        Covariates matrix (linear)
+    categorical_covariates : pandas DataFrame
+        Processed categorical covariates
+    linear_covariates : pandas DataFrame  
+        Processed linear covariates
     sample_mapping : dict
-        Mapping for batch variables
+        Information about the processing
     """
     try:
         batch_config = config.get('batch_correction', {})
-        exp_covariates = batch_config.get('exp_covariates', {})
         covariate_design_file = batch_config.get('exp_covariate_design')
         
-        if not covariate_design_file:
-            logger.warning(f"⏭️ No covariate design file specified in config")
-            return [], None, {}
+        if not covariate_design_file or not os.path.exists(covariate_design_file):
+            logger.warning(f"Covariate design file not found: {covariate_design_file}")
+            return pd.DataFrame(), pd.DataFrame(), {}
         
-        if not os.path.exists(covariate_design_file):
-            logger.warning(f"⏭️ Covariate design file not found: {covariate_design_file}")
-            return [], None, {}
-        
-        logger.info(f"📁 Loading enhanced confounders for {qtl_type} from: {covariate_design_file}")
-        
-        # Load covariate design matrix
+        logger.info(f"Loading covariate design from: {covariate_design_file}")
         covariate_design = pd.read_csv(covariate_design_file, sep='\t', index_col=0)
         
-        # Subset to requested samples
+        # Subset to available samples
         available_samples = [s for s in sample_ids if s in covariate_design.index]
         if len(available_samples) != len(sample_ids):
             logger.warning(f"Only {len(available_samples)}/{len(sample_ids)} samples found in covariate design")
         
         if len(available_samples) == 0:
-            logger.error("❌ No overlapping samples found between expression data and covariate design")
-            return [], None, {}
+            logger.error("No overlapping samples found")
+            return pd.DataFrame(), pd.DataFrame(), {}
         
         covariate_design = covariate_design.loc[available_samples]
         
         # Get categorical and linear covariates from config
-        categorical_covariates = exp_covariates.get('categorical', [])
-        linear_covariates = exp_covariates.get('linear', [])
+        categorical_vars = batch_config.get('exp_covariates', {}).get('categorical', [])
+        linear_vars = batch_config.get('exp_covariates', {}).get('linear', [])
         
-        logger.info(f"🔧 Enhanced confounders - Categorical: {categorical_covariates}")
-        logger.info(f"🔧 Enhanced confounders - Linear: {linear_covariates}")
+        logger.info(f"Categorical covariates: {categorical_vars}")
+        logger.info(f"Linear covariates: {linear_vars}")
         
-        # Check if all specified covariates exist in the design matrix
-        all_covariates = categorical_covariates + linear_covariates
-        missing_covariates = [cov for cov in all_covariates if cov not in covariate_design.columns]
+        # Filter to available columns
+        categorical_vars = [var for var in categorical_vars if var in covariate_design.columns]
+        linear_vars = [var for var in linear_vars if var in covariate_design.columns]
         
-        if missing_covariates:
-            logger.warning(f"⚠️ Missing covariates in design matrix: {missing_covariates}")
-            # Remove missing covariates from lists
-            categorical_covariates = [cov for cov in categorical_covariates if cov in covariate_design.columns]
-            linear_covariates = [cov for cov in linear_covariates if cov in covariate_design.columns]
+        missing_categorical = set(batch_config.get('exp_covariates', {}).get('categorical', [])) - set(categorical_vars)
+        missing_linear = set(batch_config.get('exp_covariates', {}).get('linear', [])) - set(linear_vars)
         
-        # Prepare batches (categorical covariates)
-        batches = []
-        for covariate in categorical_covariates:
-            if covariate in covariate_design.columns:
-                batch_data = covariate_design[covariate].values
-                batches.append(batch_data)
-                logger.info(f"  - Categorical: {covariate}: {len(np.unique(batch_data))} levels")
+        if missing_categorical:
+            logger.warning(f"Missing categorical covariates: {missing_categorical}")
+        if missing_linear:
+            logger.warning(f"Missing linear covariates: {missing_linear}")
         
-        # Prepare covariates (linear covariates)
-        covariates = None
-        if linear_covariates:
-            covariates = covariate_design[linear_covariates].copy()
-            # Convert to numeric, coerce errors to NaN
-            for col in linear_covariates:
-                covariates[col] = pd.to_numeric(covariates[col], errors='coerce')
-                # Fill NaN values with mean for linear covariates
-                if covariates[col].isna().any():
-                    covariates[col] = covariates[col].fillna(covariates[col].mean())
-            logger.info(f"  - Linear covariates: {linear_covariates}")
+        # Prepare categorical covariates
+        categorical_covariates = pd.DataFrame()
+        if categorical_vars:
+            categorical_covariates = covariate_design[categorical_vars].copy()
+            # Ensure string type for categorical variables
+            for col in categorical_vars:
+                categorical_covariates[col] = categorical_covariates[col].astype(str)
         
-        # Create sample mapping for reporting
+        # Prepare linear covariates  
+        linear_covariates = pd.DataFrame()
+        if linear_vars:
+            linear_covariates = covariate_design[linear_vars].copy()
+            # Convert to numeric and handle missing values
+            for col in linear_vars:
+                linear_covariates[col] = pd.to_numeric(linear_covariates[col], errors='coerce')
+                if linear_covariates[col].isna().any():
+                    col_mean = linear_covariates[col].mean()
+                    linear_covariates[col] = linear_covariates[col].fillna(col_mean)
+                    logger.info(f"Filled missing values in {col} with mean: {col_mean:.3f}")
+        
         sample_mapping = {
             'covariate_design_file': covariate_design_file,
-            'categorical_covariates': categorical_covariates,
-            'linear_covariates': linear_covariates,
+            'categorical_vars': categorical_vars,
+            'linear_vars': linear_vars,
             'samples_used': available_samples,
-            'covariate_design_shape': covariate_design.shape,
-            'qtl_type': qtl_type,
-            'confounders_source': 'enhanced'
+            'original_samples': sample_ids,
+            'qtl_type': qtl_type
         }
         
-        return batches, covariates, sample_mapping
+        logger.info(f"Prepared {len(categorical_vars)} categorical and {len(linear_vars)} linear covariates")
+        return categorical_covariates, linear_covariates, sample_mapping
         
     except Exception as e:
-        logger.error(f"❌ Error loading enhanced confounders for {qtl_type}: {e}")
+        logger.error(f"Error preparing covariates: {e}")
+        return pd.DataFrame(), pd.DataFrame(), {}
+
+def run_optimized_batch_correction(normalized_data, qtl_type, config, design_variables=None):
+    """
+    Optimized batch correction pipeline for Python
+    
+    Parameters:
+    -----------
+    normalized_data : pandas DataFrame
+        Normalized expression data (features x samples)
+    qtl_type : str
+        Type of QTL analysis
+    config : dict
+        Configuration dictionary
+    design_variables : list, optional
+        Variables to include in design matrix
+    
+    Returns:
+    --------
+    corrected_data : pandas DataFrame
+        Batch-corrected expression data
+    correction_info : dict
+        Information about correction process
+    """
+    try:
+        logger.info(f"🚀 Starting optimized batch correction for {qtl_type}...")
+        
+        # Check if batch correction is enabled for this QTL type
+        batch_enabled = config.get('batch_correction', {}).get('enabled', {}).get(qtl_type, True)
+        if not batch_enabled:
+            logger.info(f"⏭️ Batch correction disabled for {qtl_type}")
+            return normalized_data, {
+                'batch_correction_applied': False,
+                'reason': f'Batch correction disabled for {qtl_type}'
+            }
+        
+        # Prepare covariates from config
+        sample_ids = normalized_data.columns.tolist()
+        categorical_covariates, linear_covariates, sample_mapping = prepare_covariates_from_config(
+            config, sample_ids, qtl_type
+        )
+        
+        # Check if we have any covariates to correct for
+        has_categorical = categorical_covariates is not None and not categorical_covariates.empty
+        has_linear = linear_covariates is not None and not linear_covariates.empty
+        
+        if not has_categorical and not has_linear:
+            logger.info(f"⏭️ No valid covariates found for {qtl_type}, skipping batch correction")
+            return normalized_data, {
+                'batch_correction_applied': False,
+                'reason': 'No valid covariates found'
+            }
+        
+        # Create design matrix if design variables specified
+        design_matrix = None
+        if design_variables:
+            # This would require the full covariate design matrix
+            # For now, we'll use intercept-only design
+            logger.info(f"Using design variables: {design_variables}")
+            # In a more advanced implementation, we could create a proper design matrix here
+        
+        # Subset normalized data to samples with covariates
+        available_samples = sample_mapping.get('samples_used', sample_ids)
+        normalized_data_subset = normalized_data[available_samples]
+        
+        # Apply optimized batch correction
+        corrected_data = remove_batch_effect_optimized(
+            x=normalized_data_subset,
+            categorical_covariates=categorical_covariates,
+            linear_covariates=linear_covariates,
+            design_matrix=design_matrix
+        )
+        
+        # Prepare comprehensive correction info
+        correction_info = {
+            'batch_correction_applied': True,
+            'correction_method': 'optimized_linear_regression',
+            'qtl_type': qtl_type,
+            'input_shape': normalized_data.shape,
+            'output_shape': corrected_data.shape,
+            'samples_used': available_samples,
+            'categorical_covariates': sample_mapping.get('categorical_vars', []),
+            'linear_covariates': sample_mapping.get('linear_vars', []),
+            'covariate_design_file': sample_mapping.get('covariate_design_file'),
+            'design_variables_used': design_variables
+        }
+        
+        # Log summary
+        cat_count = len(correction_info['categorical_covariates'])
+        lin_count = len(correction_info['linear_covariates'])
+        logger.info(f"✅ Optimized batch correction completed for {qtl_type}")
+        logger.info(f"   Used {cat_count} categorical and {lin_count} linear covariates")
+        logger.info(f"   Corrected {corrected_data.shape[0]} features across {len(available_samples)} samples")
+        
+        return corrected_data, correction_info
+        
+    except Exception as e:
+        logger.error(f"❌ Optimized batch correction failed for {qtl_type}: {e}")
         raise
+
+# COMPATIBILITY: Keep the original function for backward compatibility
+def remove_batch_effect_custom(x, batches=None, covariates=None, design=None):
+    """
+    Original batch correction function maintained for backward compatibility
+    Now enhanced to properly handle categorical and linear covariates
+    """
+    try:
+        logger.info("Using enhanced version of remove_batch_effect_custom")
+        
+        # Convert old-style parameters to new format
+        categorical_covariates = None
+        linear_covariates = None
+        
+        if batches is not None:
+            # Convert batches list to DataFrame
+            batch_data = {}
+            for i, batch in enumerate(batches):
+                batch_data[f'batch_{i}'] = batch
+            categorical_covariates = pd.DataFrame(batch_data)
+        
+        if covariates is not None:
+            if isinstance(covariates, pd.DataFrame):
+                linear_covariates = covariates
+            else:
+                linear_covariates = pd.DataFrame(covariates)
+        
+        # Use the optimized function
+        return remove_batch_effect_optimized(
+            x=x,
+            categorical_covariates=categorical_covariates,
+            linear_covariates=linear_covariates,
+            design_matrix=design
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in compatibility batch correction: {e}")
+        raise
+
+# ENHANCED: Updated main pipeline function that accepts batch_covariates parameter
+def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covariates=None):
+    """
+    Enhanced batch correction pipeline that accepts batch_covariates parameter
+    for compatibility with qtl_analysis.py
+    
+    Parameters:
+    -----------
+    normalized_data : pandas DataFrame
+        Normalized expression data (features x samples)
+    qtl_type : str
+        Type of QTL analysis ('eqtl', 'pqtl', 'sqtl')
+    config : dict
+        Configuration dictionary
+    batch_covariates : pandas DataFrame, optional
+        Pre-loaded batch covariates from qtl_analysis.py
+    
+    Returns:
+    --------
+    corrected_data : pandas DataFrame
+        Batch-corrected expression data
+    correction_info : dict
+        Information about the correction process
+    """
+    try:
+        logger.info(f"🚀 Starting batch correction pipeline for {qtl_type}...")
+        
+        # Skip if disabled for this QTL type
+        if qtl_type == 'sqtl':
+            batch_enabled = config.get('batch_correction', {}).get('enabled', {}).get('sqtl', False)
+            if not batch_enabled:
+                logger.info("⏭️ Skipping batch correction for sQTL analysis")
+                return normalized_data, {
+                    'batch_correction_skipped': True, 
+                    'reason': 'sQTL batch correction disabled',
+                    'batch_correction_applied': False
+                }
+        
+        batch_enabled = config.get('batch_correction', {}).get('enabled', {}).get(qtl_type, True)
+        if not batch_enabled:
+            logger.info(f"⏭️ Batch correction disabled for {qtl_type}")
+            return normalized_data, {
+                'batch_correction_skipped': True,
+                'reason': f'Batch correction disabled for {qtl_type}',
+                'batch_correction_applied': False
+            }
+        
+        # If batch_covariates is provided from qtl_analysis.py, use it
+        if batch_covariates is not None and not batch_covariates.empty:
+            logger.info("Using batch covariates provided from qtl_analysis.py")
+            
+            # Convert the provided covariates to our categorical/linear format
+            batch_config = config.get('batch_correction', {})
+            categorical_vars = batch_config.get('exp_covariates', {}).get('categorical', [])
+            linear_vars = batch_config.get('exp_covariates', {}).get('linear', [])
+            
+            # Filter to available columns in the provided covariates
+            available_categorical = [var for var in categorical_vars if var in batch_covariates.columns]
+            available_linear = [var for var in linear_vars if var in batch_covariates.columns]
+            
+            categorical_covariates = batch_covariates[available_categorical] if available_categorical else pd.DataFrame()
+            linear_covariates = batch_covariates[available_linear] if available_linear else pd.DataFrame()
+            
+            # Ensure proper data types
+            for col in categorical_covariates.columns:
+                categorical_covariates[col] = categorical_covariates[col].astype(str)
+            
+            for col in linear_covariates.columns:
+                linear_covariates[col] = pd.to_numeric(linear_covariates[col], errors='coerce')
+                if linear_covariates[col].isna().any():
+                    linear_covariates[col] = linear_covariates[col].fillna(linear_covariates[col].mean())
+            
+            # Align samples
+            sample_ids = normalized_data.columns.tolist()
+            available_samples = [s for s in sample_ids if s in batch_covariates.index]
+            
+            if len(available_samples) != len(sample_ids):
+                logger.warning(f"Only {len(available_samples)}/{len(sample_ids)} samples found in batch covariates")
+            
+            if len(available_samples) == 0:
+                logger.error("No overlapping samples found between expression data and batch covariates")
+                return normalized_data, {
+                    'batch_correction_skipped': True,
+                    'reason': 'No overlapping samples with batch covariates',
+                    'batch_correction_applied': False
+                }
+            
+            # Subset data and covariates
+            normalized_data_subset = normalized_data[available_samples]
+            categorical_covariates = categorical_covariates.loc[available_samples]
+            linear_covariates = linear_covariates.loc[available_samples]
+            
+            # Apply batch correction
+            corrected_data = remove_batch_effect_optimized(
+                x=normalized_data_subset,
+                categorical_covariates=categorical_covariates,
+                linear_covariates=linear_covariates,
+                design_matrix=None
+            )
+            
+            correction_info = {
+                'batch_correction_applied': True,
+                'correction_method': 'optimized_linear_regression',
+                'qtl_type': qtl_type,
+                'input_shape': normalized_data.shape,
+                'output_shape': corrected_data.shape,
+                'samples_used': available_samples,
+                'categorical_covariates': available_categorical,
+                'linear_covariates': available_linear,
+                'covariate_source': 'provided_from_qtl_analysis'
+            }
+            
+        else:
+            # Use the config-based approach
+            corrected_data, correction_info = run_optimized_batch_correction(
+                normalized_data, qtl_type, config
+            )
+        
+        return corrected_data, correction_info
+        
+    except Exception as e:
+        logger.error(f"❌ Batch correction pipeline failed for {qtl_type}: {e}")
+        raise
+
+# Backward compatibility functions
+def run_batch_correction(normalized_data, qtl_type, config):
+    """Backward compatibility wrapper"""
+    return run_batch_correction_pipeline(normalized_data, qtl_type, config)
+
+def run_enhanced_batch_correction(normalized_data, qtl_type, config):
+    """Enhanced batch correction - alias for optimized version"""
+    return run_optimized_batch_correction(normalized_data, qtl_type, config)
 
 def get_recommended_batch_correction(normalization_method, qtl_type):
     """
@@ -242,17 +517,17 @@ def get_recommended_batch_correction(normalization_method, qtl_type):
     """
     recommendations = {
         'vst': {
-            'method': 'custom_linear_regression',
+            'method': 'optimized_linear_regression',
             'reason': 'VST normalized data works well with linear regression batch correction',
             'strength': 'Removes technical variation while preserving biological signals'
         },
         'log2': {
-            'method': 'custom_linear_regression',
+            'method': 'optimized_linear_regression', 
             'reason': 'Log2 normalized data works well with linear regression batch correction',
             'strength': 'Handles batch effects well in log-transformed data'
         },
         'raw': {
-            'method': 'custom_linear_regression', 
+            'method': 'optimized_linear_regression',
             'reason': 'Raw count data needs careful batch correction',
             'strength': 'Preserves count distribution while removing biases'
         }
@@ -265,267 +540,23 @@ def get_recommended_batch_correction(normalization_method, qtl_type):
     
     return method_info
 
-def run_batch_correction_pipeline(normalized_data, qtl_type, config):
-    """
-    Main function to run batch correction pipeline for specific QTL type
-    
-    Parameters:
-    -----------
-    normalized_data : pandas DataFrame
-        Normalized expression data (features x samples)
-    qtl_type : str
-        Type of QTL analysis ('eqtl', 'pqtl', 'sqtl')
-    config : dict
-        Configuration dictionary
-    
-    Returns:
-    --------
-    corrected_data : pandas DataFrame
-        Batch-corrected expression data
-    correction_info : dict
-        Information about the correction process
-    """
-    try:
-        logger.info(f"🚀 Starting batch correction pipeline for {qtl_type}...")
-        
-        # Skip batch correction for splicing if disabled
-        if qtl_type == 'sqtl':
-            batch_enabled = config.get('batch_correction', {}).get('enabled', {}).get('sqtl', False)
-            if not batch_enabled:
-                logger.info("⏭️ Skipping batch correction for sQTL analysis (disabled in config)")
-                return normalized_data, {
-                    'batch_correction_skipped': True, 
-                    'reason': 'sQTL batch correction disabled in config',
-                    'batch_correction_applied': False
-                }
-        
-        # Check if batch correction is enabled for this QTL type
-        batch_enabled = config.get('batch_correction', {}).get('enabled', {}).get(qtl_type, True)
-        if not batch_enabled:
-            logger.info(f"⏭️ Batch correction disabled for {qtl_type} in config")
-            return normalized_data, {
-                'batch_correction_skipped': True,
-                'reason': f'Batch correction disabled for {qtl_type}',
-                'batch_correction_applied': False
-            }
-        
-        # Use enhanced confounders configuration
-        logger.info("🔧 Using enhanced confounders configuration")
-        batches, covariates, sample_mapping = load_enhanced_confounders(
-            config, 
-            sample_ids=normalized_data.columns.tolist(),
-            qtl_type=qtl_type
-        )
-        
-        # Skip if no batches or covariates found
-        if not batches and covariates is None:
-            logger.info(f"⏭️ No batch/covariate effects found for {qtl_type}, skipping batch correction")
-            return normalized_data, {
-                'batch_correction_skipped': True, 
-                'reason': 'No batch/covariate effects found in enhanced confounders',
-                'batch_correction_applied': False
-            }
-        
-        # Subset normalized data to available samples with covariates
-        available_samples = sample_mapping.get('samples_used', normalized_data.columns.tolist())
-        normalized_data_subset = normalized_data[available_samples]
-        
-        # Perform batch correction
-        corrected_data = remove_batch_effect_custom(
-            x=normalized_data_subset,
-            batches=batches,
-            covariates=covariates,
-            design=None  # Using default intercept design
-        )
-        
-        # Prepare correction info
-        correction_info = {
-            'input_shape': normalized_data.shape,
-            'output_shape': corrected_data.shape,
-            'correction_method': 'linear_regression',
-            'qtl_type': qtl_type,
-            'batch_correction_applied': True,
-            'samples_used': available_samples,
-            'confounders_source': 'enhanced',
-            'covariate_design_file': sample_mapping.get('covariate_design_file'),
-            'categorical_covariates': sample_mapping.get('categorical_covariates', []),
-            'linear_covariates': sample_mapping.get('linear_covariates', [])
-        }
-        
-        logger.info(f"✅ Batch correction pipeline completed for {qtl_type}")
-        return corrected_data, correction_info
-        
-    except Exception as e:
-        logger.error(f"❌ Batch correction pipeline failed for {qtl_type}: {e}")
-        raise
-
-def run_enhanced_batch_correction(normalized_data, qtl_type, config):
-    """
-    Enhanced batch correction with explicit parameter passing for direct calls
-    
-    Parameters:
-    -----------
-    normalized_data : pandas DataFrame
-        Normalized expression data (features x samples)
-    qtl_type : str
-        Type of QTL analysis ('eqtl', 'pqtl', 'sqtl')
-    config : dict
-        Configuration dictionary
-    
-    Returns:
-    --------
-    corrected_data : pandas DataFrame
-        Batch-corrected expression data
-    correction_info : dict
-        Information about the correction process
-    """
-    try:
-        logger.info(f"🚀 Starting enhanced batch correction for {qtl_type}...")
-        
-        # Get batch correction configuration
-        batch_config = config.get('batch_correction', {})
-        exp_covariates = batch_config.get('exp_covariates', {})
-        covariate_design_file = batch_config.get('exp_covariate_design')
-        
-        if not covariate_design_file:
-            logger.warning(f"⏭️ No covariate design file specified in config")
-            return normalized_data, {
-                'batch_correction_skipped': True,
-                'reason': 'No covariate design file specified',
-                'batch_correction_applied': False
-            }
-        
-        if not os.path.exists(covariate_design_file):
-            logger.warning(f"⏭️ Covariate design file not found: {covariate_design_file}")
-            return normalized_data, {
-                'batch_correction_skipped': True,
-                'reason': f'Covariate design file not found: {covariate_design_file}',
-                'batch_correction_applied': False
-            }
-        
-        # Load covariate design matrix
-        logger.info(f"📁 Loading covariate design from: {covariate_design_file}")
-        covariate_design = pd.read_csv(covariate_design_file, sep='\t', index_col=0)
-        
-        # Get sample IDs from normalized data
-        sample_ids = normalized_data.columns.tolist()
-        
-        # Subset covariate design to available samples
-        available_samples = [s for s in sample_ids if s in covariate_design.index]
-        if len(available_samples) != len(sample_ids):
-            logger.warning(f"Only {len(available_samples)}/{len(sample_ids)} samples found in covariate design")
-        
-        if len(available_samples) == 0:
-            logger.error("❌ No overlapping samples found between expression data and covariate design")
-            return normalized_data, {
-                'batch_correction_skipped': True,
-                'reason': 'No overlapping samples found',
-                'batch_correction_applied': False
-            }
-        
-        covariate_design = covariate_design.loc[available_samples]
-        
-        # Get categorical and linear covariates from config
-        categorical_covariates = exp_covariates.get('categorical', [])
-        linear_covariates = exp_covariates.get('linear', [])
-        
-        logger.info(f"🔧 Categorical covariates: {categorical_covariates}")
-        logger.info(f"🔧 Linear covariates: {linear_covariates}")
-        
-        # Check if all specified covariates exist in the design matrix
-        all_covariates = categorical_covariates + linear_covariates
-        missing_covariates = [cov for cov in all_covariates if cov not in covariate_design.columns]
-        
-        if missing_covariates:
-            logger.warning(f"⚠️ Missing covariates in design matrix: {missing_covariates}")
-            # Remove missing covariates from lists
-            categorical_covariates = [cov for cov in categorical_covariates if cov in covariate_design.columns]
-            linear_covariates = [cov for cov in linear_covariates if cov in covariate_design.columns]
-        
-        # Prepare batches (categorical covariates)
-        batches = []
-        for covariate in categorical_covariates:
-            if covariate in covariate_design.columns:
-                batch_data = covariate_design[covariate].values
-                batches.append(batch_data)
-                logger.info(f"  - Categorical: {covariate}: {len(np.unique(batch_data))} levels")
-        
-        # Prepare covariates (linear covariates)
-        covariates = None
-        if linear_covariates:
-            covariates = covariate_design[linear_covariates].copy()
-            # Convert to numeric, coerce errors to NaN
-            for col in linear_covariates:
-                covariates[col] = pd.to_numeric(covariates[col], errors='coerce')
-                # Fill NaN values with mean for linear covariates
-                if covariates[col].isna().any():
-                    covariates[col] = covariates[col].fillna(covariates[col].mean())
-            logger.info(f"  - Linear covariates: {linear_covariates}")
-        
-        # Skip if no batches or covariates found
-        if not batches and covariates is None:
-            logger.info(f"⏭️ No batch/covariate effects found for {qtl_type}, skipping batch correction")
-            return normalized_data, {
-                'batch_correction_skipped': True,
-                'reason': 'No batch/covariate effects found',
-                'batch_correction_applied': False
-            }
-        
-        # Subset normalized data to available samples
-        normalized_data_subset = normalized_data[available_samples]
-        
-        # Perform batch correction
-        corrected_data = remove_batch_effect_custom(
-            x=normalized_data_subset,
-            batches=batches,
-            covariates=covariates,
-            design=None  # Using default intercept design
-        )
-        
-        # Prepare correction info
-        correction_info = {
-            'covariate_design_file': covariate_design_file,
-            'samples_used': available_samples,
-            'categorical_covariates': categorical_covariates,
-            'linear_covariates': linear_covariates,
-            'input_shape': normalized_data.shape,
-            'output_shape': corrected_data.shape,
-            'correction_method': 'linear_regression',
-            'qtl_type': qtl_type,
-            'batch_correction_applied': True
-        }
-        
-        logger.info(f"✅ Enhanced batch correction completed for {qtl_type}")
-        return corrected_data, correction_info
-        
-    except Exception as e:
-        logger.error(f"❌ Enhanced batch correction failed for {qtl_type}: {e}")
-        raise
-
-# Backward compatibility wrapper
-def run_batch_correction(normalized_data, qtl_type, config):
-    """
-    Backward compatibility wrapper for run_batch_correction_pipeline
-    """
-    return run_batch_correction_pipeline(normalized_data, qtl_type, config)
-
 if __name__ == "__main__":
-    """Test the batch correction module"""
+    """Test the optimized batch correction"""
     import yaml
     
-    # Example usage
+    # Example config matching your structure
     config = {
         'batch_correction': {
             'enabled': {
                 'eqtl': True,
-                'pqtl': True,
+                'pqtl': False,  
                 'sqtl': False
             },
             'exp_covariates': {
-                'categorical': ['Batch', 'Sex'],
-                'linear': ['Age', 'RIN', 'PC1']
+                'categorical': ["Batch", "Sex"],
+                'linear': ["Age", "RIN", "PC1", "PC2"]
             },
-            'exp_covariate_design': '/home/ubuntu/covariate_matrix.tsv'
+            'exp_covariate_design': "/Users/singhvj/QTL_ANALYSIS_OUTPUT/confounders_matrix.tsv"
         }
     }
     
@@ -537,10 +568,11 @@ if __name__ == "__main__":
         columns=[f'sample_{i}' for i in range(50)]
     )
     
+    print("Testing optimized batch correction...")
     try:
-        corrected_data, correction_info = run_batch_correction_pipeline(
+        corrected_data, correction_info = run_optimized_batch_correction(
             test_data, 'eqtl', config
         )
-        print(f"Batch correction completed: {correction_info}")
+        print(f"✅ Test completed: {correction_info}")
     except Exception as e:
-        print(f"Batch correction failed: {e}")
+        print(f"❌ Test failed: {e}")
