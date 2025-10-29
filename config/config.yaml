@@ -208,7 +208,8 @@ enhanced_qc:
   pca_covariates: true
   num_pc_covariates: 5
 
-# Batch correction parameters
+# Batch correction parameters 
+# Remember if confounders differ in protein and rnaseq then use one qtl analysis at a time like only eqtl or pqtl pipeline
 batch_correction:
   enabled:
     eqtl: true
@@ -217,7 +218,7 @@ batch_correction:
   exp_covariates:
     categorical: ["Batch", "Sex"]
     linear: ["Age", "RIN", "PC1", "PC2"]
-  exp_covariate_design: "/home/ubuntu/covariate_matrix.tsv"
+  exp_covariate_design: "/Users/singhvj/QTL_ANALYSIS_OUTPUT/confounders_matrix.tsv"
 
 # Interaction analysis using tensorQTL
 interaction_analysis:

@@ -747,7 +747,7 @@ class PhenotypeProcessor:
                 raise FileNotFoundError(f"Phenotype file not found: {pheno_file}")
             
             raw_pheno_df = self._load_data_file(pheno_file, f"{qtl_type} phenotype")
-            cov_df = self._load_covariate_data()
+            cov_df = self._load_qtl_covariate_data()  # CORRECTED: Use QTL covariates, not batch correction
             
             # Align data if genotype samples provided
             if genotype_samples is not None:
@@ -795,6 +795,36 @@ class PhenotypeProcessor:
             logger.error(f"Phenotype preparation failed for {qtl_type}: {e}")
             raise
 
+    def _load_qtl_covariate_data(self):
+        """Load QTL covariates from main covariates file - CORRECTED VERSION"""
+        covariates_file = self.config['input_files'].get('covariates')
+        if not covariates_file or not os.path.exists(covariates_file):
+            logger.warning(f"QTL covariates file not found: {covariates_file}")
+            return pd.DataFrame()
+        
+        logger.info(f"Loading QTL covariates for analysis: {covariates_file}")
+        cov_df = self._load_data_file(covariates_file, "QTL covariates")
+        logger.info(f"Loaded QTL covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+        return cov_df
+
+    def _load_batch_covariate_data(self):
+        """Load batch correction covariates separately"""
+        batch_config = self.config.get('batch_correction', {})
+        exp_covariate_design_file = batch_config.get('exp_covariate_design')
+        
+        if not exp_covariate_design_file or not os.path.exists(exp_covariate_design_file):
+            logger.warning(f"Batch correction covariates file not found: {exp_covariate_design_file}")
+            return pd.DataFrame()
+        
+        logger.info(f"Loading batch correction covariates: {exp_covariate_design_file}")
+        try:
+            cov_df = self._load_data_file(exp_covariate_design_file, "batch correction covariates")
+            logger.info(f"Loaded batch correction covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+            return cov_df
+        except Exception as e:
+            logger.warning(f"Failed to load batch correction covariates: {e}")
+            return pd.DataFrame()
+
     def _run_enhanced_pipeline(self, raw_pheno_df, qtl_type):
         """Run enhanced normalization and batch correction pipeline"""
         try:
@@ -812,10 +842,14 @@ class PhenotypeProcessor:
                 logger.info("Applying batch correction...")
                 
                 try:
+                    # Load batch correction covariates separately
+                    batch_cov_df = self._load_batch_covariate_data()
+                    
                     corrected_df, correction_info = run_batch_correction_pipeline(
                         normalized_data=normalized_df,
                         qtl_type=qtl_type, 
-                        config=self.config
+                        config=self.config,
+                        batch_covariates=batch_cov_df  # Pass batch covariates separately
                     )
                     
                     if corrected_df is not None and not corrected_df.empty:
@@ -896,33 +930,13 @@ class PhenotypeProcessor:
                 continue
         
         # Fallback
-        df = pd.read_csv(file_path, index_col=0)
-        return df.apply(pd.to_numeric, errors='coerce')
-    
-    def _load_covariate_data(self):
-        """Load covariate data from either exp_covariate_design or original covariates file"""
-        # Check for new covariate design structure first
-        batch_config = self.config.get('batch_correction', {})
-        exp_covariate_design_file = batch_config.get('exp_covariate_design')
-        
-        if exp_covariate_design_file and os.path.exists(exp_covariate_design_file):
-            logger.info(f"Loading covariate design from: {exp_covariate_design_file}")
-            try:
-                cov_df = self._load_data_file(exp_covariate_design_file, "covariate design")
-                logger.info(f"Loaded covariate design: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
-                return cov_df
-            except Exception as e:
-                logger.warning(f"Failed to load exp_covariate_design file: {e}, falling back to original covariates")
-        
-        # Fallback to original covariates file
-        covariates_file = self.config['input_files'].get('covariates')
-        if not covariates_file or not os.path.exists(covariates_file):
-            return pd.DataFrame()
-        
-        cov_df = self._load_data_file(covariates_file, "covariates")
-        logger.info(f"Loaded covariates: {cov_df.shape[0]} covariates")
-        return cov_df
-    
+        try:
+            df = pd.read_csv(file_path, index_col=0)
+            return df.apply(pd.to_numeric, errors='coerce')
+        except Exception as e:
+            logger.error(f"Failed to load {description}: {e}")
+            raise
+
     def _apply_qc_filters(self, pheno_df, qtl_type):
         """Apply quality control filters"""
         original_count = pheno_df.shape[0]
@@ -1269,42 +1283,34 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
         logger.info(f"Loaded pre-processed covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
         return cov_df
     
-    # Fallback to original covariate file or exp_covariate_design
+    # Fallback to main QTL covariates file (NOT batch correction file)
+    covariates_file = config['input_files'].get('covariates')
+    if covariates_file and os.path.exists(covariates_file):
+        logger.info(f"Loading QTL covariates from: {covariates_file}")
+        try:
+            # Read as covariates x samples
+            cov_df = pd.read_csv(covariates_file, sep='\t', index_col=0)
+            logger.info(f"Loaded QTL covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+            return cov_df
+        except Exception as e:
+            logger.warning(f"Failed to load QTL covariates file: {e}")
+    
+    # Final fallback to batch correction covariates file (with warning)
     batch_config = config.get('batch_correction', {})
     exp_covariate_design_file = batch_config.get('exp_covariate_design')
     
     if exp_covariate_design_file and os.path.exists(exp_covariate_design_file):
-        logger.info(f"Loading covariate design from: {exp_covariate_design_file}")
+        logger.warning(f"Using batch correction covariates as fallback for QTL analysis: {exp_covariate_design_file}")
         try:
             # Read as covariates x samples
             cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
-            logger.info(f"Loaded covariate design: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+            logger.info(f"Loaded batch correction covariates as fallback: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
             return cov_df
         except Exception as e:
-            logger.warning(f"Failed to load exp_covariate_design file: {e}")
+            logger.warning(f"Failed to load batch correction covariates file: {e}")
     
-    # Final fallback to original covariates file
-    covariates_file = config['input_files'].get('covariates')
-    if not covariates_file or not os.path.exists(covariates_file):
-        logger.warning("No covariate file found")
-        return None
-    
-    # Load with dynamic format handling
-    processor = PhenotypeProcessor(config, results_dir)
-    cov_df = processor._load_data_file(covariates_file, "covariates")
-    
-    if cov_df.empty:
-        logger.warning("Covariate data is empty")
-        return None
-    
-    # Ensure covariates x samples format (transpose if needed)
-    if cov_df.shape[0] < cov_df.shape[1]:  # If more columns than rows, likely samples x covariates
-        cov_df = cov_df.T
-    
-    cov_df = cov_df.apply(pd.to_numeric, errors='coerce').fillna(cov_df.mean())
-    
-    logger.info(f"Loaded covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
-    return cov_df
+    logger.warning("No covariate file found for QTL analysis")
+    return None
 
 def print_tensorqtl_input_stats(genotype_data, phenotype_bed_file, covariates_data, qtl_type):
     """Print comprehensive statistics for tensorQTL inputs"""
