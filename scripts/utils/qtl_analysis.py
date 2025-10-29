@@ -558,13 +558,22 @@ class DynamicDataHandler:
         self.data_config = config.get('data_handling', {})
         
     def align_qtl_data(self, genotype_samples, phenotype_df, covariate_df=None):
-        """Align genotype, phenotype, and covariate data"""
+        """Align genotype, phenotype, and covariate data with proper sample validation"""
         logger.info("Aligning QTL data across all datasets...")
         
-        # Convert all sample identifiers to strings
-        genotype_samples = [str(sample) for sample in genotype_samples]
-        phenotype_samples = [str(sample) for sample in phenotype_df.columns]
-        covariate_samples = [str(sample) for sample in covariate_df.columns] if covariate_df is not None else []
+        # Convert all sample identifiers to strings and clean them
+        genotype_samples = [str(sample).strip() for sample in genotype_samples]
+        phenotype_samples = [str(sample).strip() for sample in phenotype_df.columns]
+        
+        logger.info(f"Genotype samples: {len(genotype_samples)}")
+        logger.info(f"Phenotype samples: {len(phenotype_samples)}")
+        
+        if covariate_df is not None:
+            covariate_samples = [str(sample).strip() for sample in covariate_df.columns]
+            logger.info(f"Covariate samples: {len(covariate_samples)}")
+        else:
+            covariate_samples = []
+            logger.info("No covariates provided")
         
         # Find common samples
         sample_sets = [set(genotype_samples), set(phenotype_samples)]
@@ -572,17 +581,22 @@ class DynamicDataHandler:
             sample_sets.append(set(covariate_samples))
         
         common_samples = set.intersection(*sample_sets)
+        common_samples = sorted(common_samples)
         
         if not common_samples:
+            # Log sample mismatches for debugging
+            logger.error("No common samples found!")
+            logger.error(f"Genotype samples (first 5): {genotype_samples[:5]}")
+            logger.error(f"Phenotype samples (first 5): {phenotype_samples[:5]}")
+            if covariate_samples:
+                logger.error(f"Covariate samples (first 5): {covariate_samples[:5]}")
             raise ValueError("No common samples found across datasets")
         
-        common_samples = sorted(common_samples)
+        logger.info(f"Data alignment completed: {len(common_samples)} common samples")
         
         # Subset data to common samples
         aligned_phenotype = phenotype_df[common_samples]
         aligned_covariates = covariate_df[common_samples] if covariate_df is not None else pd.DataFrame()
-        
-        logger.info(f"Data alignment completed: {len(common_samples)} common samples")
         
         return {
             'phenotype': aligned_phenotype,
@@ -747,7 +761,7 @@ class PhenotypeProcessor:
                 raise FileNotFoundError(f"Phenotype file not found: {pheno_file}")
             
             raw_pheno_df = self._load_data_file(pheno_file, f"{qtl_type} phenotype")
-            cov_df = self._load_qtl_covariate_data()  # CORRECTED: Use QTL covariates, not batch correction
+            cov_df = self._load_qtl_covariate_data()  # Use QTL covariates, not batch correction
             
             # Align data if genotype samples provided
             if genotype_samples is not None:
@@ -796,7 +810,7 @@ class PhenotypeProcessor:
             raise
 
     def _load_qtl_covariate_data(self):
-        """Load QTL covariates from main covariates file - CORRECTED VERSION"""
+        """Load QTL covariates from main covariates file"""
         covariates_file = self.config['input_files'].get('covariates')
         if not covariates_file or not os.path.exists(covariates_file):
             logger.warning(f"QTL covariates file not found: {covariates_file}")
@@ -808,7 +822,7 @@ class PhenotypeProcessor:
         return cov_df
 
     def _load_batch_covariate_data(self):
-        """Load batch correction covariates separately"""
+        """Load batch correction covariates separately with proper format detection"""
         batch_config = self.config.get('batch_correction', {})
         exp_covariate_design_file = batch_config.get('exp_covariate_design')
         
@@ -818,9 +832,25 @@ class PhenotypeProcessor:
         
         logger.info(f"Loading batch correction covariates: {exp_covariate_design_file}")
         try:
-            cov_df = self._load_data_file(exp_covariate_design_file, "batch correction covariates")
-            logger.info(f"Loaded batch correction covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+            # First, detect the file format by reading a few lines
+            with open(exp_covariate_design_file, 'r') as f:
+                first_line = f.readline().strip()
+                second_line = f.readline().strip()
+            
+            # Check if first column is "Sample" - indicates samples × covariates format
+            if first_line.startswith('Sample') or first_line.split('\t')[0] == 'Sample':
+                logger.info("Detected samples × covariates format for batch correction, transposing...")
+                # Read as samples × covariates and transpose to covariates × samples
+                cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
+                cov_df = cov_df.T  # Transpose to covariates × samples
+                logger.info(f"Transposed batch covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+            else:
+                # Assume covariates × samples format
+                cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
+                logger.info(f"Loaded batch covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
+            
             return cov_df
+            
         except Exception as e:
             logger.warning(f"Failed to load batch correction covariates: {e}")
             return pd.DataFrame()
@@ -1094,7 +1124,7 @@ class PhenotypeProcessor:
         }
 
     def _create_phenotype_bed_file(self, pheno_df, output_file, qtl_type):
-        """Create BED format file for tensorQTL phenotype input"""
+        """Create BED format file for tensorQTL phenotype input with proper sorting"""
         logger.info(f"Creating BED format file for {qtl_type} phenotypes...")
         
         # Get phenotype positions
@@ -1118,19 +1148,72 @@ class PhenotypeProcessor:
         
         bed_df = pd.DataFrame(bed_data, columns=columns)
         
+        # CRITICAL FIX: Sort BED file by chromosome and position with proper chromosome handling
+        bed_df = self._sort_bed_dataframe(bed_df)
+        
         # Save as compressed BED file
         bed_df.to_csv(output_file, sep='\t', index=False, compression='gzip')
-        logger.info(f"Created BED file with {len(bed_df)} phenotypes")
+        logger.info(f"Created sorted BED file with {len(bed_df)} phenotypes")
         
         return bed_df
 
+    def _sort_bed_dataframe(self, bed_df):
+        """Sort BED dataframe by chromosome and position following tensorQTL requirements"""
+        logger.info("Sorting BED file by chromosome and position...")
+        
+        # Log original chromosome order for debugging
+        original_chromosomes = bed_df['#chr'].unique()
+        logger.info(f"Original chromosomes found: {sorted(original_chromosomes)}")
+        
+        # Create a sorting key for chromosomes that handles both formats and natural sorting
+        def chromosome_key(chr):
+            chr_str = str(chr)
+            
+            # Remove 'chr' prefix if present for consistent sorting
+            if chr_str.lower().startswith('chr'):
+                chr_clean = chr_str[3:]  # Remove 'chr' prefix
+            else:
+                chr_clean = chr_str
+            
+            # Handle special chromosomes
+            chr_lower = chr_clean.lower()
+            if chr_lower == 'x': return (23, chr_str)
+            elif chr_lower == 'y': return (24, chr_str)
+            elif chr_lower == 'm' or chr_lower == 'mt': return (25, chr_str)
+            else:
+                try:
+                    # Convert to integer for proper numeric sorting (chr10 after chr9, not after chr1)
+                    return (int(chr_clean), chr_str)
+                except ValueError:
+                    return (26, chr_str)  # Put unknown chromosomes at the end
+        
+        # Add temporary chromosome sorting columns
+        bed_df['chr_sort_key'] = bed_df['#chr'].apply(lambda x: chromosome_key(x)[0])
+        bed_df['chr_original'] = bed_df['#chr'].apply(lambda x: chromosome_key(x)[1])
+        
+        # Sort by chromosome key, then start position, then end position
+        bed_df = bed_df.sort_values(['chr_sort_key', 'start', 'end'])
+        
+        # Log sorted chromosome order for verification
+        sorted_chromosomes = bed_df['#chr'].unique()
+        logger.info(f"Sorted chromosomes order: {list(sorted_chromosomes)}")
+        
+        # Remove temporary columns
+        bed_df = bed_df.drop(['chr_sort_key', 'chr_original'], axis=1)
+        
+        logger.info(f"BED file sorted: {len(bed_df)} entries")
+        return bed_df
+
     def _create_phenotype_positions(self, feature_ids, qtl_type):
-        """Create phenotype positions DataFrame"""
+        """Create phenotype positions DataFrame with proper sorting"""
         annotation_file = self.config['input_files'].get('annotations')
         
         try:
             if annotation_file and os.path.exists(annotation_file):
                 annot_df = pd.read_csv(annotation_file, sep='\t', comment='#')
+                # Sort annotations by chromosome and start position
+                annot_df = self._sort_bed_dataframe(annot_df.rename(columns={'chr': '#chr'}))
+                annot_df = annot_df.rename(columns={'#chr': 'chr'})
             else:
                 annot_df = pd.DataFrame()
                 logger.warning("No annotation file found, creating default positions")
@@ -1147,7 +1230,7 @@ class PhenotypeProcessor:
                     feature_annot = feature_annot.iloc[0]
                     positions_data.append({
                         'phenotype_id': feature_id,
-                        'chr': str(feature_annot.get('chr', '1')).replace('chr', ''),  # Remove 'chr' prefix if present
+                        'chr': str(feature_annot.get('chr', '1')),  # Keep original format (chr1 or 1)
                         'start': int(feature_annot.get('start', 1)),
                         'end': int(feature_annot.get('end', 1000)),
                         'strand': feature_annot.get('strand', '+')
@@ -1156,7 +1239,7 @@ class PhenotypeProcessor:
                     # Create default annotation if not found
                     positions_data.append({
                         'phenotype_id': feature_id,
-                        'chr': '1',
+                        'chr': 'chr1',
                         'start': 1,
                         'end': 1000,
                         'strand': '+'
@@ -1165,7 +1248,7 @@ class PhenotypeProcessor:
                 # Create default annotations
                 positions_data.append({
                     'phenotype_id': feature_id,
-                    'chr': '1',
+                    'chr': 'chr1', 
                     'start': 1,
                     'end': 1000,
                     'strand': '+'
@@ -1173,7 +1256,35 @@ class PhenotypeProcessor:
         
         positions_df = pd.DataFrame(positions_data)
         positions_df = positions_df.set_index('phenotype_id')
+        
+        # Sort the positions dataframe
+        positions_df['chr_sort'] = positions_df['chr'].apply(lambda x: self._chromosome_sort_key(x))
+        positions_df = positions_df.sort_values(['chr_sort', 'start'])
+        positions_df = positions_df.drop('chr_sort', axis=1)
+        
         return positions_df
+
+    def _chromosome_sort_key(self, chr):
+        """Create sorting key for chromosomes that handles both formats and natural sorting"""
+        chr_str = str(chr)
+        
+        # Remove 'chr' prefix if present for consistent sorting
+        if chr_str.lower().startswith('chr'):
+            chr_clean = chr_str[3:]  # Remove 'chr' prefix
+        else:
+            chr_clean = chr_str
+        
+        # Handle special chromosomes
+        chr_lower = chr_clean.lower()
+        if chr_lower == 'x': return 23
+        elif chr_lower == 'y': return 24  
+        elif chr_lower == 'm' or chr_lower == 'mt': return 25
+        else:
+            try:
+                # Convert to integer for proper numeric sorting
+                return int(chr_clean)
+            except ValueError:
+                return 26
     
     def _map_qtl_type_to_config_key(self, qtl_type):
         """Map QTL type to config file key"""
@@ -1294,20 +1405,6 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
             return cov_df
         except Exception as e:
             logger.warning(f"Failed to load QTL covariates file: {e}")
-    
-    # Final fallback to batch correction covariates file (with warning)
-    batch_config = config.get('batch_correction', {})
-    exp_covariate_design_file = batch_config.get('exp_covariate_design')
-    
-    if exp_covariate_design_file and os.path.exists(exp_covariate_design_file):
-        logger.warning(f"Using batch correction covariates as fallback for QTL analysis: {exp_covariate_design_file}")
-        try:
-            # Read as covariates x samples
-            cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
-            logger.info(f"Loaded batch correction covariates as fallback: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
-            return cov_df
-        except Exception as e:
-            logger.warning(f"Failed to load batch correction covariates file: {e}")
     
     logger.warning("No covariate file found for QTL analysis")
     return None
