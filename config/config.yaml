@@ -247,9 +247,9 @@ paths:
   bgzip: "bgzip"
   tabix: "tabix"
   python: "python3"
-  plink: "plink"
-  R: "R"
-  r_script_deseq2: "scripts/utils/deseq2_vst.R"
+  plink2: "plink2"  # or full path if not in PATH
+  plink: "plink"    # or full path if not in PATH
+  plink1.9: "plink1.9"  # optional
 
 # Plotting configuration
 plotting:
