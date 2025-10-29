@@ -17,35 +17,62 @@ import sys
 from pathlib import Path
 
 # Configure logging
+current_script_dir = os.path.dirname(os.path.abspath(__file__))
+if current_script_dir not in sys.path:
+    sys.path.insert(0, current_script_dir)
+
+# Also add parent directory for pipeline compatibility  
+parent_dir = os.path.dirname(current_script_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+# Configure logging
 logger = logging.getLogger('QTLPipeline')
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 warnings.filterwarnings('ignore')
 
-# Optional imports with fallbacks
+# Optional imports with fallbacks - enhanced for both standalone and pipeline execution
 try:
+    # Try absolute import first (for pipeline)
     from scripts.utils.batch_correction import run_batch_correction_pipeline
     BATCH_CORRECTION_AVAILABLE = True
 except ImportError:
-    BATCH_CORRECTION_AVAILABLE = False
-    logger.warning("Batch correction module not available")
+    try:
+        # Try relative import (for standalone)
+        from batch_correction import run_batch_correction_pipeline
+        BATCH_CORRECTION_AVAILABLE = True
+    except ImportError:
+        BATCH_CORRECTION_AVAILABLE = False
+        logger.warning("Batch correction module not available")
 
 try:
+    # Try absolute import first (for pipeline)
     from scripts.utils.deseq2_vst_python import deseq2_vst_python, simple_vst_fallback
     DESEQ2_VST_AVAILABLE = True
 except ImportError:
-    DESEQ2_VST_AVAILABLE = False
-    logger.warning("DESeq2 VST module not available")
+    try:
+        # Try relative import (for standalone)
+        from deseq2_vst_python import deseq2_vst_python, simple_vst_fallback
+        DESEQ2_VST_AVAILABLE = True
+    except ImportError:
+        DESEQ2_VST_AVAILABLE = False
+        logger.warning("DESeq2 VST module not available")
 
 try:
+    # Try absolute import first (for pipeline)
     from normalization_comparison import NormalizationComparison
 except ImportError:
     try:
+        # Try relative import (for standalone)
         from scripts.utils.normalization_comparison import NormalizationComparison
     except ImportError:
-        NormalizationComparison = None
-        logger.warning("NormalizationComparison module not available")
+        try:
+            from normalization_comparison import NormalizationComparison
+        except ImportError:
+            NormalizationComparison = None
+            logger.warning("NormalizationComparison module not available")
 
 # TensorQTL imports
 TENSORQTL_AVAILABLE = False
@@ -1339,6 +1366,12 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
     
     logger.info(f"Running enhanced {qtl_type} {analysis_mode}-QTL analysis...")
     
+    # FIX: Handle case where genotype_file is passed as a tuple (file, format)
+    if isinstance(genotype_file, tuple):
+        logger.info(f"Received genotype data as tuple: {genotype_file}")
+        genotype_file, plink_format = genotype_file
+        logger.info(f"Extracted genotype_file: {genotype_file}, plink_format: {plink_format}")
+    
     try:
         # Setup hardware following tensorQTL documentation
         hardware_optimizer = HardwareOptimizer(config)
@@ -1406,12 +1439,24 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
             if not cis_df.empty and 'pval_perm' in cis_df.columns:
                 cis_df = post.calculate_qvalues(cis_df, fdr=analysis_config.get('fdr_threshold', 0.05))
                 significant_count = (cis_df['qval'] < analysis_config.get('fdr_threshold', 0.05)).sum()
+                
+                # ENHANCEMENT: Add 'fdr' column for fine-mapping compatibility
+                cis_df['fdr'] = cis_df['qval']
+                logger.info(f"Added 'fdr' column for fine-mapping compatibility")
             else:
                 significant_count = 0
             
             # Save results
             result_file = f"{prefix}.cis_qtl.txt.gz"
             cis_df.to_csv(result_file, sep='\t', compression='gzip')
+            
+            # ENHANCEMENT: Ensure result file is properly created and log details
+            if os.path.exists(result_file):
+                file_size = os.path.getsize(result_file) / (1024 * 1024)  # Size in MB
+                logger.info(f"Cis-QTL results saved: {result_file} ({file_size:.2f} MB)")
+                logger.info(f"Results contain {len(cis_df)} associations, {significant_count} significant at FDR < 0.05")
+            else:
+                logger.warning(f"Result file not created: {result_file}")
             
             results.update({
                 'result_file': result_file,
@@ -1524,14 +1569,32 @@ def process_expression_data(config, results_dir=None):
 
 def run_cis_analysis(config, genotype_file, qtl_type, results_dir, plink_format='plink2'):
     """Run cis-QTL analysis - Compatibility wrapper"""
+    # FIX: Handle case where genotype_file is passed as a tuple (file, format)
+    if isinstance(genotype_file, tuple):
+        logger.info(f"Received genotype data as tuple: {genotype_file}")
+        genotype_file, plink_format = genotype_file
+        logger.info(f"Extracted genotype_file: {genotype_file}, plink_format: {plink_format}")
+    
     return run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, 'cis', plink_format)
 
 def run_trans_analysis(config, genotype_file, qtl_type, results_dir, plink_format='plink2'):
     """Run trans-QTL analysis - Compatibility wrapper"""
+    # FIX: Handle case where genotype_file is passed as a tuple (file, format)
+    if isinstance(genotype_file, tuple):
+        logger.info(f"Received genotype data as tuple: {genotype_file}")
+        genotype_file, plink_format = genotype_file
+        logger.info(f"Extracted genotype_file: {genotype_file}, plink_format: {plink_format}")
+    
     return run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, 'trans', plink_format)
 
 def run_qtl_mapping(config, genotype_file, qtl_type, results_dir, analysis_mode='cis', plink_format='plink2'):
     """Unified QTL mapping function for modular pipeline"""
+    # FIX: Handle case where genotype_file is passed as a tuple (file, format)
+    if isinstance(genotype_file, tuple):
+        logger.info(f"Received genotype data as tuple: {genotype_file}")
+        genotype_file, plink_format = genotype_file
+        logger.info(f"Extracted genotype_file: {genotype_file}, plink_format: {plink_format}")
+    
     if analysis_mode == 'cis':
         return run_cis_analysis(config, genotype_file, qtl_type, results_dir, plink_format)
     elif analysis_mode == 'trans':
@@ -1543,6 +1606,13 @@ def run_qtl_mapping(config, genotype_file, qtl_type, results_dir, analysis_mode=
 def run_qtl_analysis(config, genotype_file, qtl_type, results_dir, analysis_mode='cis', plink_format='plink2'):
     """Legacy QTL analysis function - redirects to enhanced version"""
     logger.warning("Using legacy run_qtl_analysis function. Consider using run_qtl_analysis_enhanced instead.")
+    
+    # FIX: Handle case where genotype_file is passed as a tuple (file, format)
+    if isinstance(genotype_file, tuple):
+        logger.info(f"Received genotype data as tuple: {genotype_file}")
+        genotype_file, plink_format = genotype_file
+        logger.info(f"Extracted genotype_file: {genotype_file}, plink_format: {plink_format}")
+    
     return run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, analysis_mode, plink_format)
 
 def validate_and_prepare_tensorqtl_inputs(config, qtl_type='eqtl'):
@@ -1591,7 +1661,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         config_file = sys.argv[1]
     else:
-        config_file = "config/config.yaml"
+        config_file = "config/qtl_config.yaml"
     
     try:
         with open(config_file, 'r') as f:

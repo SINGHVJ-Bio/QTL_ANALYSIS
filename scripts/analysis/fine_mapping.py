@@ -61,26 +61,26 @@ class FineMapping:
         
         if not self.finemap_config.get('enable', False):
             logger.info("ℹ️ Fine-mapping disabled in config")
-            return {}
+            return {'status': 'disabled'}
         
         try:
             # Validate inputs
             if not self._validate_inputs(qtl_results_file, vcf_file, output_dir):
-                return {}
+                return {'status': 'failed', 'error': 'Input validation failed'}
             
             # Read QTL results with optimized loading
             qtl_df = self._load_qtl_results(qtl_results_file)
             
             if qtl_df.empty:
                 logger.warning(f"No {qtl_type} results for fine-mapping")
-                return {}
+                return {'status': 'no_significant', 'message': 'No significant QTLs found'}
             
             # Filter significant associations
             significant_qtls = self._filter_significant_qtls(qtl_df, qtl_type)
             
             if significant_qtls.empty:
                 logger.warning(f"No significant {qtl_type} for fine-mapping")
-                return {}
+                return {'status': 'no_significant', 'message': 'No significant QTLs after filtering'}
             
             logger.info(f"🔧 Fine-mapping {len(significant_qtls)} significant {qtl_type} associations")
             
@@ -91,13 +91,20 @@ class FineMapping:
             summary = self.generate_finemap_summary(results, output_dir, qtl_type)
             
             logger.info(f"✅ {qtl_type} fine-mapping completed: {summary['successful_genes']} genes processed")
-            return results
+            
+            return {
+                'status': 'completed',
+                'summary': summary,
+                'results': results,
+                'output_dir': output_dir,
+                'qtl_type': qtl_type
+            }
             
         except Exception as e:
             logger.error(f"❌ {qtl_type} fine-mapping failed: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
-            return {}
+            return {'status': 'failed', 'error': str(e)}
     
     def _validate_inputs(self, qtl_results_file: str, vcf_file: str, output_dir: str) -> bool:
         """Validate input files and directories"""
@@ -656,14 +663,14 @@ def run_fine_mapping_wrapper(config: Dict[str, Any], qtl_type: str, results_dir:
         if not os.path.exists(qtl_results_file):
             logger.warning(f"❌ QTL results file not found: {qtl_results_file}")
             logger.info("ℹ️ Fine-mapping requires cis-QTL results. Run cis-QTL analysis first.")
-            return {}
+            return {'status': 'failed', 'error': 'QTL results file not found'}
         
         # Run fine-mapping
         return run_fine_mapping(config, qtl_results_file, vcf_file, output_dir, qtl_type)
         
     except Exception as e:
         logger.error(f"❌ Fine-mapping wrapper failed for {qtl_type}: {e}")
-        return {}
+        return {'status': 'failed', 'error': str(e)}
 
 # Main execution for standalone testing
 if __name__ == "__main__":

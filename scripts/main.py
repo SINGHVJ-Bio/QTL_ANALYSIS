@@ -38,14 +38,15 @@ except ImportError as e:
 # Import analysis modules
 try:
     from scripts.analysis.interaction_analysis import InteractionAnalysis
-    from scripts.analysis.fine_mapping import FineMapping
+    from scripts.analysis.fine_mapping import FineMapping, run_fine_mapping
 except ImportError:
     try:
         from scripts.analysis.interaction_analysis import InteractionAnalysis
-        from scripts.analysis.fine_mapping import FineMapping
+        from scripts.analysis.fine_mapping import FineMapping, run_fine_mapping
     except ImportError:
         InteractionAnalysis = None
         FineMapping = None
+        run_fine_mapping = None
         logging.warning("Interaction analysis and fine-mapping modules not available")
 
 logger = logging.getLogger('QTLPipeline')
@@ -473,11 +474,10 @@ class QTLPipeline:
                 self.logger.error(f"❌ Interaction analysis failed: {e}")
                 advanced_results['interaction'] = {'status': 'failed', 'error': str(e)}
         
-        # Fine-mapping
+        # Fine-mapping - FIXED: Properly call the fine-mapping function with all required arguments
         if self.config.get('fine_mapping', {}).get('enable', False) and FineMapping:
             try:
                 self.logger.info("🎯 Running fine-mapping...")
-                fine_mapper = FineMapping(self.config)
                 
                 # Run fine-mapping for significant QTL results
                 if 'qtl' in self.results:
@@ -485,9 +485,13 @@ class QTLPipeline:
                         if 'cis' in result and result['cis']['status'] == 'completed':
                             result_file = result['cis'].get('result_file')
                             if result_file and os.path.exists(result_file):
-                                # FIXED: Pass qtl_type parameter to fine-mapping
-                                finemap_results = fine_mapper.run_fine_mapping(
-                                    result_file, genotype_file, self.fine_mapping_results_dir, qtl_type
+                                # FIXED: Properly call fine-mapping with all required arguments
+                                finemap_results = run_fine_mapping(
+                                    self.config,  # config
+                                    result_file,  # qtl_results_file
+                                    genotype_file,  # vcf_file
+                                    self.fine_mapping_results_dir,  # output_dir
+                                    qtl_type  # qtl_type
                                 )
                                 advanced_results[f'fine_mapping_{qtl_type}_cis'] = finemap_results
                                 
