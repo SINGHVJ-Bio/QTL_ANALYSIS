@@ -468,7 +468,8 @@ class NormalizationComparison:
                 logger.info(f"✅ Loaded batch covariates: {covariate_design.shape[0]} samples, {covariate_design.shape[1]} covariates")
             else:
                 # This would be covariates × samples format (less common)
-                logger.info(f"Detected covariates × samples format (first column: '{first_line.split('\t')[0]}'), transposing...")
+                tmp_first_column = first_line.split('\t')[0]
+                logger.info(f"Detected covariates × samples format (first column: '{tmp_first_column}'), transposing...")
                 covariate_design = pd.read_csv(covariate_design_file, sep='\t', index_col=0)
                 covariate_design = covariate_design.T  # Transpose to samples × covariates
                 logger.info(f"Loaded batch covariates: {covariate_design.shape[0]} samples, {covariate_design.shape[1]} covariates")

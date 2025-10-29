@@ -850,8 +850,8 @@ class PhenotypeProcessor:
                 logger.info(f"✅ First 3 samples: {cov_df.index.tolist()[:3]}")
                 logger.info(f"✅ Covariates: {cov_df.columns.tolist()}")
             else:
-                # This would be covariates × samples format (less common)
-                logger.info(f"Detected covariates × samples format (first column: '{first_line.split('\t')[0]}'), transposing...")
+                tmp_first_column = first_line.split('\t')[0]
+                logger.info(f"Detected covariates × samples format (first column: '{tmp_first_column}'), transposing...")
                 cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
                 cov_df = cov_df.T  # Transpose to samples × covariates
                 logger.info(f"Loaded batch covariates: {cov_df.shape[0]} samples, {cov_df.shape[1]} covariates")
