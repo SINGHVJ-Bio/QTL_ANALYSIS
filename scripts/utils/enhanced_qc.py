@@ -55,24 +55,53 @@ class EnhancedQC:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.qc_config = config.get('enhanced_qc', {})
-        self.results_dir = config.get('results_dir', 'results')
+        self.results_dir = Path(config.get('results_dir', 'results'))
         self._plink_cache = {}  # Cache for PLINK results
         self._file_cache = {}   # Cache for file reads
+        
+        # Setup directories using directory manager
         self.setup_qc_directories()
         
     def setup_qc_directories(self) -> None:
-        """Create comprehensive QC directory structure"""
+        """Create comprehensive QC directory structure using directory manager"""
         try:
-            qc_dirs = [
-                'QC_reports', 'QC_plots', 'QC_data', 'sample_concordance',
-                'pca_results', 'outlier_analysis', 'sample_lists', 
-                'variant_lists', 'tensorqtl_compatibility'
+            # Import directory manager
+            from scripts.utils.directory_manager import get_module_directories
+                
+            # Define directory structure for enhanced QC
+            self.dirs = get_module_directories(
+                'enhanced_qc',
+                [
+                    'reports',
+                    {'reports': ['qc_reports']},
+                    'processed_data',
+                    {'processed_data': ['quality_control']},
+                    'visualization',
+                    {'visualization': ['qc_plots']},
+                    'system',
+                    {'system': ['temporary_files']}
+                ],
+                str(self.results_dir)
+            )
+            
+            # Map directories to intuitive names
+            self.reports_dir = self.dirs['reports_qc_reports']
+            self.processed_data_dir = self.dirs['processed_data_quality_control']
+            self.visualization_dir = self.dirs['visualization_qc_plots']
+            self.temp_dir = self.dirs['system_temporary_files']
+            
+            # Create QC subdirectories using directory manager
+            qc_subdirs = [
+                'sample_concordance', 'pca_results', 'outlier_analysis',
+                'sample_lists', 'variant_lists', 'tensorqtl_compatibility'
             ]
             
-            for qc_dir in qc_dirs:
-                Path(self.results_dir).joinpath(qc_dir).mkdir(parents=True, exist_ok=True)
+            for subdir in qc_subdirs:
+                subdir_path = self.processed_data_dir / subdir
+                subdir_path.mkdir(parents=True, exist_ok=True)
             
-            logger.info("✅ QC directory structure created")
+            logger.info("✅ Enhanced QC directory structure created using directory manager")
+                
         except Exception as e:
             logger.error(f"❌ Failed to create QC directories: {e}")
             raise
@@ -365,7 +394,7 @@ class EnhancedQC:
     def generate_tensorqtl_compatibility_report(self, issues: List[str], geno_samples: List[str]) -> bool:
         """Generate tensorQTL compatibility report"""
         try:
-            report_dir = Path(self.results_dir) / "tensorqtl_compatibility"
+            report_dir = self.processed_data_dir / "tensorqtl_compatibility"
             report_dir.mkdir(exist_ok=True)
             
             report_file = report_dir / "tensorqtl_compatibility_report.html"
@@ -903,7 +932,7 @@ class EnhancedQC:
         logger.info("👥 Creating sample mapping files...")
         
         try:
-            samples_dir = Path(self.results_dir) / "sample_lists"
+            samples_dir = self.processed_data_dir / "sample_lists"
             samples_dir.mkdir(exist_ok=True)
             
             input_files = self.config.get('input_files', {})
@@ -992,8 +1021,8 @@ class EnhancedQC:
         logger.info("📝 Generating data preparation report...")
         
         try:
-            report_dir = Path(self.results_dir) / "QC_reports"
-            report_dir.mkdir(exist_ok=True)
+            report_dir = self.reports_dir
+            report_dir.mkdir(parents=True, exist_ok=True)
             
             # Calculate overall status
             total_checks = sum(result.get('checks_total', 0) for result in quality_results.values() if isinstance(result, dict))
@@ -1292,7 +1321,7 @@ class EnhancedQC:
                 return False
             
             qtl_types = self.get_qtl_types_from_config()
-            qc_results = self.run_comprehensive_qc(vcf_file, qtl_types, self.results_dir)
+            qc_results = self.run_comprehensive_qc(vcf_file, qtl_types)
             
             success = bool(qc_results)
             if success:
@@ -1306,15 +1335,15 @@ class EnhancedQC:
             logger.error(f"❌ Quality control module failed: {e}")
             return False
 
-    def run_comprehensive_qc(self, vcf_file: str, qtl_types: List[str], output_dir: str) -> Dict[str, Any]:
-        """Run comprehensive QC on all data types"""
+    def run_comprehensive_qc(self, vcf_file: str, qtl_types: List[str]) -> Dict[str, Any]:
+        """Run comprehensive QC on all data types using consistent directory structure"""
         logger.info("🔍 Running comprehensive quality control...")
         
         qc_results = {}
         
         try:
-            qc_dir = Path(output_dir) / "QC_reports"
-            qc_dir.mkdir(exist_ok=True)
+            # Use the consistent directory structure
+            qc_dir = self.reports_dir
             
             # Get phenotype files
             phenotype_files = {}
@@ -1324,23 +1353,23 @@ class EnhancedQC:
             
             # Run QC steps
             qc_steps = [
-                ("🧬 Genotype QC", lambda: self.genotype_qc(vcf_file, str(qc_dir))),
-                ("🔗 Sample concordance", lambda: self.sample_concordance_qc(vcf_file, phenotype_files, str(qc_dir))),
+                ("🧬 Genotype QC", lambda: self.genotype_qc(vcf_file)),
+                ("🔗 Sample concordance", lambda: self.sample_concordance_qc(vcf_file, phenotype_files)),
             ]
             
             # Add phenotype QC for available types
             for qtl_type, pheno_file in phenotype_files.items():
                 if pheno_file and os.path.exists(pheno_file):
                     qc_steps.append((f"📊 {qtl_type} phenotype QC", 
-                                   lambda p=pheno_file, t=qtl_type: self.phenotype_qc(p, t, str(qc_dir))))
+                                   lambda p=pheno_file, t=qtl_type: self.phenotype_qc(p, t)))
             
             # Add optional steps
             if self.qc_config.get('run_pca', True):
-                qc_steps.append(("📈 PCA analysis", lambda: self.run_pca_analysis(vcf_file, str(qc_dir))))
+                qc_steps.append(("📈 PCA analysis", lambda: self.run_pca_analysis(vcf_file)))
             
             if self.qc_config.get('advanced_outlier_detection', True):
                 qc_steps.append(("🎯 Advanced outlier detection", 
-                               lambda: self.advanced_outlier_detection(vcf_file, phenotype_files, str(qc_dir))))
+                               lambda: self.advanced_outlier_detection(vcf_file, phenotype_files)))
             
             # Execute QC steps
             for desc, func in qc_steps:
@@ -1355,8 +1384,8 @@ class EnhancedQC:
             
             # Generate reports
             logger.info("📋 Generating comprehensive QC report...")
-            self.generate_qc_report(qc_results, str(qc_dir))
-            self.save_qc_results(qc_results, str(qc_dir))
+            self.generate_qc_report(qc_results)
+            self.save_qc_results(qc_results)
             
             logger.info("✅ Comprehensive QC completed")
             return qc_results
@@ -1365,7 +1394,7 @@ class EnhancedQC:
             logger.error(f"❌ Comprehensive QC failed: {e}")
             return {}
 
-    def genotype_qc(self, vcf_file: str, output_dir: str) -> Dict[str, Any]:
+    def genotype_qc(self, vcf_file: str) -> Dict[str, Any]:
         """Optimized genotype QC using caching and efficient operations"""
         logger.info("🔬 Running genotype QC...")
         
@@ -1378,7 +1407,7 @@ class EnhancedQC:
         qc_metrics = {}
         
         try:
-            plink_base = Path(output_dir) / "plink_qc"
+            plink_base = self.processed_data_dir / "plink_qc"
             
             # Convert VCF to PLINK format with error handling
             cmd = f"{self.config['paths']['plink']} --vcf {vcf_file} --make-bed --out {plink_base} 2>/dev/null"
@@ -1405,14 +1434,14 @@ class EnhancedQC:
                         qc_metrics[metric_name] = {}
             
             # Calculate additional metrics
-            qc_metrics['hwe'] = self._calculate_hwe_plink(str(plink_base), output_dir)
+            qc_metrics['hwe'] = self._calculate_hwe_plink(str(plink_base))
             qc_metrics['heterozygosity'] = self._calculate_heterozygosity_plink(str(plink_base))
             
             # Generate plots
-            self._plot_genotype_qc(qc_metrics, output_dir)
+            self._plot_genotype_qc(qc_metrics)
             
             # Apply filters
-            filtered_file = self._apply_genotype_filters_plink(str(plink_base), output_dir, qc_metrics)
+            filtered_file = self._apply_genotype_filters_plink(str(plink_base), qc_metrics)
             qc_metrics['filtered_file'] = filtered_file
             
             # Calculate summary
@@ -1486,7 +1515,7 @@ class EnhancedQC:
             logger.warning(f"Could not calculate MAF distribution: {e}")
             return {'maf_values': [], 'mean_maf': 0, 'median_maf': 0}
 
-    def _calculate_hwe_plink(self, plink_base: str, output_dir: str) -> Dict[str, Any]:
+    def _calculate_hwe_plink(self, plink_base: str) -> Dict[str, Any]:
         """Calculate Hardy-Weinberg Equilibrium using PLINK"""
         try:
             cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --hardy --out {plink_base}_hwe 2>/dev/null"
@@ -1538,12 +1567,12 @@ class EnhancedQC:
             logger.warning(f"Could not calculate heterozygosity: {e}")
             return {}
 
-    def _apply_genotype_filters_plink(self, plink_base: str, output_dir: str, qc_metrics: Dict[str, Any]) -> Optional[str]:
+    def _apply_genotype_filters_plink(self, plink_base: str, qc_metrics: Dict[str, Any]) -> Optional[str]:
         """Apply genotype filters using PLINK"""
         logger.info("🔧 Applying genotype filters using PLINK...")
         
         try:
-            filtered_base = Path(output_dir) / "filtered_genotypes"
+            filtered_base = self.processed_data_dir / "filtered_genotypes"
             
             filter_args = [
                 f"--maf {self.qc_config.get('maf_threshold', 0.01)}",
@@ -1572,10 +1601,10 @@ class EnhancedQC:
             logger.warning(f"Genotype filtering failed: {e}")
             return None
 
-    def _plot_genotype_qc(self, qc_metrics: Dict[str, Any], output_dir: str) -> None:
-        """Generate genotype QC plots"""
+    def _plot_genotype_qc(self, qc_metrics: Dict[str, Any]) -> None:
+        """Generate genotype QC plots using consistent directory structure"""
         try:
-            plot_dir = Path(output_dir) / "QC_plots"
+            plot_dir = self.visualization_dir
             plot_dir.mkdir(exist_ok=True)
             
             # MAF distribution plot
@@ -1656,7 +1685,7 @@ class EnhancedQC:
             logger.warning(f"Could not calculate genotype QC summary: {e}")
             return {}
 
-    def phenotype_qc(self, pheno_file: str, pheno_type: str, output_dir: str) -> Dict[str, Any]:
+    def phenotype_qc(self, pheno_file: str, pheno_type: str) -> Dict[str, Any]:
         """Comprehensive phenotype QC with enhanced metrics"""
         logger.info(f"🔬 Running {pheno_type} QC...")
         
@@ -1708,7 +1737,7 @@ class EnhancedQC:
             }
             
             # Generate plots
-            self._plot_phenotype_qc(first_chunk, pheno_type, output_dir, qc_metrics)
+            self._plot_phenotype_qc(first_chunk, pheno_type, qc_metrics)
             
             logger.info(f"✅ {pheno_type} QC completed: {total_features} features, {first_chunk.shape[1]} samples")
             return qc_metrics
@@ -1717,10 +1746,10 @@ class EnhancedQC:
             logger.error(f"❌ {pheno_type} QC failed: {e}")
             return {}
 
-    def _plot_phenotype_qc(self, df: pd.DataFrame, pheno_type: str, output_dir: str, qc_metrics: Dict[str, Any]) -> None:
-        """Generate phenotype QC plots"""
+    def _plot_phenotype_qc(self, df: pd.DataFrame, pheno_type: str, qc_metrics: Dict[str, Any]) -> None:
+        """Generate phenotype QC plots using consistent directory structure"""
         try:
-            plot_dir = Path(output_dir) / "QC_plots"
+            plot_dir = self.visualization_dir
             plot_dir.mkdir(exist_ok=True)
             
             plt.figure(figsize=(12, 5))
@@ -1759,7 +1788,7 @@ class EnhancedQC:
         except Exception as e:
             logger.warning(f"Could not generate phenotype QC plots: {e}")
 
-    def sample_concordance_qc(self, vcf_file: str, phenotype_files: Dict[str, str], output_dir: str) -> Dict[str, Any]:
+    def sample_concordance_qc(self, vcf_file: str, phenotype_files: Dict[str, str]) -> Dict[str, Any]:
         """Check sample concordance across all datasets"""
         logger.info("🔍 Checking sample concordance...")
         
@@ -1797,7 +1826,7 @@ class EnhancedQC:
             concordance_results['sample_overlap'] = sample_overlap
             
             # Generate concordance plot
-            self._plot_sample_concordance(concordance_results, output_dir)
+            self._plot_sample_concordance(concordance_results)
             
             return concordance_results
             
@@ -1805,10 +1834,10 @@ class EnhancedQC:
             logger.error(f"Sample concordance check failed: {e}")
             return {}
 
-    def _plot_sample_concordance(self, concordance_results: Dict[str, Any], output_dir: str) -> None:
-        """Plot sample concordance across datasets"""
+    def _plot_sample_concordance(self, concordance_results: Dict[str, Any]) -> None:
+        """Plot sample concordance across datasets using consistent directory structure"""
         try:
-            plot_dir = Path(output_dir) / "QC_plots"
+            plot_dir = self.visualization_dir
             plot_dir.mkdir(exist_ok=True)
             
             if 'sample_overlap' in concordance_results and concordance_results['sample_overlap']:
@@ -1835,12 +1864,12 @@ class EnhancedQC:
         except Exception as e:
             logger.warning(f"Could not generate sample concordance plot: {e}")
 
-    def run_pca_analysis(self, vcf_file: str, output_dir: str) -> Dict[str, Any]:
+    def run_pca_analysis(self, vcf_file: str) -> Dict[str, Any]:
         """Run PCA for population stratification using PLINK - FIXED VERSION"""
         logger.info("📊 Running PCA analysis using PLINK...")
         
         try:
-            plink_base = Path(output_dir) / "pca_input"
+            plink_base = self.processed_data_dir / "pca_input"
             
             cmd = f"{self.config['paths']['plink']} --vcf {vcf_file} --pca 10 --out {plink_base} 2>/dev/null"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
@@ -1865,10 +1894,10 @@ class EnhancedQC:
                         logger.warning(f"Unexpected number of columns in PCA results: {n_columns}")
                         return {}
                     
-                    self._plot_pca_results(pca_df, output_dir)
+                    self._plot_pca_results(pca_df)
                     
                     return {
-                        'pca_file': pca_eigenvec,
+                        'pca_file': str(pca_eigenvec),
                         'explained_variance': self._calculate_pca_variance(f"{plink_base}.eigenval"),
                         'sample_count': len(pca_df)
                     }
@@ -1891,10 +1920,10 @@ class EnhancedQC:
             logger.warning(f"Could not calculate PCA variance: {e}")
         return []
 
-    def _plot_pca_results(self, pca_df: pd.DataFrame, output_dir: str) -> None:
+    def _plot_pca_results(self, pca_df: pd.DataFrame) -> None:
         """Plot PCA results - FIXED VERSION"""
         try:
-            plot_dir = Path(output_dir) / "QC_plots"
+            plot_dir = self.visualization_dir
             plot_dir.mkdir(exist_ok=True)
             
             plt.figure(figsize=(12, 5))
@@ -1931,7 +1960,7 @@ class EnhancedQC:
         except Exception as e:
             logger.warning(f"Could not generate PCA plots: {e}")
 
-    def advanced_outlier_detection(self, vcf_file: str, phenotype_files: Dict[str, str], output_dir: str) -> Dict[str, Any]:
+    def advanced_outlier_detection(self, vcf_file: str, phenotype_files: Dict[str, str]) -> Dict[str, Any]:
         """Advanced outlier detection using multiple methods"""
         logger.info("🎯 Running advanced outlier detection...")
         
@@ -1939,7 +1968,7 @@ class EnhancedQC:
         
         try:
             # Use PLINK for genotype-based outlier detection
-            plink_base = Path(output_dir) / "outlier_detection"
+            plink_base = self.processed_data_dir / "outlier_detection"
             
             # Convert Path object to string for PLINK command
             plink_base_str = str(plink_base)
@@ -2015,12 +2044,12 @@ class EnhancedQC:
             logger.warning(f"Advanced outlier detection failed: {e}")
             return {}
 
-    def generate_qc_report(self, qc_results: Dict[str, Any], output_dir: str) -> None:
-        """Generate comprehensive QC report"""
+    def generate_qc_report(self, qc_results: Dict[str, Any]) -> None:
+        """Generate comprehensive QC report using consistent directory structure"""
         logger.info("📊 Generating QC report...")
         
         try:
-            report_file = Path(output_dir) / "comprehensive_qc_report.html"
+            report_file = self.reports_dir / "comprehensive_qc_report.html"
             
             html_content = f"""
             <!DOCTYPE html>
@@ -2057,7 +2086,7 @@ class EnhancedQC:
                 
                 <div class="section">
                     <h2>QC Plots</h2>
-                    {self._generate_plot_section_html(output_dir)}
+                    {self._generate_plot_section_html()}
                 </div>
                 
                 <div class="section">
@@ -2120,8 +2149,8 @@ class EnhancedQC:
         summary += "</table>"
         return summary
 
-    def _generate_plot_section_html(self, output_dir: str) -> str:
-        """Generate HTML for QC plots"""
+    def _generate_plot_section_html(self) -> str:
+        """Generate HTML for QC plots using consistent directory structure"""
         plots_html = "<div class='plot-grid'>"
         
         plot_files = [
@@ -2131,25 +2160,26 @@ class EnhancedQC:
             ('pca_analysis.png', 'PCA Analysis')
         ]
         
-        plot_dir = Path(output_dir) / "QC_plots"
+        plot_dir = self.visualization_dir
         
         for plot_file, title in plot_files:
             plot_path = plot_dir / plot_file
             if plot_path.exists():
+                # Use relative path from reports directory
                 plots_html += f"""
                 <div class="plot">
                     <h3>{title}</h3>
-                    <img src="QC_plots/{plot_file}" alt="{title}" style="max-width: 400px;">
+                    <img src="../visualization/qc_plots/{plot_file}" alt="{title}" style="max-width: 400px;">
                 </div>
                 """
         
         plots_html += "</div>"
         return plots_html
 
-    def save_qc_results(self, qc_results: Dict[str, Any], output_dir: str) -> None:
+    def save_qc_results(self, qc_results: Dict[str, Any]) -> None:
         """Save QC results for downstream modules - FIXED JSON SERIALIZATION"""
         try:
-            results_file = Path(output_dir) / "comprehensive_qc_results.json"
+            results_file = self.reports_dir / "comprehensive_qc_results.json"
             
             # Enhanced JSON serialization function
             def convert_for_json(obj):
@@ -2245,7 +2275,7 @@ if __name__ == "__main__":
         vcf_file = config['input_files']['genotypes']
         qtl_types = qc.get_qtl_types_from_config()
         
-        results = qc.run_comprehensive_qc(vcf_file, qtl_types, config.get('results_dir', 'results'))
+        results = qc.run_comprehensive_qc(vcf_file, qtl_types)
         
         if results:
             print("✅ QC completed successfully!")

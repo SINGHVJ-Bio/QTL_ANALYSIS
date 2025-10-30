@@ -36,15 +36,23 @@ warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
 
+# Import centralized directory management
+try:
+    from scripts.utils.directory_manager import get_directory_manager, get_module_directories
+except ImportError as e:
+    logger.error(f"Import error: {e}")
+    logger.error("Please ensure directory_manager module is available")
+    raise
+
 # Add the missing function that data_preparation is trying to import
-def generate_all_plots(config: Dict[str, Any], results: Dict[str, Any], plots_dir: str):
+def generate_all_plots(config: Dict[str, Any], results: Dict[str, Any], results_dir: str):
     """
     Generate all plots for QTL analysis - compatibility function for data_preparation module
     """
     logger.info("📊 Generating comprehensive plots using QTLPlotter...")
     
     try:
-        plotter = QTLPlotter(config, results, plots_dir)
+        plotter = QTLPlotter(config, results, results_dir)
         
         # Generate summary plots
         plotter.create_summary_plots()
@@ -69,16 +77,30 @@ def generate_all_plots(config: Dict[str, Any], results: Dict[str, Any], plots_di
         return False
 
 class QTLPlotter:
-    def __init__(self, config: Dict[str, Any], results: Dict[str, Any], plots_dir: str):
+    def __init__(self, config: Dict[str, Any], results: Dict[str, Any], results_dir: str):
         self.config = config
         self.results = results
-        self.plots_dir = plots_dir
+        self.results_dir = results_dir
+        
+        # Use centralized directory manager
+        self.dm = get_directory_manager(results_dir)
+        
+        # Setup visualization directories using centralized manager
+        self.viz_dirs = get_module_directories(
+            'visualization',
+            [
+                'visualization',
+                {'visualization': ['summary_plots', 'interactive_plots', 'manhattan_plots', 'qq_plots']}
+            ],
+            str(self.results_dir)
+        )
+        
         self.plot_config = config.get('plotting', {})
         self.performance_config = config.get('performance', {})
         self.max_workers = self.performance_config.get('max_workers', 4)
         
-        # Create plots directory
-        Path(plots_dir).mkdir(parents=True, exist_ok=True)
+        # Get main plots directory
+        self.plots_dir = self.dm.get_directory('visualization', 'summary_plots')
         
         self.setup_plotting_style()
         
@@ -334,7 +356,7 @@ class QTLPlotter:
                 ax.plot(df['beta'], p(df['beta']), "r--", alpha=0.8, linewidth=2)
             
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_{analysis_mode}_effect_size_correlation")
+            self.save_plot(f"{qtl_type}_{analysis_mode}_effect_size_correlation", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -373,7 +395,7 @@ class QTLPlotter:
             
             plt.suptitle(f'{qtl_type.upper()} {analysis_mode.upper()} - P-value Correlations', fontweight='bold')
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_{analysis_mode}_pvalue_correlations")
+            self.save_plot(f"{qtl_type}_{analysis_mode}_pvalue_correlations", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -410,7 +432,7 @@ class QTLPlotter:
             
             plt.suptitle(f'{qtl_type.upper()} {analysis_mode.upper()} - MAF Analysis', fontweight='bold')
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_{analysis_mode}_maf_analysis")
+            self.save_plot(f"{qtl_type}_{analysis_mode}_maf_analysis", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -512,7 +534,7 @@ class QTLPlotter:
             plt.yticks(rotation=0)
             
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_{analysis_mode}_association_correlation_heatmap")
+            self.save_plot(f"{qtl_type}_{analysis_mode}_association_correlation_heatmap", 'summary_plots')
             plt.close()
             
             # Also create a clustered heatmap
@@ -551,7 +573,7 @@ class QTLPlotter:
             plt.yticks(rotation=0)
             
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_{analysis_mode}_clustered_correlation_heatmap")
+            self.save_plot(f"{qtl_type}_{analysis_mode}_clustered_correlation_heatmap", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -610,7 +632,7 @@ class QTLPlotter:
             axes[1].axvline(x=0, color='red', linestyle='--', alpha=0.7)
             
             plt.tight_layout()
-            self.save_plot("gwas_effect_size_correlation")
+            self.save_plot("gwas_effect_size_correlation", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -650,7 +672,7 @@ class QTLPlotter:
                     axes[1].legend()
             
             plt.tight_layout()
-            self.save_plot("gwas_maf_analysis")
+            self.save_plot("gwas_maf_analysis", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -745,7 +767,7 @@ class QTLPlotter:
             
             plt.suptitle('GWAS Quality Control Metrics', fontsize=16, fontweight='bold')
             plt.tight_layout()
-            self.save_plot("gwas_quality_metrics")
+            self.save_plot("gwas_quality_metrics", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -795,7 +817,7 @@ class QTLPlotter:
             
             ax.set_title('Correlation Analysis Summary', fontweight='bold', fontsize=14)
             plt.tight_layout()
-            self.save_plot("correlation_analysis_summary")
+            self.save_plot("correlation_analysis_summary", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -837,7 +859,7 @@ class QTLPlotter:
             self._set_chromosome_ticks(ax, df)
             
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_cis_manhattan")
+            self.save_plot(f"{qtl_type}_cis_manhattan", 'manhattan_plots')
             plt.close()
             
             # Clean up memory
@@ -892,7 +914,7 @@ class QTLPlotter:
             self._set_chromosome_ticks(ax, df)
             
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_trans_manhattan")
+            self.save_plot(f"{qtl_type}_trans_manhattan", 'manhattan_plots')
             plt.close()
             
             # Clean up memory
@@ -949,7 +971,7 @@ class QTLPlotter:
             self._set_chromosome_ticks(ax, df)
             
             plt.tight_layout()
-            self.save_plot("gwas_manhattan")
+            self.save_plot("gwas_manhattan", 'manhattan_plots')
             plt.close()
             
             # Clean up memory
@@ -1177,7 +1199,7 @@ class QTLPlotter:
                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
             
             plt.tight_layout()
-            self.save_plot(f"{analysis_type}_{analysis_mode}_qq")
+            self.save_plot(f"{analysis_type}_{analysis_mode}_qq", 'qq_plots')
             plt.close()
             
         except Exception as e:
@@ -1276,7 +1298,7 @@ class QTLPlotter:
             ax.legend(handles=legend_elements, loc='upper right')
             
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_{analysis_mode}_volcano")
+            self.save_plot(f"{qtl_type}_{analysis_mode}_volcano", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -1345,7 +1367,7 @@ class QTLPlotter:
             
             plt.suptitle(f'{qtl_type.upper()} {analysis_mode.upper()} Distribution Plots', fontsize=14, fontweight='bold')
             plt.tight_layout()
-            self.save_plot(f"{qtl_type}_{analysis_mode}_distribution")
+            self.save_plot(f"{qtl_type}_{analysis_mode}_distribution", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -1404,7 +1426,7 @@ class QTLPlotter:
             ax.set_axisbelow(True)
             
             plt.tight_layout()
-            self.save_plot("analysis_summary")
+            self.save_plot("analysis_summary", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -1460,7 +1482,7 @@ class QTLPlotter:
             
             plt.xticks(rotation=45)
             plt.tight_layout()
-            self.save_plot("significance_comparison")
+            self.save_plot("significance_comparison", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -1523,7 +1545,7 @@ class QTLPlotter:
             
             plt.xticks(rotation=45)
             plt.tight_layout()
-            self.save_plot("effect_size_distribution")
+            self.save_plot("effect_size_distribution", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -1564,7 +1586,7 @@ class QTLPlotter:
                 ax.set_title('Heritability Estimation', fontweight='bold')
             
             plt.tight_layout()
-            self.save_plot("heritability_estimation")
+            self.save_plot("heritability_estimation", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -1661,7 +1683,7 @@ class QTLPlotter:
             axes[1].set_yscale('log')
             
             plt.tight_layout()
-            self.save_plot("power_analysis")
+            self.save_plot("power_analysis", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -1742,7 +1764,7 @@ class QTLPlotter:
             
             plt.suptitle('Comprehensive Quality Control Summary', fontsize=16, fontweight='bold')
             plt.tight_layout()
-            self.save_plot("multiqc_summary")
+            self.save_plot("multiqc_summary", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -1854,7 +1876,7 @@ class QTLPlotter:
             ax.set_axisbelow(True)
             
             plt.tight_layout()
-            self.save_plot(f"{analysis_type}_{analysis_mode}_locuszoom_top")
+            self.save_plot(f"{analysis_type}_{analysis_mode}_locuszoom_top", 'summary_plots')
             plt.close()
             
         except Exception as e:
@@ -2011,26 +2033,26 @@ class QTLPlotter:
         except:
             return 1.0, 1.0
     
-    def save_plot(self, name: str):
+    def save_plot(self, name: str, plot_category: str = 'summary_plots'):
         """Save plot with configured format and DPI with enhanced error handling"""
         try:
             format = self.plot_config.get('format', 'png')
             dpi = self.plot_config.get('dpi', 300)
-            output_path = os.path.join(self.plots_dir, f"{name}.{format}")
             
-            # Ensure directory exists
-            Path(self.plots_dir).mkdir(parents=True, exist_ok=True)
+            # Use centralized directory manager for organized directory structure
+            plot_dir = self.dm.get_directory('visualization', plot_category)
+            output_path = plot_dir / f"{name}.{format}"
             
-            plt.savefig(output_path, dpi=dpi, bbox_inches='tight', 
+            plt.savefig(str(output_path), dpi=dpi, bbox_inches='tight', 
                        facecolor='white', edgecolor='none',
                        format=format)
             
             # Also save as PDF if requested
             if self.plot_config.get('save_pdf', False):
-                pdf_path = os.path.join(self.plots_dir, f"{name}.pdf")
-                plt.savefig(pdf_path, bbox_inches='tight', facecolor='white')
+                pdf_path = plot_dir / f"{name}.pdf"
+                plt.savefig(str(pdf_path), bbox_inches='tight', facecolor='white')
             
-            logger.info(f"💾 Saved plot: {name}.{format}")
+            logger.info(f"💾 Saved plot: {name}.{format} in visualization/{plot_category}")
             
         except Exception as e:
             logger.error(f"❌ Error saving plot {name}: {e}")

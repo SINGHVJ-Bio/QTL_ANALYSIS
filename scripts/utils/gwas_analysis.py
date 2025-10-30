@@ -24,6 +24,25 @@ warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
 
+try:
+    from scripts.utils.directory_manager import get_directory_manager, get_module_directories
+except ImportError as e:
+    logger.warning(f"Directory manager not available: {e}")
+    # Fallback directory structure
+    class DirectoryManager:
+        def __init__(self, results_dir):
+            self.results_dir = Path(results_dir)
+        
+        def get_directory(self, category, subcategory=None, create=True):
+            if subcategory:
+                path = self.results_dir / category / subcategory
+            else:
+                path = self.results_dir / category
+            
+            if create:
+                path.mkdir(parents=True, exist_ok=True)
+            return path
+
 class DynamicDataHandler:
     """Enhanced handler for dynamic covariate and phenotype data"""
     
@@ -233,28 +252,51 @@ class GWASAnalyzer:
         logger.info("📊 Running enhanced GWAS analysis...")
         
         try:
+            # Initialize directory manager for organized directory structure
+            dir_manager = get_directory_manager(results_dir)
+            
+            # Setup GWAS-specific directories
+            gwas_dirs = get_module_directories(
+                'gwas_analysis',
+                [
+                    'analysis_results',
+                    {'analysis_results': ['gwas_results']},
+                    'processed_data',
+                    {'processed_data': ['genotypes']},
+                    'visualization',
+                    {'visualization': ['manhattan_plots', 'qq_plots']},
+                    'reports',
+                    {'reports': ['analysis_reports']},
+                    'processed_data',
+                    {'processed_data': ['quality_control']},
+                    'system',
+                    {'system': ['temporary_files']}
+                ],
+                results_dir
+            )
+            
             # Get genotype samples
             genotype_samples = self._get_genotype_samples(genotype_file)
             if not genotype_samples:
                 raise ValueError("Could not extract genotype samples")
             
             # Prepare GWAS data with dynamic handling
-            gwas_data = self.prepare_gwas_data(results_dir, genotype_samples)
+            gwas_data = self.prepare_gwas_data(dir_manager, genotype_samples)
             if not gwas_data:
                 raise ValueError("GWAS data preparation failed")
             
             # Run GWAS using PLINK with optimizations
-            gwas_results = self.run_plink_gwas_optimized(genotype_file, gwas_data, results_dir)
+            gwas_results = self.run_plink_gwas_optimized(genotype_file, gwas_data, dir_manager)
             
             # Count significant associations
             significant_count = self.count_significant_gwas(gwas_results['result_file'])
             logger.info(f"✅ Found {significant_count} significant GWAS associations")
             
             # Run comprehensive GWAS QC
-            gwas_qc_results = self.run_comprehensive_gwas_qc(gwas_results['result_file'], results_dir)
+            gwas_qc_results = self.run_comprehensive_gwas_qc(gwas_results['result_file'], dir_manager)
             
             # Generate GWAS-specific reports and plots
-            self.generate_gwas_reports(gwas_results, gwas_qc_results, results_dir)
+            self.generate_gwas_reports(gwas_results, gwas_qc_results, dir_manager)
             
             return {
                 'result_file': gwas_results['result_file'],
@@ -311,7 +353,7 @@ class GWASAnalyzer:
             logger.warning(f"⚠️ Error extracting genotype samples: {e}")
             return None
     
-    def prepare_gwas_data(self, results_dir, genotype_samples=None):
+    def prepare_gwas_data(self, dir_manager, genotype_samples=None):
         """Prepare GWAS phenotype and covariate data with enhanced handling and validation"""
         logger.info("🔧 Preparing enhanced GWAS data...")
         
@@ -355,29 +397,30 @@ class GWASAnalyzer:
             # Apply enhanced phenotype QC
             phenotype_df = self.apply_enhanced_phenotype_qc(phenotype_df, phenotype_cols)
             
-            # Create PLINK compatible files
-            plink_pheno_file = os.path.join(results_dir, "gwas_phenotype.txt")
-            plink_cov_file = os.path.join(results_dir, "gwas_covariates.txt")
+            # Create PLINK compatible files in temporary_files directory
+            temp_dir = dir_manager.get_directory('system', 'temporary_files')
+            plink_pheno_file = temp_dir / "gwas_phenotype.txt"
+            plink_cov_file = temp_dir / "gwas_covariates.txt"
             
             # Prepare phenotype file for PLINK
             pheno_output = phenotype_df.T.reset_index()
             pheno_output.columns = ['sample_id'] + phenotype_cols
-            pheno_output.to_csv(plink_pheno_file, sep='\t', index=False)
+            pheno_output.to_csv(str(plink_pheno_file), sep='\t', index=False)
             logger.info(f"💾 Saved PLINK phenotype file: {plink_pheno_file}")
             
             # Prepare covariate file for PLINK if covariates exist
             if not covariates_df.empty:
                 cov_output = covariates_df.T.reset_index()
                 cov_output.columns = ['sample_id'] + covariates_df.index.tolist()
-                cov_output.to_csv(plink_cov_file, sep='\t', index=False)
+                cov_output.to_csv(str(plink_cov_file), sep='\t', index=False)
                 logger.info(f"💾 Saved PLINK covariate file: {plink_cov_file}")
             else:
                 plink_cov_file = None
                 logger.info("ℹ️ No covariate file created")
             
             return {
-                'phenotype_file': plink_pheno_file,
-                'covariate_file': plink_cov_file,
+                'phenotype_file': str(plink_pheno_file),
+                'covariate_file': str(plink_cov_file) if plink_cov_file else None,
                 'phenotype_cols': phenotype_cols,
                 'sample_count': len(common_samples),
                 'phenotype_count': len(phenotype_cols),
@@ -441,16 +484,17 @@ class GWASAnalyzer:
         
         return pheno_df
     
-    def run_plink_gwas_optimized(self, genotype_file, gwas_data, results_dir):
+    def run_plink_gwas_optimized(self, genotype_file, gwas_data, dir_manager):
         """Run optimized GWAS using PLINK with parallel processing"""
         logger.info("🔧 Running optimized PLINK GWAS...")
         
         method = self.gwas_config.get('method', 'linear')
         
-        # Convert VCF to PLINK format if needed
-        plink_base = os.path.join(results_dir, "genotypes")
+        # Convert VCF to PLINK format if needed - store in genotypes directory
+        genotypes_dir = dir_manager.get_directory('processed_data', 'genotypes')
+        plink_base = genotypes_dir / "genotypes"
         
-        if not os.path.exists(plink_base + ".bed"):
+        if not os.path.exists(str(plink_base) + ".bed"):
             logger.info("🔄 Converting VCF to PLINK format...")
             self.run_command(
                 f"{self.config['paths']['plink']} --vcf {genotype_file} --make-bed --out {plink_base}",
@@ -459,11 +503,11 @@ class GWASAnalyzer:
         
         # Run GWAS for each phenotype with optimizations
         if self.parallel_processing and len(gwas_data['phenotype_cols']) > 1:
-            return self._run_parallel_gwas(plink_base, gwas_data, method, results_dir)
+            return self._run_parallel_gwas(str(plink_base), gwas_data, method, dir_manager)
         else:
-            return self._run_sequential_gwas(plink_base, gwas_data, method, results_dir)
+            return self._run_sequential_gwas(str(plink_base), gwas_data, method, dir_manager)
     
-    def _run_parallel_gwas(self, plink_base, gwas_data, method, results_dir):
+    def _run_parallel_gwas(self, plink_base, gwas_data, method, dir_manager):
         """Run GWAS for multiple phenotypes in parallel"""
         all_results = []
         individual_files = []
@@ -474,7 +518,7 @@ class GWASAnalyzer:
             for i, phenotype in enumerate(gwas_data['phenotype_cols']):
                 future = executor.submit(
                     self._run_single_gwas,
-                    plink_base, phenotype, i, method, gwas_data, results_dir
+                    plink_base, phenotype, i, method, gwas_data, dir_manager
                 )
                 future_to_phenotype[future] = (phenotype, i)
             
@@ -490,9 +534,9 @@ class GWASAnalyzer:
                 except Exception as e:
                     logger.error(f"❌ GWAS failed for {phenotype}: {e}")
         
-        return self._combine_gwas_results(all_results, individual_files, results_dir)
+        return self._combine_gwas_results(all_results, individual_files, dir_manager)
     
-    def _run_sequential_gwas(self, plink_base, gwas_data, method, results_dir):
+    def _run_sequential_gwas(self, plink_base, gwas_data, method, dir_manager):
         """Run GWAS for multiple phenotypes sequentially"""
         all_results = []
         individual_files = []
@@ -501,7 +545,7 @@ class GWASAnalyzer:
             logger.info(f"🔍 Running GWAS for phenotype: {phenotype} (column {i+1})")
             
             try:
-                result = self._run_single_gwas(plink_base, phenotype, i, method, gwas_data, results_dir)
+                result = self._run_single_gwas(plink_base, phenotype, i, method, gwas_data, dir_manager)
                 if result:
                     all_results.append(result)
                     individual_files.append(result['result_file'])
@@ -509,11 +553,13 @@ class GWASAnalyzer:
             except Exception as e:
                 logger.error(f"❌ GWAS failed for {phenotype}: {e}")
         
-        return self._combine_gwas_results(all_results, individual_files, results_dir)
+        return self._combine_gwas_results(all_results, individual_files, dir_manager)
     
-    def _run_single_gwas(self, plink_base, phenotype, pheno_index, method, gwas_data, results_dir):
+    def _run_single_gwas(self, plink_base, phenotype, pheno_index, method, gwas_data, dir_manager):
         """Run GWAS for a single phenotype"""
-        output_prefix = os.path.join(results_dir, f"gwas_{phenotype}")
+        # Use gwas_results directory for output files
+        gwas_results_dir = dir_manager.get_directory('analysis_results', 'gwas_results')
+        output_prefix = gwas_results_dir / f"gwas_{phenotype}"
         
         # Build optimized PLINK command
         cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --pheno {gwas_data['phenotype_file']} --mpheno {pheno_index + 1}"
@@ -552,9 +598,9 @@ class GWASAnalyzer:
                 if 'P' in results_df.columns:
                     results_df['-log10p'] = -np.log10(results_df['P'])
                 
-                # Generate plots for this phenotype
-                manhattan_plot = self._create_manhattan_plot(results_df, phenotype, results_dir)
-                qq_plot = self._create_qq_plot(results_df, phenotype, results_dir)
+                # Generate plots for this phenotype in appropriate directories
+                manhattan_plot = self._create_manhattan_plot(results_df, phenotype, dir_manager)
+                qq_plot = self._create_qq_plot(results_df, phenotype, dir_manager)
                 
                 return {
                     'results_df': results_df,
@@ -570,26 +616,27 @@ class GWASAnalyzer:
             logger.warning(f"⚠️ No GWAS results file created for {phenotype}")
             return None
     
-    def _combine_gwas_results(self, all_results, individual_files, results_dir):
+    def _combine_gwas_results(self, all_results, individual_files, dir_manager):
         """Combine results from all phenotypes"""
         if all_results:
             # Combine all results
             combined_dfs = [result['results_df'] for result in all_results if 'results_df' in result]
             if combined_dfs:
                 combined_results = pd.concat(combined_dfs, ignore_index=True)
-                combined_file = os.path.join(results_dir, "gwas_combined_results.txt")
-                combined_results.to_csv(combined_file, sep='\t', index=False)
+                gwas_results_dir = dir_manager.get_directory('analysis_results', 'gwas_results')
+                combined_file = gwas_results_dir / "gwas_combined_results.txt"
+                combined_results.to_csv(str(combined_file), sep='\t', index=False)
                 logger.info(f"💾 Combined GWAS results saved: {combined_file}")
                 
                 # Generate summary statistics
                 summary_stats = self._calculate_gwas_summary_stats(combined_results)
                 
-                # Create overall Manhattan and QQ plots
-                overall_manhattan = self._create_manhattan_plot(combined_results, "combined", results_dir)
-                overall_qq = self._create_qq_plot(combined_results, "combined", results_dir)
+                # Create overall Manhattan and QQ plots in appropriate directories
+                overall_manhattan = self._create_manhattan_plot(combined_results, "combined", dir_manager)
+                overall_qq = self._create_qq_plot(combined_results, "combined", dir_manager)
                 
                 return {
-                    'result_file': combined_file,
+                    'result_file': str(combined_file),
                     'individual_files': individual_files,
                     'manhattan_plot': overall_manhattan,
                     'qq_plot': overall_qq,
@@ -649,8 +696,8 @@ class GWASAnalyzer:
         
         return summary
     
-    def _create_manhattan_plot(self, gwas_results, phenotype, results_dir):
-        """Create Manhattan plot for GWAS results"""
+    def _create_manhattan_plot(self, gwas_results, phenotype, dir_manager):
+        """Create Manhattan plot for GWAS results in appropriate directory"""
         try:
             import matplotlib.pyplot as plt
             import seaborn as sns
@@ -689,19 +736,21 @@ class GWASAnalyzer:
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 
-                plot_file = os.path.join(results_dir, f"gwas_manhattan_{phenotype}.png")
-                plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+                # Save in manhattan_plots directory
+                manhattan_dir = dir_manager.get_directory('visualization', 'manhattan_plots')
+                plot_file = manhattan_dir / f"gwas_manhattan_{phenotype}.png"
+                plt.savefig(str(plot_file), dpi=150, bbox_inches='tight')
                 plt.close()
                 
-                return plot_file
+                return str(plot_file)
             
         except Exception as e:
             logger.warning(f"Could not create Manhattan plot: {e}")
         
         return ""
     
-    def _create_qq_plot(self, gwas_results, phenotype, results_dir):
-        """Create QQ plot for GWAS results"""
+    def _create_qq_plot(self, gwas_results, phenotype, dir_manager):
+        """Create QQ plot for GWAS results in appropriate directory"""
         try:
             import matplotlib.pyplot as plt
             
@@ -736,11 +785,13 @@ class GWASAnalyzer:
                            transform=ax.transAxes, fontsize=12,
                            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
                     
-                    plot_file = os.path.join(results_dir, f"gwas_qq_{phenotype}.png")
-                    plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+                    # Save in qq_plots directory
+                    qq_dir = dir_manager.get_directory('visualization', 'qq_plots')
+                    plot_file = qq_dir / f"gwas_qq_{phenotype}.png"
+                    plt.savefig(str(plot_file), dpi=150, bbox_inches='tight')
                     plt.close()
                     
-                    return plot_file
+                    return str(plot_file)
             
         except Exception as e:
             logger.warning(f"Could not create QQ plot: {e}")
@@ -788,7 +839,7 @@ class GWASAnalyzer:
             logger.warning(f"⚠️ Could not count significant GWAS hits: {e}")
             return 0
     
-    def run_comprehensive_gwas_qc(self, result_file, results_dir):
+    def run_comprehensive_gwas_qc(self, result_file, dir_manager):
         """Run comprehensive GWAS QC with enhanced metrics"""
         logger.info("🔧 Running comprehensive GWAS QC...")
         
@@ -850,8 +901,8 @@ class GWASAnalyzer:
                 
                 qc_results['phenotype_stratified'] = pheno_qc
             
-            # Create comprehensive QC report
-            self._create_gwas_qc_report(qc_results, results_dir)
+            # Create comprehensive QC report in quality_control directory
+            self._create_gwas_qc_report(qc_results, dir_manager)
             
             logger.info("✅ Comprehensive GWAS QC completed")
             
@@ -876,12 +927,13 @@ class GWASAnalyzer:
         except:
             return 1.0
     
-    def _create_gwas_qc_report(self, qc_results, results_dir):
-        """Create comprehensive GWAS QC report"""
+    def _create_gwas_qc_report(self, qc_results, dir_manager):
+        """Create comprehensive GWAS QC report in quality_control directory"""
         try:
-            report_file = os.path.join(results_dir, "gwas_qc_report.txt")
+            qc_dir = dir_manager.get_directory('processed_data', 'quality_control')
+            report_file = qc_dir / "gwas_qc_report.txt"
             
-            with open(report_file, 'w') as f:
+            with open(str(report_file), 'w') as f:
                 f.write("GWAS Quality Control Report\n")
                 f.write("=" * 60 + "\n\n")
                 
@@ -921,13 +973,14 @@ class GWASAnalyzer:
         except Exception as e:
             logger.warning(f"Could not create GWAS QC report: {e}")
     
-    def generate_gwas_reports(self, gwas_results, qc_results, results_dir):
-        """Generate comprehensive GWAS reports and summaries"""
+    def generate_gwas_reports(self, gwas_results, qc_results, dir_manager):
+        """Generate comprehensive GWAS reports and summaries in appropriate directories"""
         try:
-            # Create summary statistics file
-            summary_file = os.path.join(results_dir, "gwas_summary_statistics.txt")
+            # Create summary statistics file in analysis_reports directory
+            reports_dir = dir_manager.get_directory('reports', 'analysis_reports')
+            summary_file = reports_dir / "gwas_summary_statistics.txt"
             
-            with open(summary_file, 'w') as f:
+            with open(str(summary_file), 'w') as f:
                 f.write("GWAS Summary Statistics\n")
                 f.write("=" * 50 + "\n\n")
                 

@@ -5,7 +5,7 @@ Optimized for large datasets with 100GB+ VCF files
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
-Enhanced with modular pipeline compatibility and additional features.
+Enhanced with modular pipeline compatibility, consistent directory management, and additional features.
 """
 
 import os
@@ -30,6 +30,7 @@ try:
     from scripts.utils.genotype_processing import process_genotypes
     from scripts.utils.batch_correction import run_batch_correction_pipeline
     from scripts.utils.deseq2_vst_python import deseq2_vst_python, simple_vst_fallback
+    from scripts.utils.directory_manager import get_directory_manager, get_module_directories
 except ImportError as e:
     logging.error(f"Import error: {e}")
     logging.error("Please ensure all utility modules are available")
@@ -40,169 +41,35 @@ try:
     from scripts.analysis.interaction_analysis import InteractionAnalysis
     from scripts.analysis.fine_mapping import FineMapping, run_fine_mapping
 except ImportError:
-    try:
-        from scripts.analysis.interaction_analysis import InteractionAnalysis
-        from scripts.analysis.fine_mapping import FineMapping, run_fine_mapping
-    except ImportError:
-        InteractionAnalysis = None
-        FineMapping = None
-        run_fine_mapping = None
-        logging.warning("Interaction analysis and fine-mapping modules not available")
-
-logger = logging.getLogger('QTLPipeline')
+    InteractionAnalysis = None
+    FineMapping = None
+    run_fine_mapping = None
+    logging.warning("Interaction analysis and fine-mapping modules not available")
 
 class QTLPipeline:
     def __init__(self, config_file=None):
         self.start_time = datetime.now()
         self.config = self.load_config(config_file)
+        self.results_dir = Path(self.config['results_dir'])
         self.setup_directories()
         self.setup_logging()
         self.results = {}
         self.monitor_resources = self.config.get('large_data', {}).get('monitor_resources', True)
+        self.directory_manager = None
         
-    def load_config(self, config_file):
-        """Load configuration from YAML file with validation"""
-        if not config_file:
-            config_file = "config/config.yaml"
-            
-        if not os.path.exists(config_file):
-            raise FileNotFoundError(f"Config file not found: {config_file}")
-            
-        try:
-            with open(config_file, 'r') as f:
-                config = yaml.safe_load(f)
-            
-            # Validate mandatory fields
-            mandatory_fields = ['results_dir', 'input_files']
-            for field in mandatory_fields:
-                if field not in config:
-                    raise ValueError(f"'{field}' must be specified in the config file")
-            
-            mandatory_inputs = ['genotypes', 'covariates', 'annotations']
-            for input_file in mandatory_inputs:
-                if input_file not in config['input_files']:
-                    raise ValueError(f"'{input_file}' must be specified in 'input_files'")
-            
-            # Set comprehensive defaults including large data defaults
-            config.setdefault('genotype_processing', {})
-            processing_defaults = {
-                'auto_detect_format': True,
-                'filter_variants': True,
-                'normalize_chromosomes': True,
-                'handle_multiallelic': True,
-                'remove_phasing': True,
-                'min_maf': 0.01,
-                'min_call_rate': 0.95,
-                'prefer_plink': True  # New: Prefer PLINK for large datasets
-            }
-            for key, value in processing_defaults.items():
-                config['genotype_processing'].setdefault(key, value)
-            
-            # Large data defaults
-            config.setdefault('large_data', {})
-            large_data_defaults = {
-                'min_memory_gb': 16,
-                'min_disk_gb': 50,
-                'command_timeout': 3600,
-                'process_by_chromosome': True,
-                'force_plink': False,
-                'monitor_resources': True
-            }
-            for key, value in large_data_defaults.items():
-                config['large_data'].setdefault(key, value)
-            
-            # Analysis defaults
-            config.setdefault('analysis', {})
-            config['analysis'].setdefault('qtl_types', 'all')
-            config['analysis'].setdefault('qtl_mode', 'cis')
-            config['analysis'].setdefault('run_gwas', False)
-            
-            # QTL defaults
-            config.setdefault('qtl', {})
-            qtl_defaults = {
-                'cis_window': 1000000,
-                'permutations': 1000,
-                'fdr_threshold': 0.05,
-                'maf_threshold': 0.05,
-                'min_maf': 0.01,
-                'min_call_rate': 0.95,
-                'chunk_genes': 100,  # New: Memory optimization
-                'chunk_variants': 10000  # New: Memory optimization
-            }
-            for key, value in qtl_defaults.items():
-                config['qtl'].setdefault(key, value)
-            
-            # Enhanced features defaults
-            config.setdefault('enhanced_qc', {'enable': True})
-            config.setdefault('interaction_analysis', {'enable': False})
-            config.setdefault('fine_mapping', {'enable': False})
-            
-            # Performance defaults
-            config.setdefault('performance', {})
-            performance_defaults = {
-                'num_threads': 4,
-                'memory_gb': 8,
-                'chunk_size': 100,
-                'max_chunk_memory': 4
-            }
-            for key, value in performance_defaults.items():
-                config['performance'].setdefault(key, value)
-            
-            # Other section defaults
-            config.setdefault('plotting', {'enabled': True})
-            config.setdefault('output', {'generate_report': True})
-            config.setdefault('qc', {'check_sample_concordance': True})
-            
-            # Tool paths
-            config.setdefault('paths', {})
-            tool_defaults = {
-                'qtltools': 'qtltools',
-                'bcftools': 'bcftools', 
-                'bgzip': 'bgzip',
-                'tabix': 'tabix',
-                'python': 'python3',
-                'plink': 'plink',
-                'R': 'R'
-            }
-            for key, value in tool_defaults.items():
-                config['paths'].setdefault(key, value)
-            
-            return config
-            
-        except Exception as e:
-            logging.error(f"Error loading config file: {e}")
-            raise
-            
-    def setup_directories(self):
-        """Create comprehensive directory structure"""
-        self.results_dir = self.config['results_dir']
-        
-        directories = {
-            'logs': "logs",
-            'temp': "temp", 
-            'plots': "plots",
-            'qtl_results': "QTL_results",
-            'gwas_results': "GWAS_results",
-            'reports': "reports",
-            'genotype_processing': "genotype_processing",
-            'qc_reports': "QC_reports",
-            'interaction_results': "interaction_results",
-            'fine_mapping_results': "fine_mapping_results",
-            'advanced_plots': "plots/interactive",
-            'large_data_cache': "cache/large_data"  # New: Cache for large datasets
-        }
-        
-        for name, path in directories.items():
-            full_path = os.path.join(self.results_dir, path)
-            setattr(self, f"{name}_dir", full_path)
-            Path(full_path).mkdir(parents=True, exist_ok=True)
-            
     def setup_logging(self):
-        """Setup comprehensive logging"""
+        """Setup logging to use results directory"""
         timestamp = self.start_time.strftime("%Y%m%d_%H%M%S")
-        log_file = os.path.join(self.logs_dir, f"pipeline_{timestamp}.log")
         
-        # Clear any existing handlers
+        # Use directory manager to get logs directory
+        if self.directory_manager:
+            logs_dir = self.directory_manager.get_directory('system', 'logs')
+        else:
+            logs_dir = self.results_dir / 'system' / 'logs'
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            
+        log_file = logs_dir / f"pipeline_{timestamp}.log"
+        
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
             
@@ -225,84 +92,193 @@ class QTLPipeline:
         self.logger.info(f"💾 Large data optimizations: {self.config.get('large_data', {}).get('force_plink', False)}")
         self.logger.info(f"🔄 Modular pipeline also available: python run_QTLPipeline.py --list")
         
-    def map_qtl_type_to_config_key(self, qtl_type):
-        """Map QTL analysis types to config file keys"""
-        mapping = {
-            'eqtl': 'expression',
-            'pqtl': 'protein', 
-            'sqtl': 'splicing'
-        }
-        return mapping.get(qtl_type, qtl_type)
-        
+    def load_config(self, config_file):
+        """Load configuration from YAML file with validation"""
+        if not config_file:
+            config_file = "config/config.yaml"
+            
+        if not os.path.exists(config_file):
+            raise FileNotFoundError(f"Config file not found: {config_file}")
+            
+        try:
+            with open(config_file, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            mandatory_fields = ['results_dir', 'input_files']
+            for field in mandatory_fields:
+                if field not in config:
+                    raise ValueError(f"'{field}' must be specified in the config file")
+            
+            mandatory_inputs = ['genotypes', 'covariates', 'annotations']
+            for input_file in mandatory_inputs:
+                if input_file not in config['input_files']:
+                    raise ValueError(f"'{input_file}' must be specified in 'input_files'")
+            
+            config.setdefault('genotype_processing', {})
+            processing_defaults = {
+                'auto_detect_format': True,
+                'filter_variants': True,
+                'normalize_chromosomes': True,
+                'handle_multiallelic': True,
+                'remove_phasing': True,
+                'min_maf': 0.01,
+                'min_call_rate': 0.95,
+                'prefer_plink': True
+            }
+            for key, value in processing_defaults.items():
+                config['genotype_processing'].setdefault(key, value)
+            
+            config.setdefault('large_data', {})
+            large_data_defaults = {
+                'min_memory_gb': 16,
+                'min_disk_gb': 50,
+                'command_timeout': 3600,
+                'process_by_chromosome': True,
+                'force_plink': False,
+                'monitor_resources': True
+            }
+            for key, value in large_data_defaults.items():
+                config['large_data'].setdefault(key, value)
+            
+            config.setdefault('analysis', {})
+            config['analysis'].setdefault('qtl_types', 'all')
+            config['analysis'].setdefault('qtl_mode', 'cis')
+            config['analysis'].setdefault('run_gwas', False)
+            
+            config.setdefault('qtl', {})
+            qtl_defaults = {
+                'cis_window': 1000000,
+                'permutations': 1000,
+                'fdr_threshold': 0.05,
+                'maf_threshold': 0.05,
+                'min_maf': 0.01,
+                'min_call_rate': 0.95,
+                'chunk_genes': 100,
+                'chunk_variants': 10000
+            }
+            for key, value in qtl_defaults.items():
+                config['qtl'].setdefault(key, value)
+            
+            config.setdefault('enhanced_qc', {'enable': True})
+            config.setdefault('interaction_analysis', {'enable': False})
+            config.setdefault('fine_mapping', {'enable': False})
+            
+            config.setdefault('performance', {})
+            performance_defaults = {
+                'num_threads': 4,
+                'memory_gb': 8,
+                'chunk_size': 100,
+                'max_chunk_memory': 4
+            }
+            for key, value in performance_defaults.items():
+                config['performance'].setdefault(key, value)
+            
+            config.setdefault('plotting', {'enabled': True})
+            config.setdefault('output', {'generate_report': True})
+            config.setdefault('qc', {'check_sample_concordance': True})
+            
+            config.setdefault('paths', {})
+            tool_defaults = {
+                'qtltools': 'qtltools',
+                'bcftools': 'bcftools', 
+                'bgzip': 'bgzip',
+                'tabix': 'tabix',
+                'python': 'python3',
+                'plink': 'plink',
+                'R': 'R'
+            }
+            for key, value in tool_defaults.items():
+                config['paths'].setdefault(key, value)
+            
+            return config
+            
+        except Exception as e:
+            logging.error(f"Error loading config file: {e}")
+            raise
+            
+    def setup_directories(self):
+        """Create only essential directories using directory manager"""
+        try:
+            self.directory_manager = get_directory_manager(self.results_dir)
+            self.directory_manager.initialize_pipeline_directories()
+            
+            # Set up directory attributes for backward compatibility
+            self.logs_dir = self.directory_manager.get_directory('system', 'logs')
+            self.temp_dir = self.directory_manager.get_directory('system', 'temporary_files')
+            
+            self.logger.info(f"✅ Essential directories created in: {self.results_dir}")
+            self.logger.info("📁 Analysis directories will be created by processing modules as needed")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Directory setup failed: {e}")
+            # Fallback: create minimal directory structure
+            self.logs_dir = self.results_dir / 'system' / 'logs'
+            self.temp_dir = self.results_dir / 'system' / 'temporary_files'
+            self.logs_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+            self.logger.warning("⚠️ Using fallback directory structure")
+            
     def run_pipeline(self):
         """Execute the complete analysis pipeline with resource monitoring"""
         try:
-            # Monitor system resources
             if self.monitor_resources:
                 self.monitor_system_resources()
             
-            # Step 1: Comprehensive input validation
             self.logger.info("📋 Step 1: Validating inputs...")
             validation.validate_inputs(self.config)
             
-            # Step 2: Enhanced Quality Control
             if self.config.get('enhanced_qc', {}).get('enable', False):
                 self.logger.info("🔍 Step 2: Running enhanced QC...")
                 qc_results = self.run_enhanced_qc()
                 self.results['qc'] = qc_results
             
-            # Step 2.5: Generate normalization comparison reports if enabled
             if self.config.get('enhanced_qc', {}).get('generate_normalization_plots', True):
                 self.logger.info("📊 Generating normalization comparison reports...")
                 try:
-                    comparison = NormalizationComparison(self.config, self.results_dir)
-                    # This will be called later during phenotype preparation, but we initialize here
+                    # Setup directories for normalization comparison
+                    norm_dirs = get_module_directories(
+                        'normalization_comparison',
+                        ['comparison_analysis'],
+                        str(self.results_dir)
+                    )
+                    comparison = NormalizationComparison(self.config, str(self.results_dir))
                     self.logger.info("✅ Normalization comparison setup completed")
                 except Exception as e:
                     self.logger.warning(f"⚠️ Normalization comparison setup failed: {e}")
                     
-            # Step 3: Prepare genotype data with enhanced processing
             self.logger.info("🧬 Step 3: Preparing genotype data...")
-            genotype_file = qtl_analysis.prepare_genotypes(self.config, self.results_dir)
+            genotype_file = qtl_analysis.prepare_genotypes(self.config, str(self.results_dir))
             
-            # Alternative: Use modular genotype processing if available
             try:
                 from scripts.utils.genotype_processing import process_genotypes
                 self.logger.info("🔄 Using modular genotype processing...")
                 genotype_file = process_genotypes(self.config)
             except ImportError:
                 self.logger.info("🔧 Using standard genotype processing...")
-                genotype_file = qtl_analysis.prepare_genotypes(self.config, self.results_dir)
+                genotype_file = qtl_analysis.prepare_genotypes(self.config, str(self.results_dir))
             
-            # Step 4: Run QTL analyses (cis/trans/both)
             self.logger.info("🔍 Step 4: Running QTL analyses...")
             qtl_results = self.run_qtl_analyses(genotype_file)
             self.results['qtl'] = qtl_results
             
-            # Step 5: Run GWAS analysis if requested
             if self.config['analysis'].get('run_gwas', False):
                 self.logger.info("📊 Step 5: Running GWAS analysis...")
                 gwas_results = self.run_gwas_analysis(genotype_file)
                 self.results['gwas'] = gwas_results
             
-            # Step 6: Run advanced analyses
             self.logger.info("🔬 Step 6: Running advanced analyses...")
             advanced_results = self.run_advanced_analyses(genotype_file)
             self.results['advanced'] = advanced_results
             
-            # Step 7: Generate comprehensive plots
             if self.config['plotting'].get('enabled', True):
                 self.logger.info("📈 Step 7: Generating plots...")
                 self.generate_plots()
             
-            # Step 8: Generate detailed reports
             self.logger.info("📝 Step 8: Generating reports...")
             self.generate_reports()
             
-            # Clean up temporary files
             self.cleanup_temp_files()
             
-            # Calculate and log runtime
             runtime = datetime.now() - self.start_time
             self.logger.info(f"✅ Pipeline completed successfully in {runtime}")
             self.logger.info(f"💡 You can also run individual modules using: python run_QTLPipeline.py --list")
@@ -311,7 +287,6 @@ class QTLPipeline:
             
         except Exception as e:
             self.logger.error(f"❌ Pipeline failed: {e}")
-            # Clean up on failure
             self.cleanup_temp_files()
             raise
             
@@ -324,7 +299,6 @@ class QTLPipeline:
         self.logger.info(f"   Memory: {memory.percent:.1f}% used ({memory.available / (1024**3):.1f} GB available)")
         self.logger.info(f"   Disk: {disk.percent:.1f}% used ({disk.free / (1024**3):.1f} GB free)")
         
-        # Warn if resources are low
         if memory.percent > 90:
             self.logger.warning("⚠️  High memory usage detected!")
         if disk.percent > 90:
@@ -334,7 +308,7 @@ class QTLPipeline:
         """Clean up temporary files to free disk space"""
         self.logger.info("🧹 Cleaning up temporary files...")
         
-        temp_dirs = [self.temp_dir, self.large_data_cache_dir]
+        temp_dirs = [self.temp_dir]
         
         for temp_dir in temp_dirs:
             if os.path.exists(temp_dir):
@@ -354,22 +328,31 @@ class QTLPipeline:
     def run_enhanced_qc(self):
         """Run enhanced quality control with proper mapping"""
         try:
+            # Setup QC directories
+            qc_dirs = get_module_directories(
+                'enhanced_qc',
+                [
+                    'processed_data',
+                    {'processed_data': ['quality_control']},
+                    'reports',
+                    {'reports': ['qc_reports']}
+                ],
+                str(self.results_dir)
+            )
+            
             qc_processor = EnhancedQC(self.config)
             
-            # Get QTL types for QC
             qtl_types = self.get_qtl_types()
             
-            # Build phenotype_files dictionary for backward compatibility
             phenotype_files = {}
             for qtl_type in qtl_types:
                 config_key = self.map_qtl_type_to_config_key(qtl_type)
                 phenotype_files[qtl_type] = self.config['input_files'].get(config_key)
             
-            # Run comprehensive QC - FIXED: Pass phenotype_files dictionary
             qc_results = qc_processor.run_comprehensive_qc(
                 self.config['input_files']['genotypes'],
-                phenotype_files,  # FIX: Pass phenotype_files dict for backward compatibility
-                self.results_dir
+                phenotype_files,
+                str(self.results_dir)
             )
             
             return qc_results
@@ -384,12 +367,21 @@ class QTLPipeline:
         qtl_mode = self.config['analysis'].get('qtl_mode', 'cis')
         results = {}
         
+        # Setup QTL analysis directories
+        qtl_dirs = get_module_directories(
+            'qtl_analysis',
+            [
+                'analysis_results',
+                {'analysis_results': ['qtl_mapping']}
+            ],
+            str(self.results_dir)
+        )
+        
         for qtl_type in qtl_types:
             self.logger.info(f"🔬 Running {qtl_type.upper()} analysis ({qtl_mode})...")
             results[qtl_type] = {}
             
             try:
-                # Get phenotype file with proper mapping
                 config_key = self.map_qtl_type_to_config_key(qtl_type)
                 phenotype_file = self.config['input_files'].get(config_key)
                 
@@ -397,19 +389,17 @@ class QTLPipeline:
                     self.logger.error(f"❌ Phenotype file not found for {qtl_type}: {phenotype_file}")
                     continue
                 
-                # Run cis-QTL if requested
                 if qtl_mode in ['cis', 'both']:
                     cis_result = qtl_analysis.run_cis_analysis(
-                        self.config, genotype_file, qtl_type, self.qtl_results_dir
+                        self.config, genotype_file, qtl_type, str(self.results_dir)
                     )
                     results[qtl_type]['cis'] = cis_result
                     status_msg = "✅" if cis_result['status'] == 'completed' else "❌"
                     self.logger.info(f"{status_msg} {qtl_type.upper()} cis: {cis_result.get('significant_count', 0)} significant")
                 
-                # Run trans-QTL if requested  
                 if qtl_mode in ['trans', 'both']:
                     trans_result = qtl_analysis.run_trans_analysis(
-                        self.config, genotype_file, qtl_type, self.qtl_results_dir
+                        self.config, genotype_file, qtl_type, str(self.results_dir)
                     )
                     results[qtl_type]['trans'] = trans_result
                     status_msg = "✅" if trans_result['status'] == 'completed' else "❌"
@@ -435,8 +425,18 @@ class QTLPipeline:
     def run_gwas_analysis(self, genotype_file):
         """Run GWAS analysis if requested"""
         try:
+            # Setup GWAS directories
+            gwas_dirs = get_module_directories(
+                'gwas_analysis',
+                [
+                    'analysis_results',
+                    {'analysis_results': ['gwas_results']}
+                ],
+                str(self.results_dir)
+            )
+            
             result = gwas_analysis.run_gwas_analysis(
-                self.config, genotype_file, self.gwas_results_dir
+                self.config, genotype_file, str(self.results_dir)
             )
             return result
         except Exception as e:
@@ -450,23 +450,30 @@ class QTLPipeline:
         """Run advanced analyses like interaction and fine-mapping with proper mapping"""
         advanced_results = {}
         
-        # Interaction analysis
         if self.config.get('interaction_analysis', {}).get('enable', False) and InteractionAnalysis:
             try:
+                # Setup interaction analysis directories
+                interaction_dirs = get_module_directories(
+                    'interaction_analysis',
+                    [
+                        'analysis_results',
+                        {'analysis_results': ['interaction_analysis']}
+                    ],
+                    str(self.results_dir)
+                )
+                
                 self.logger.info("🤝 Running interaction analysis...")
                 interaction_analyzer = InteractionAnalysis(self.config)
                 
-                # Run interaction analysis for each QTL type with proper mapping
                 for qtl_type in self.get_qtl_types():
                     config_key = self.map_qtl_type_to_config_key(qtl_type)
                     phenotype_file = self.config['input_files'].get(config_key)
                     if phenotype_file and os.path.exists(phenotype_file):
-                        # FIXED: Pass qtl_type parameter to interaction analysis
                         interaction_results = interaction_analyzer.run_interaction_analysis(
                             genotype_file, phenotype_file, 
                             self.config['input_files']['covariates'],
-                            self.interaction_results_dir,
-                            qtl_type  # FIX: Add qtl_type parameter
+                            str(self.results_dir),
+                            qtl_type
                         )
                         advanced_results[f'interaction_{qtl_type}'] = interaction_results
                         
@@ -474,24 +481,31 @@ class QTLPipeline:
                 self.logger.error(f"❌ Interaction analysis failed: {e}")
                 advanced_results['interaction'] = {'status': 'failed', 'error': str(e)}
         
-        # Fine-mapping - FIXED: Properly call the fine-mapping function with all required arguments
         if self.config.get('fine_mapping', {}).get('enable', False) and FineMapping:
             try:
+                # Setup fine-mapping directories
+                fine_mapping_dirs = get_module_directories(
+                    'fine_mapping',
+                    [
+                        'analysis_results',
+                        {'analysis_results': ['fine_mapping']}
+                    ],
+                    str(self.results_dir)
+                )
+                
                 self.logger.info("🎯 Running fine-mapping...")
                 
-                # Run fine-mapping for significant QTL results
                 if 'qtl' in self.results:
                     for qtl_type, result in self.results['qtl'].items():
                         if 'cis' in result and result['cis']['status'] == 'completed':
                             result_file = result['cis'].get('result_file')
                             if result_file and os.path.exists(result_file):
-                                # FIXED: Properly call fine-mapping with all required arguments
                                 finemap_results = run_fine_mapping(
-                                    self.config,  # config
-                                    result_file,  # qtl_results_file
-                                    genotype_file,  # vcf_file
-                                    self.fine_mapping_results_dir,  # output_dir
-                                    qtl_type  # qtl_type
+                                    self.config,
+                                    result_file,
+                                    genotype_file,
+                                    str(self.results_dir),
+                                    qtl_type
                                 )
                                 advanced_results[f'fine_mapping_{qtl_type}_cis'] = finemap_results
                                 
@@ -521,12 +535,29 @@ class QTLPipeline:
         else:
             raise ValueError(f"Invalid qtl_types configuration: {config_types}")
             
+    def map_qtl_type_to_config_key(self, qtl_type):
+        """Map QTL analysis types to config file keys"""
+        mapping = {
+            'eqtl': 'expression',
+            'pqtl': 'protein', 
+            'sqtl': 'splicing'
+        }
+        return mapping.get(qtl_type, qtl_type)
+        
     def generate_plots(self):
         """Generate all requested plots"""
-        # Basic plotting
-        plotter = plotting.QTLPlotter(self.config, self.results, self.plots_dir)
+        # Setup visualization directories
+        viz_dirs = get_module_directories(
+            'visualization',
+            [
+                'visualization',
+                {'visualization': ['summary_plots', 'interactive_plots', 'manhattan_plots', 'qq_plots']}
+            ],
+            str(self.results_dir)
+        )
         
-        # Generate QTL plots
+        plotter = plotting.QTLPlotter(self.config, self.results, str(self.results_dir))
+        
         if 'qtl' in self.results:
             for qtl_type, result in self.results['qtl'].items():
                 if 'cis' in result and result['cis']['status'] == 'completed':
@@ -534,20 +565,16 @@ class QTLPipeline:
                 if 'trans' in result and result['trans']['status'] == 'completed':
                     plotter.create_trans_plots(qtl_type, result['trans'])
         
-        # Generate GWAS plots
         if 'gwas' in self.results and self.results['gwas']['status'] == 'completed':
             plotter.create_gwas_plots(self.results['gwas'])
             
-        # Generate summary plots
         plotter.create_summary_plots()
         
-        # Advanced plotting with interactive features
         if self.config['plotting'].get('plot_types', []):
             if 'interactive' in self.config['plotting']['plot_types']:
                 try:
-                    advanced_plotter = AdvancedPlotter(self.config, self.results_dir)
+                    advanced_plotter = AdvancedPlotter(self.config, str(self.results_dir))
                     
-                    # Create interactive plots for significant results
                     if 'qtl' in self.results:
                         for qtl_type, result in self.results['qtl'].items():
                             if 'cis' in result and result['cis']['status'] == 'completed':
@@ -559,7 +586,6 @@ class QTLPipeline:
                                         f"{qtl_type.upper()} cis-QTL Manhattan Plot"
                                     )
                     
-                    # Create multi-panel summary
                     advanced_plotter.create_multi_panel_figure(self.results, "comprehensive_summary")
                     
                 except Exception as e:
@@ -567,40 +593,44 @@ class QTLPipeline:
         
     def generate_reports(self):
         """Generate comprehensive reports"""
+        # Setup report directories
+        report_dirs = get_module_directories(
+            'report_generation',
+            [
+                'reports',
+                {'reports': ['pipeline_reports', 'analysis_reports']}
+            ],
+            str(self.results_dir)
+        )
+        
         report_data = {
             'results': self.results,
             'config': self.config,
             'runtime': str(datetime.now() - self.start_time),
             'timestamp': self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
-            'results_dir': self.results_dir
+            'results_dir': str(self.results_dir)
         }
         
-        # Generate HTML report
         if self.config['output'].get('generate_report', True):
-            report_file = os.path.join(self.reports_dir, "analysis_report.html")
-            report_generator.generate_html_report(report_data, report_file)
+            report_file = self.results_dir / "reports" / "pipeline_reports" / "analysis_report.html"
+            report_generator.generate_html_report(report_data, str(report_file))
             self.logger.info(f"📄 HTML report generated: {report_file}")
         
-        # Generate summary report
-        summary_file = os.path.join(self.results_dir, "pipeline_summary.txt")
-        report_generator.generate_summary_report(report_data, summary_file)
+        summary_file = self.results_dir / "reports" / "analysis_reports" / "pipeline_summary.txt"
+        report_generator.generate_summary_report(report_data, str(summary_file))
         self.logger.info(f"📋 Summary report generated: {summary_file}")
         
-        # Save results metadata
-        metadata_file = os.path.join(self.results_dir, "results_metadata.json")
+        metadata_file = self.results_dir / "system" / "logs" / "results_metadata.json"
         with open(metadata_file, 'w') as f:
             json.dump(self.results, f, indent=2, default=str)
         self.logger.info(f"💾 Results metadata saved: {metadata_file}")
         
-        # Generate enhanced QC report if available
         if 'qc' in self.results and self.results['qc']:
-            qc_report_file = os.path.join(self.qc_reports_dir, "enhanced_qc_report.html")
-            # This would call a method from EnhancedQC to generate a detailed report
-            self.logger.info(f"🔍 Enhanced QC report available in: {self.qc_reports_dir}")
+            qc_report_dir = self.results_dir / "reports" / "qc_reports"
+            self.logger.info(f"🔍 Enhanced QC report available in: {qc_report_dir}")
 
 
 if __name__ == "__main__":
-    """Main entry point for the pipeline"""
     if len(sys.argv) > 1:
         config_file = sys.argv[1]
     else:

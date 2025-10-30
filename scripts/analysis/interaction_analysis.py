@@ -11,6 +11,7 @@ Enhanced with:
 - Memory-efficient data processing
 - Advanced statistical models
 - Module-level function for pipeline integration
+- Consistent directory management using DirectoryManager
 """
 
 import os
@@ -28,6 +29,13 @@ from pathlib import Path
 import time
 import json
 import sys
+
+# Import directory manager
+try:
+    from scripts.utils.directory_manager import get_module_directories
+except ImportError as e:
+    logging.warning(f"Directory manager not available: {e}")
+    get_module_directories = None
 
 warnings.filterwarnings('ignore')
 
@@ -65,11 +73,63 @@ class InteractionAnalysis:
         self.performance_config = config.get('performance', {})
         self.max_workers = self.performance_config.get('max_workers', 4)
         self.chunk_size = self.performance_config.get('chunk_size', 100)
+        self.results_dir = None
         
+    def setup_directories(self, results_dir: str):
+        """Setup directories using directory manager"""
+        self.results_dir = Path(results_dir)
+        
+        try:
+            if get_module_directories:
+                self.dirs = get_module_directories(
+                    'interaction_analysis',
+                    [
+                        'analysis_results',
+                        {'analysis_results': ['interaction_analysis']},
+                        'system',
+                        {'system': ['temporary_files']},
+                        'reports',
+                        {'reports': ['analysis_reports']}
+                    ],
+                    str(self.results_dir)
+                )
+                self.interaction_dir = self.dirs['analysis_results_interaction_analysis']
+                self.temp_dir = self.dirs['system_temporary_files']
+                self.reports_dir = self.dirs['reports_analysis_reports']
+                
+                logger.info(f"✅ Interaction analysis directories setup in: {self.interaction_dir}")
+            else:
+                # Fallback directory creation
+                self.interaction_dir = self.results_dir / "analysis_results" / "interaction_analysis"
+                self.temp_dir = self.results_dir / "system" / "temporary_files"
+                self.reports_dir = self.results_dir / "reports" / "analysis_reports"
+                
+                self.interaction_dir.mkdir(parents=True, exist_ok=True)
+                self.temp_dir.mkdir(parents=True, exist_ok=True)
+                self.reports_dir.mkdir(parents=True, exist_ok=True)
+                
+                logger.info(f"✅ Fallback directories created in: {self.interaction_dir}")
+                
+        except Exception as e:
+            logger.error(f"❌ Directory setup failed: {e}")
+            # Ultimate fallback - maintain original structure for maximum compatibility
+            self.interaction_dir = self.results_dir / "interaction_analysis"
+            self.temp_dir = self.results_dir / "temp_interaction"
+            self.reports_dir = self.results_dir / "reports"
+            
+            self.interaction_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+            self.reports_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.warning(f"⚠️ Using ultimate fallback directories: {self.interaction_dir}")
+    
     def run_interaction_analysis(self, vcf_file: str, phenotype_file: str, 
                                covariates_file: str, output_dir: str, qtl_type: str) -> Dict[str, Any]:
         """Run interaction QTL analysis for specific QTL type with enhanced performance"""
         logger.info(f"🔍 Running {qtl_type} interaction QTL analysis...")
+        
+        # Setup directories first
+        self.setup_directories(output_dir)
         
         if not self.interaction_config.get('enable', False):
             logger.info("ℹ️ Interaction analysis disabled in config")
@@ -77,7 +137,7 @@ class InteractionAnalysis:
         
         try:
             # Validate inputs
-            if not self._validate_inputs(vcf_file, phenotype_file, covariates_file, output_dir):
+            if not self._validate_inputs(vcf_file, phenotype_file, covariates_file):
                 return {'status': 'error', 'message': 'Input validation failed', 'qtl_type': qtl_type}
             
             # Prepare data with memory optimization
@@ -95,17 +155,18 @@ class InteractionAnalysis:
             
             # Process each covariate in parallel
             results = self._process_covariates_parallel(vcf_file, pheno_df, cov_df, 
-                                                       interaction_covariates, output_dir, qtl_type)
+                                                       interaction_covariates, qtl_type)
             
             # Generate comprehensive summary
-            summary = self.generate_interaction_summary(results, output_dir, qtl_type)
+            summary = self.generate_interaction_summary(results, qtl_type)
             
             final_result = {
                 'status': 'completed',
                 'qtl_type': qtl_type,
                 'covariates_tested': len(interaction_covariates),
                 'results': results,
-                'summary': summary
+                'summary': summary,
+                'output_dir': str(self.interaction_dir)
             }
             
             logger.info(f"✅ {qtl_type} interaction analysis completed")
@@ -118,7 +179,7 @@ class InteractionAnalysis:
             return {'status': 'error', 'message': str(e), 'qtl_type': qtl_type}
     
     def _validate_inputs(self, vcf_file: str, phenotype_file: str, 
-                        covariates_file: str, output_dir: str) -> bool:
+                        covariates_file: str) -> bool:
         """Validate all input files and directories"""
         files_to_check = {
             'VCF': vcf_file,
@@ -131,12 +192,7 @@ class InteractionAnalysis:
                 logger.error(f"❌ {file_type} file not found: {file_path}")
                 return False
         
-        try:
-            Path(output_dir).mkdir(parents=True, exist_ok=True)
-            return True
-        except Exception as e:
-            logger.error(f"❌ Cannot create output directory {output_dir}: {e}")
-            return False
+        return True
     
     def _load_data(self, phenotype_file: str, covariates_file: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         """Load phenotype and covariates data with memory optimization"""
@@ -211,7 +267,7 @@ class InteractionAnalysis:
     
     def _process_covariates_parallel(self, vcf_file: str, pheno_df: pd.DataFrame, 
                                    cov_df: pd.DataFrame, interaction_covariates: List[str],
-                                   output_dir: str, qtl_type: str) -> Dict[str, Any]:
+                                   qtl_type: str) -> Dict[str, Any]:
         """Process interaction covariates in parallel"""
         results = {}
         
@@ -225,7 +281,7 @@ class InteractionAnalysis:
         if len(interaction_covariates) == 1:
             covariate = interaction_covariates[0]
             try:
-                cov_results = self.test_covariate_interactions(vcf_file, pheno_df, cov_df, covariate, output_dir, qtl_type)
+                cov_results = self.test_covariate_interactions(vcf_file, pheno_df, cov_df, covariate, qtl_type)
                 results[covariate] = cov_results
             except Exception as e:
                 logger.error(f"❌ Interaction analysis failed for {covariate}: {e}")
@@ -235,7 +291,7 @@ class InteractionAnalysis:
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 future_to_covariate = {
                     executor.submit(self.test_covariate_interactions, vcf_file, pheno_df, 
-                                  cov_df, covariate, output_dir, qtl_type): covariate
+                                  cov_df, covariate, qtl_type): covariate
                     for covariate in interaction_covariates
                 }
                 
@@ -253,7 +309,7 @@ class InteractionAnalysis:
     
     def test_covariate_interactions(self, vcf_file: str, pheno_df: pd.DataFrame, 
                                   cov_df: pd.DataFrame, covariate: str, 
-                                  output_dir: str, qtl_type: str) -> Dict[str, Any]:
+                                  qtl_type: str) -> Dict[str, Any]:
         """Test interactions for a specific covariate with multiple methods"""
         start_time = time.time()
         
@@ -306,15 +362,15 @@ class InteractionAnalysis:
                 }
                 
                 # Save detailed results
-                output_file = os.path.join(output_dir, f"interaction_{qtl_type}_{covariate}_results.txt")
+                output_file = self.interaction_dir / f"interaction_{qtl_type}_{covariate}_results.txt"
                 results_df.to_csv(output_file, sep='\t', index=False)
-                results['results_file'] = output_file
+                results['results_file'] = str(output_file)
                 
                 # Save significant results separately
                 if len(significant) > 0:
-                    sig_output_file = os.path.join(output_dir, f"interaction_{qtl_type}_{covariate}_significant.txt")
+                    sig_output_file = self.interaction_dir / f"interaction_{qtl_type}_{covariate}_significant.txt"
                     significant.to_csv(sig_output_file, sep='\t', index=False)
-                    results['significant_results_file'] = sig_output_file
+                    results['significant_results_file'] = str(sig_output_file)
                     logger.info(f"✅ {qtl_type} {covariate}: {len(significant)} significant interactions at FDR < {fdr_threshold}")
                 else:
                     logger.info(f"ℹ️ {qtl_type} {covariate}: No significant interactions at FDR < {fdr_threshold}")
@@ -509,13 +565,13 @@ class InteractionAnalysis:
         
         return full_fdr
     
-    def generate_interaction_summary(self, results: Dict[str, Any], output_dir: str, qtl_type: str) -> Dict[str, Any]:
+    def generate_interaction_summary(self, results: Dict[str, Any], qtl_type: str) -> Dict[str, Any]:
         """Generate comprehensive summary of interaction analysis"""
         logger.info(f"📊 Generating {qtl_type} interaction analysis summary...")
         
         try:
-            summary_file = os.path.join(output_dir, f"interaction_analysis_{qtl_type}_summary.txt")
-            json_summary_file = os.path.join(output_dir, f"interaction_analysis_{qtl_type}_summary.json")
+            summary_file = self.reports_dir / f"interaction_analysis_{qtl_type}_summary.txt"
+            json_summary_file = self.reports_dir / f"interaction_analysis_{qtl_type}_summary.json"
             
             total_significant = 0
             total_tested = 0
@@ -630,6 +686,37 @@ class InteractionAnalysis:
 # Export the main function for pipeline integration
 __all__ = ['run_interaction_analysis', 'InteractionAnalysis', 'map_qtl_type_to_config_key']
 
+# Backward compatibility wrapper function
+def run_interaction_analysis_wrapper(config: Dict[str, Any], qtl_type: str, results_dir: str) -> Dict[str, Any]:
+    """
+    Wrapper function for backward compatibility with pipeline
+    This function provides the expected interface for the pipeline
+    """
+    logger.info(f"🔍 Starting interaction analysis wrapper for {qtl_type}")
+    
+    try:
+        # Construct file paths based on qtl_type and results_dir
+        vcf_file = config['input_files']['genotypes']
+        phenotype_file = os.path.join(results_dir, f"{qtl_type}_normalized.tsv")
+        covariates_file = config['input_files']['covariates']
+        
+        # Check if required files exist
+        if not os.path.exists(phenotype_file):
+            logger.warning(f"❌ Phenotype file not found: {phenotype_file}")
+            logger.info("ℹ️ Interaction analysis requires normalized phenotype data. Run normalization first.")
+            return {'status': 'failed', 'error': 'Phenotype file not found'}
+        
+        if not os.path.exists(covariates_file):
+            logger.warning(f"❌ Covariates file not found: {covariates_file}")
+            return {'status': 'failed', 'error': 'Covariates file not found'}
+        
+        # Run interaction analysis
+        return run_interaction_analysis(config, vcf_file, phenotype_file, covariates_file, results_dir, qtl_type)
+        
+    except Exception as e:
+        logger.error(f"❌ Interaction analysis wrapper failed for {qtl_type}: {e}")
+        return {'status': 'failed', 'error': str(e)}
+
 # Example usage and testing
 if __name__ == "__main__":
     # Example configuration
@@ -644,6 +731,10 @@ if __name__ == "__main__":
         'performance': {
             'max_workers': 4,
             'chunk_size': 100
+        },
+        'input_files': {
+            'genotypes': 'example.vcf',
+            'covariates': 'covariates.txt'
         }
     }
     

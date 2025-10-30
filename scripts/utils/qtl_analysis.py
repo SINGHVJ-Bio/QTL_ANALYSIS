@@ -33,6 +33,16 @@ if not logger.handlers:
 
 warnings.filterwarnings('ignore')
 
+# Import centralized directory manager
+try:
+    from scripts.utils.directory_manager import get_directory_manager, get_module_directories
+except ImportError:
+    try:
+        from directory_manager import get_directory_manager, get_module_directories
+    except ImportError:
+        logger.error("Directory manager module not available")
+        raise
+
 # Optional imports with fallbacks - enhanced for both standalone and pipeline execution
 try:
     # Try absolute import first (for pipeline)
@@ -236,13 +246,18 @@ class FileFormatValidator:
     def __init__(self, config):
         self.config = config
         self.results_dir = config.get('results_dir', 'results')
+        
+        # Use centralized directory manager
+        self.dm = get_directory_manager(self.results_dir)
         self.plink_manager = PLINKVersionManager(config)
         
-        # Create organized directory structure
-        self.filtered_genotypes_dir = os.path.join(self.results_dir, "filtered_genotypes")
-        self.tensorqtl_genotype_dir = os.path.join(self.results_dir, "tensorqtl_genotype")
-        os.makedirs(self.filtered_genotypes_dir, exist_ok=True)
-        os.makedirs(self.tensorqtl_genotype_dir, exist_ok=True)
+        # Use directory manager for organized directory structure
+        self.filtered_genotypes_dir = self.dm.get_directory('processed_data', 'genotypes') / 'filtered'
+        self.tensorqtl_genotype_dir = self.dm.get_directory('processed_data', 'genotypes') / 'tensorqtl_ready'
+        
+        # Create subdirectories
+        self.filtered_genotypes_dir.mkdir(parents=True, exist_ok=True)
+        self.tensorqtl_genotype_dir.mkdir(parents=True, exist_ok=True)
         
     def validate_all_input_files(self):
         """Validate all input files for tensorQTL compatibility"""
@@ -284,7 +299,7 @@ class FileFormatValidator:
                         'converted_file': plink_file, 
                         'plink_version': plink_version,
                         'plink_format': plink_format,
-                        'tensorqtl_genotype_dir': self.tensorqtl_genotype_dir
+                        'tensorqtl_genotype_dir': str(self.tensorqtl_genotype_dir)
                     })
                 else:
                     result['error'] = "VCF processing failed"
@@ -389,14 +404,14 @@ class FileFormatValidator:
         """Process VCF file: filter with PLINK and convert to PLINK format"""
         try:
             # Step 1: Filter VCF and store in filtered_genotypes directory
-            filtered_vcf_base = os.path.join(self.filtered_genotypes_dir, "genotypes_filtered")
-            filtered_vcf_file = filtered_vcf_base + ".vcf"
+            filtered_vcf_base = self.filtered_genotypes_dir / "genotypes_filtered"
+            filtered_vcf_file = filtered_vcf_base.with_suffix(".vcf")
             
-            if not os.path.exists(filtered_vcf_file) and not os.path.exists(filtered_vcf_file + ".gz"):
+            if not os.path.exists(filtered_vcf_file) and not os.path.exists(str(filtered_vcf_file) + ".gz"):
                 logger.info("Filtering VCF file using PLINK...")
                 plink_threads = self.config.get('genotype_processing', {}).get('plink_threads', 1)
                 cmd, output_file, plink_type = self.plink_manager.get_vcf_filtering_command(
-                    vcf_file, filtered_vcf_base, plink_threads
+                    vcf_file, str(filtered_vcf_base), plink_threads
                 )
                 
                 if run_command(cmd, "VCF filtering", self.config, check=False):
@@ -413,28 +428,28 @@ class FileFormatValidator:
                 if os.path.exists(filtered_vcf_file):
                     filtered_vcf_file = filtered_vcf_file
                 else:
-                    filtered_vcf_file = filtered_vcf_file + ".gz"
+                    filtered_vcf_file = str(filtered_vcf_file) + ".gz"
                 logger.info("Filtered VCF already exists, skipping filtering")
             
             # Step 2: Convert filtered VCF to PLINK2 format (preferred) for tensorQTL
-            plink_base = os.path.join(self.tensorqtl_genotype_dir, "genotypes_plink")
+            plink_base = self.tensorqtl_genotype_dir / "genotypes_plink"
             
             # Check if PLINK2 format already exists
-            if self._check_existing_plink_files(plink_base, format='plink2'):
+            if self._check_existing_plink_files(str(plink_base), format='plink2'):
                 logger.info("PLINK2 files already exist in tensorqtl_genotype directory")
-                return self._get_plink_genotype_file(plink_base, format='plink2'), 'plink2', 'plink2'
+                return self._get_plink_genotype_file(str(plink_base), format='plink2'), 'plink2', 'plink2'
             
             # Check if PLINK1.9 format already exists
-            if self._check_existing_plink_files(plink_base, format='plink1.9'):
+            if self._check_existing_plink_files(str(plink_base), format='plink1.9'):
                 logger.info("PLINK1.9 files already exist in tensorqtl_genotype directory")
-                return self._get_plink_genotype_file(plink_base, format='plink1.9'), 'plink1.9', 'plink1.9'
+                return self._get_plink_genotype_file(str(plink_base), format='plink1.9'), 'plink1.9', 'plink1.9'
             
             # Prefer PLINK2 format but fallback to PLINK1.9
             preferred_format = 'plink2'
             logger.info(f"Converting filtered VCF to {preferred_format.upper()} format for tensorQTL...")
             plink_threads = self.config.get('genotype_processing', {}).get('plink_threads', 1)
             cmd, output_files, plink_type = self.plink_manager.get_vcf_conversion_command(
-                filtered_vcf_file, plink_base, output_format=preferred_format, plink_threads=plink_threads
+                filtered_vcf_file, str(plink_base), output_format=preferred_format, plink_threads=plink_threads
             )
             
             if run_command(cmd, f"VCF to {preferred_format.upper()} conversion", self.config, check=False):
@@ -445,7 +460,7 @@ class FileFormatValidator:
             fallback_format = 'plink1.9' if preferred_format == 'plink2' else 'plink2'
             logger.warning(f"{preferred_format.upper()} conversion failed, trying {fallback_format.upper()}")
             cmd, output_files, plink_type = self.plink_manager.get_vcf_conversion_command(
-                filtered_vcf_file, plink_base, output_format=fallback_format, plink_threads=plink_threads
+                filtered_vcf_file, str(plink_base), output_format=fallback_format, plink_threads=plink_threads
             )
             
             if run_command(cmd, f"VCF to {fallback_format.upper()} conversion", self.config, check=False):
@@ -492,12 +507,12 @@ class FileFormatValidator:
         stats = {}
         
         # Check for genotype files in tensorqtl_genotype directory
-        plink_base = os.path.join(self.tensorqtl_genotype_dir, "genotypes_plink")
+        plink_base = self.tensorqtl_genotype_dir / "genotypes_plink"
         
         # Check for PLINK2 format first (preferred)
-        pgen_file = plink_base + ".pgen"
-        pvar_file = plink_base + ".pvar"
-        psam_file = plink_base + ".psam"
+        pgen_file = plink_base.with_suffix(".pgen")
+        pvar_file = plink_base.with_suffix(".pvar")
+        psam_file = plink_base.with_suffix(".psam")
         
         if all(os.path.exists(f) for f in [pgen_file, pvar_file, psam_file]):
             try:
@@ -514,24 +529,24 @@ class FileFormatValidator:
                     'variants': variant_count,
                     'format': 'PLINK2',
                     'files': {
-                        'pgen': pgen_file,
-                        'pvar': pvar_file,
-                        'psam': psam_file
+                        'pgen': str(pgen_file),
+                        'pvar': str(pvar_file),
+                        'psam': str(psam_file)
                     }
                 }
             except Exception as e:
                 logger.warning(f"Could not read PLINK2 stats: {e}")
         
         # Check for PLINK1.9 format as fallback
-        elif self._check_existing_plink_files(plink_base, format='plink1.9'):
+        elif self._check_existing_plink_files(str(plink_base), format='plink1.9'):
             try:
                 # Count variants from bim file
-                bim_file = plink_base + ".bim"
+                bim_file = plink_base.with_suffix(".bim")
                 with open(bim_file, 'r') as f:
                     variant_count = sum(1 for line in f)
                 
                 # Count samples from fam file
-                fam_file = plink_base + ".fam"
+                fam_file = plink_base.with_suffix(".fam")
                 with open(fam_file, 'r') as f:
                     sample_count = sum(1 for line in f)
                 
@@ -540,9 +555,9 @@ class FileFormatValidator:
                     'variants': variant_count,
                     'format': 'PLINK1.9',
                     'files': {
-                        'bed': plink_base + ".bed",
-                        'bim': bim_file,
-                        'fam': fam_file
+                        'bed': str(plink_base.with_suffix(".bed")),
+                        'bim': str(bim_file),
+                        'fam': str(fam_file)
                     }
                 }
             except Exception as e:
@@ -746,6 +761,9 @@ class PhenotypeProcessor:
     def __init__(self, config, results_dir):
         self.config = config
         self.results_dir = results_dir
+        
+        # Use centralized directory manager
+        self.dm = get_directory_manager(results_dir)
         self.data_handler = DynamicDataHandler(config)
         
     def prepare_phenotype_data(self, qtl_type, genotype_samples=None):
@@ -850,6 +868,7 @@ class PhenotypeProcessor:
                 logger.info(f"✅ First 3 samples: {cov_df.index.tolist()[:3]}")
                 logger.info(f"✅ Covariates: {cov_df.columns.tolist()}")
             else:
+                # This would be covariates × samples format (less common)
                 tmp_first_column = first_line.split('\t')[0]
                 logger.info(f"Detected covariates × samples format (first column: '{tmp_first_column}'), transposing...")
                 cov_df = pd.read_csv(exp_covariate_design_file, sep='\t', index_col=0)
@@ -1109,24 +1128,34 @@ class PhenotypeProcessor:
         if not covariate_df.empty:
             covariate_df = covariate_df.apply(pd.to_numeric, errors='coerce')
         
+        # Determine the appropriate directory based on QTL type using centralized directory manager
+        if qtl_type == 'eqtl':
+            data_dir = self.dm.get_directory('processed_data', 'expression')
+        elif qtl_type == 'pqtl':
+            data_dir = self.dm.get_directory('processed_data', 'proteomics')
+        elif qtl_type == 'sqtl':
+            data_dir = self.dm.get_directory('processed_data', 'splicing')
+        else:
+            data_dir = self.dm.get_directory('processed_data', qtl_type)
+        
         # Create BED format for phenotypes
-        bed_file = os.path.join(self.results_dir, f"{qtl_type}_phenotypes.bed.gz")
-        self._create_phenotype_bed_file(normalized_df, bed_file, qtl_type)
+        bed_file = data_dir / f"{qtl_type}_phenotypes.bed.gz"
+        self._create_phenotype_bed_file(normalized_df, str(bed_file), qtl_type)
         
         # Save covariates in the format tensorQTL expects (covariates x samples)
         if not covariate_df.empty:
-            cov_file = os.path.join(self.results_dir, f"{qtl_type}_covariates.txt")
+            cov_file = data_dir / f"{qtl_type}_covariates.txt"
             # Transpose to match tensorQTL's expected format (covariates x samples)
-            covariate_df.T.to_csv(cov_file, sep='\t')
+            covariate_df.T.to_csv(str(cov_file), sep='\t')
         else:
             cov_file = None
         
         logger.info(f"Saved processed data in BED format: {bed_file}")
         
         return {
-            'phenotype_bed': bed_file,
+            'phenotype_bed': str(bed_file),
             'phenotype_df': normalized_df,
-            'covariate_file': cov_file,
+            'covariate_file': str(cov_file) if cov_file else None,
             'covariate_df': covariate_df
         }
 
@@ -1365,6 +1394,127 @@ class GenotypeLoader:
                     pr.variant_df = pr.variants
                 return pr
 
+def save_qtl_results_comprehensive(results_dict, base_prefix, qtl_type, analysis_mode, result_type):
+    """
+    Enhanced function to save all QTL results in proper TSV format with separate folders
+    for nominal and permutation results
+    """
+    # Create appropriate directory structure using centralized directory manager
+    results_dir = Path(base_prefix).parent
+    dm = get_directory_manager(results_dir)
+    
+    if result_type == 'nominal':
+        # Use centralized directory structure for nominal results
+        nominal_dir = dm.get_directory('analysis_results', 'qtl_mapping') / qtl_type / 'nominal'
+        prefix = nominal_dir / f"{qtl_type}_{analysis_mode}_nominal"
+    elif result_type == 'permutation':
+        # Use centralized directory structure for permutation results
+        perm_dir = dm.get_directory('analysis_results', 'qtl_mapping') / qtl_type / 'permutation'
+        prefix = perm_dir / f"{qtl_type}_{analysis_mode}_permutation"
+    else:  # trans
+        # Use centralized directory structure for trans results
+        trans_dir = dm.get_directory('analysis_results', 'qtl_mapping') / qtl_type / 'trans'
+        prefix = trans_dir / f"{qtl_type}_{analysis_mode}"
+    
+    saved_files = {}
+    
+    try:
+        if result_type == 'permutation':
+            # Save permutation results (cis_df)
+            if 'cis_df' in results_dict and results_dict['cis_df'] is not None:
+                cis_df = results_dict['cis_df']
+                if not cis_df.empty:
+                    # Save full permutation results
+                    perm_file = prefix.with_suffix(".cis_qtl.txt.gz")
+                    cis_df.to_csv(str(perm_file), sep='\t', compression='gzip', index=True)
+                    saved_files['permutation_full'] = str(perm_file)
+                    logger.info(f"✅ Saved permutation results: {perm_file}")
+                    
+                    # Save significant results only
+                    if 'qval' in cis_df.columns:
+                        sig_cis_df = cis_df[cis_df['qval'] < 0.05]
+                        sig_file = prefix.with_name(prefix.name + ".cis_qtl.significant.txt.gz")
+                        sig_cis_df.to_csv(str(sig_file), sep='\t', compression='gzip', index=True)
+                        saved_files['permutation_significant'] = str(sig_file)
+                        logger.info(f"✅ Saved significant permutation results: {sig_file} (n={len(sig_cis_df)})")
+                    
+                    # Also save as uncompressed TSV for easy access
+                    tsv_file = prefix.with_suffix(".cis_qtl.tsv")
+                    cis_df.to_csv(str(tsv_file), sep='\t', index=True)
+                    saved_files['permutation_tsv'] = str(tsv_file)
+                    logger.info(f"✅ Saved permutation results as TSV: {tsv_file}")
+        
+        elif result_type == 'nominal':
+            # Save nominal results
+            if 'nominal_prefix' in results_dict:
+                nominal_prefix = results_dict['nominal_prefix']
+                # Convert parquet files to TSV
+                import glob
+                parquet_files = glob.glob(f"{nominal_prefix}.cis_qtl_pairs.*.parquet")
+                
+                for pq_file in parquet_files:
+                    try:
+                        # Read parquet and save as TSV
+                        pairs_df = pd.read_parquet(pq_file)
+                        chrom = os.path.basename(pq_file).split('.')[-2]  # Extract chromosome
+                        tsv_file = prefix.with_name(prefix.name + f".cis_qtl_pairs.{chrom}.tsv.gz")
+                        pairs_df.to_csv(str(tsv_file), sep='\t', compression='gzip', index=False)
+                        saved_files[f'nominal_chr{chrom}'] = str(tsv_file)
+                        logger.info(f"✅ Converted nominal results for chr{chrom}: {tsv_file}")
+                        
+                        # Also save uncompressed version
+                        tsv_uncompressed = prefix.with_name(prefix.name + f".cis_qtl_pairs.{chrom}.tsv")
+                        pairs_df.to_csv(str(tsv_uncompressed), sep='\t', index=False)
+                        saved_files[f'nominal_chr{chrom}_uncompressed'] = str(tsv_uncompressed)
+                        
+                    except Exception as e:
+                        logger.warning(f"Could not convert {pq_file}: {e}")
+        
+        elif result_type == 'trans':
+            # Save trans results
+            if 'trans_df' in results_dict and results_dict['trans_df'] is not None:
+                trans_df = results_dict['trans_df']
+                if not trans_df.empty:
+                    trans_file = prefix.with_suffix(".trans_qtl.txt.gz")
+                    trans_df.to_csv(str(trans_file), sep='\t', compression='gzip', index=False)
+                    saved_files['trans_full'] = str(trans_file)
+                    logger.info(f"✅ Saved trans results: {trans_file}")
+                    
+                    # Save significant trans results
+                    if 'qval' in trans_df.columns:
+                        sig_trans_df = trans_df[trans_df['qval'] < 0.05]
+                        sig_trans_file = prefix.with_name(prefix.name + ".trans_qtl.significant.txt.gz")
+                        sig_trans_df.to_csv(str(sig_trans_file), sep='\t', compression='gzip', index=False)
+                        saved_files['trans_significant'] = str(sig_trans_file)
+                        logger.info(f"✅ Saved significant trans results: {sig_trans_file} (n={len(sig_trans_df)})")
+                    
+                    # Also save as uncompressed TSV
+                    tsv_file = prefix.with_suffix(".trans_qtl.tsv")
+                    trans_df.to_csv(str(tsv_file), sep='\t', index=False)
+                    saved_files['trans_tsv'] = str(tsv_file)
+                    logger.info(f"✅ Saved trans results as TSV: {tsv_file}")
+        
+        # Save summary statistics for all types
+        summary_file = prefix.with_suffix(".summary.txt")
+        with open(summary_file, 'w') as f:
+            f.write(f"QTL Analysis Summary - {qtl_type} {analysis_mode} {result_type}\n")
+            f.write("=" * 50 + "\n")
+            f.write(f"Total associations tested: {results_dict.get('total_tested', 'N/A')}\n")
+            f.write(f"Significant associations (FDR < 0.05): {results_dict.get('significant_count', 0)}\n")
+            f.write(f"Analysis completed: {results_dict.get('status', 'unknown')}\n")
+            f.write(f"Hardware used: {results_dict.get('hardware_used', 'N/A')}\n")
+            f.write(f"Output files:\n")
+            for file_type, file_path in saved_files.items():
+                f.write(f"  - {file_type}: {file_path}\n")
+        
+        saved_files['summary'] = str(summary_file)
+        logger.info(f"✅ Saved analysis summary: {summary_file}")
+        
+    except Exception as e:
+        logger.error(f"Error saving {result_type} results: {e}")
+    
+    return saved_files
+
 def prepare_genotypes(config, results_dir):
     """Prepare genotype data optimized for tensorQTL"""
     logger.info("Preparing genotype data for tensorQTL...")
@@ -1393,11 +1543,24 @@ def load_covariates(config, results_dir, qtl_type='eqtl'):
     """Load and prepare covariates for tensorQTL in the expected format"""
     logger.info(f"Loading covariates for {qtl_type}...")
     
+    # Use centralized directory manager
+    dm = get_directory_manager(results_dir)
+    
+    # Determine the appropriate data directory based on QTL type
+    if qtl_type == 'eqtl':
+        data_dir = dm.get_directory('processed_data', 'expression')
+    elif qtl_type == 'pqtl':
+        data_dir = dm.get_directory('processed_data', 'proteomics')
+    elif qtl_type == 'sqtl':
+        data_dir = dm.get_directory('processed_data', 'splicing')
+    else:
+        data_dir = dm.get_directory('processed_data', qtl_type)
+    
     # Try to load pre-processed covariates first (covariates x samples format)
-    cov_file = os.path.join(results_dir, f"{qtl_type}_covariates.txt")
+    cov_file = data_dir / f"{qtl_type}_covariates.txt"
     if os.path.exists(cov_file):
         # Read as covariates x samples (tensorQTL expected format)
-        cov_df = pd.read_csv(cov_file, sep='\t', index_col=0)
+        cov_df = pd.read_csv(str(cov_file), sep='\t', index_col=0)
         logger.info(f"Loaded pre-processed covariates: {cov_df.shape[0]} covariates, {cov_df.shape[1]} samples")
         return cov_df
     
@@ -1469,7 +1632,7 @@ def print_tensorqtl_input_stats(genotype_data, phenotype_bed_file, covariates_da
 def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, analysis_mode='cis', plink_format='plink2'):
     """
     Enhanced QTL analysis using tensorQTL following official documentation patterns
-    with support for both nominal and permutation testing
+    with support for both nominal and permutation testing and separate output folders
     """
     if not TENSORQTL_AVAILABLE:
         raise ImportError("tensorQTL is not available. Please install: pip install tensorqtl==1.0.10")
@@ -1519,12 +1682,18 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
         
         # Get analysis configuration
         analysis_config = config.get('tensorqtl', {})
-        prefix = os.path.join(results_dir, f"{qtl_type}_{analysis_mode}")
+        
+        # Use centralized directory manager for results organization
+        dm = get_directory_manager(results_dir)
+        qtl_results_dir = dm.get_directory('analysis_results', 'qtl_mapping') / qtl_type
+        qtl_results_dir.mkdir(parents=True, exist_ok=True)
+        
+        base_prefix = qtl_results_dir / f"{qtl_type}_{analysis_mode}"
         
         results = {}
         
         if analysis_mode == 'cis':
-            # Enhanced cis-QTL analysis with multiple methods
+            # Enhanced cis-QTL analysis with multiple methods and separate folders
             cis_window = analysis_config.get('cis_window', 1000000)
             seed = analysis_config.get('seed', 123456)
             
@@ -1539,64 +1708,89 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
             # Option 1: Run nominal mapping (all variant-phenotype pairs)
             if run_nominal:
                 logger.info("Running cis-QTL nominal mapping...")
-                cis_nominal_prefix = f"{prefix}_nominal"
                 
-                # Run nominal mapping - this writes results by chromosome
-                cis.map_nominal(pr.genotypes, pr.variant_df, phenotype_df, phenotype_pos_df, 
-                            cis_nominal_prefix, covariates_df=covariates_df, window=cis_window)
+                # Create nominal directory using centralized directory manager
+                nominal_dir = qtl_results_dir / 'nominal'
+                nominal_dir.mkdir(parents=True, exist_ok=True)
+                cis_nominal_prefix = nominal_dir / f"{qtl_type}_cis_nominal"
                 
-                logger.info(f"✅ Nominal cis-QTL mapping completed. Results written with prefix: {cis_nominal_prefix}")
-                results['nominal_prefix'] = cis_nominal_prefix
-                results['nominal_completed'] = True
-            else:
-                logger.info("⏭️ Skipping nominal mapping as configured")
-                results['nominal_completed'] = False
+                try:
+                    # Run nominal mapping - this writes results by chromosome
+                    cis.map_nominal(pr.genotypes, pr.variant_df, phenotype_df, phenotype_pos_df, 
+                                str(cis_nominal_prefix), covariates_df=covariates_df, window=cis_window)
+                    
+                    logger.info(f"✅ Nominal cis-QTL mapping completed. Results written with prefix: {cis_nominal_prefix}")
+                    results['nominal_prefix'] = str(cis_nominal_prefix)
+                    results['nominal_completed'] = True
+                    
+                    # Save nominal results
+                    saved_nominal_files = save_qtl_results_comprehensive(
+                        results, str(base_prefix), qtl_type, analysis_mode, 'nominal'
+                    )
+                    results['nominal_saved_files'] = saved_nominal_files
+                    
+                except Exception as e:
+                    logger.error(f"Nominal mapping failed: {e}")
+                    results['nominal_completed'] = False
             
             # Option 2: Run permutation-based mapping
             if run_permutation:
                 logger.info("Running cis-QTL permutation mapping...")
-                cis_df = cis.map_cis(pr.genotypes, pr.variant_df, phenotype_df, phenotype_pos_df,
-                                    covariates_df=covariates_df, window=cis_window, seed=seed)
-                
-                # Calculate q-values following documentation example
-                if not cis_df.empty and 'pval_perm' in cis_df.columns:
-                    cis_df = post.calculate_qvalues(cis_df, fdr=analysis_config.get('fdr_threshold', 0.05))
-                    significant_count = (cis_df['qval'] < analysis_config.get('fdr_threshold', 0.05)).sum()
+                try:
+                    cis_df = cis.map_cis(pr.genotypes, pr.variant_df, phenotype_df, phenotype_pos_df,
+                                        covariates_df=covariates_df, window=cis_window, seed=seed)
                     
-                    # ENHANCEMENT: Add 'fdr' column for fine-mapping compatibility
-                    cis_df['fdr'] = cis_df['qval']
-                    logger.info(f"Added 'fdr' column for fine-mapping compatibility")
-                else:
+                    # FIXED: Safe q-value calculation with comprehensive None checks
                     significant_count = 0
-                
-                # Save permutation results
-                result_file = f"{prefix}.cis_qtl.txt.gz"
-                cis_df.to_csv(result_file, sep='\t', compression='gzip')
-                
-                # ENHANCEMENT: Ensure result file is properly created and log details
-                if os.path.exists(result_file):
-                    file_size = os.path.getsize(result_file) / (1024 * 1024)  # Size in MB
-                    logger.info(f"✅ Permutation cis-QTL results saved: {result_file} ({file_size:.2f} MB)")
-                    logger.info(f"📊 Results contain {len(cis_df)} associations, {significant_count} significant at FDR < 0.05")
-                else:
-                    logger.warning(f"⚠️ Permutation result file not created: {result_file}")
-                
-                results.update({
-                    'permutation_completed': True,
-                    'result_file': result_file,
-                    'significant_count': significant_count,
-                    'cis_df': cis_df
-                })
-            else:
-                logger.info("⏭️ Skipping permutation mapping as configured")
-                results['permutation_completed'] = False
-                
-                # If only nominal was run, set a default result file for compatibility
-                if run_nominal:
-                    result_file = f"{prefix}_nominal.cis_qtl.txt.gz"
-                    results['result_file'] = result_file
-                    results['significant_count'] = 0
-                    logger.info(f"📁 Using nominal results as primary output: {result_file}")
+                    if cis_df is not None and not cis_df.empty and 'pval_perm' in cis_df.columns:
+                        try:
+                            cis_df_updated = post.calculate_qvalues(cis_df, fdr=analysis_config.get('fdr_threshold', 0.05))
+                            
+                            # Check if calculate_qvalues returned None
+                            if cis_df_updated is not None and 'qval' in cis_df_updated.columns:
+                                cis_df = cis_df_updated
+                                significant_count = (cis_df['qval'] < analysis_config.get('fdr_threshold', 0.05)).sum()
+                                
+                                # Add 'fdr' column only if cis_df exists and has 'qval'
+                                cis_df['fdr'] = cis_df['qval']
+                                logger.info(f"Added 'fdr' column for fine-mapping compatibility")
+                            else:
+                                logger.warning("calculate_qvalues returned None or no 'qval' column, using original cis_df")
+                                significant_count = 0
+                        except Exception as e:
+                            logger.error(f"Error in q-value calculation: {e}")
+                            significant_count = 0
+                    else:
+                        if cis_df is None:
+                            logger.warning("cis_df is None after permutation mapping")
+                            cis_df = pd.DataFrame()
+                        elif cis_df.empty:
+                            logger.warning("cis_df is empty after permutation mapping")
+                        elif 'pval_perm' not in cis_df.columns:
+                            logger.warning("No pval_perm column in cis_df")
+                    
+                    # Save permutation results using enhanced function
+                    saved_perm_files = save_qtl_results_comprehensive({
+                        'cis_df': cis_df,
+                        'significant_count': significant_count,
+                        'status': 'completed',
+                        'hardware_used': device.type.upper()
+                    }, str(base_prefix), qtl_type, analysis_mode, 'permutation')
+                    
+                    results.update({
+                        'permutation_completed': True,
+                        'result_file': saved_perm_files.get('permutation_full', f"{base_prefix}.cis_qtl.txt.gz"),
+                        'significant_count': significant_count,
+                        'cis_df': cis_df,
+                        'permutation_saved_files': saved_perm_files
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Permutation mapping failed: {e}")
+                    results.update({
+                        'permutation_completed': False,
+                        'error': str(e)
+                    })
             
             # Summary log
             if run_nominal and run_permutation:
@@ -1609,7 +1803,7 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
                 logger.warning("⚠️ No cis-QTL analysis performed - both nominal and permutation disabled")
             
         else:  # trans
-            # Enhanced trans-QTL analysis with filtering options
+            # Enhanced trans-QTL analysis with proper saving
             logger.info("Running trans-QTL mapping...")
             
             trans_config = analysis_config.get('trans', {})
@@ -1617,41 +1811,55 @@ def run_qtl_analysis_enhanced(config, genotype_file, qtl_type, results_dir, anal
             maf_threshold = trans_config.get('maf_threshold', 0.05)
             batch_size = trans_config.get('batch_size', 10000)
             
-            # Run trans mapping with thresholds to limit output size
-            trans_df = trans.map_trans(pr.genotypes, phenotype_df, covariates_df=covariates_df,
-                                    batch_size=batch_size, return_sparse=True,
-                                    pval_threshold=pval_threshold, maf_threshold=maf_threshold)
-            
-            # Remove cis associations following documentation example
-            if trans_df is not None and len(trans_df) > 0:
-                logger.info("Filtering out cis associations from trans results...")
-                cis_window = trans_config.get('cis_window', 5000000)  # 5Mb window
-                trans_df = trans.filter_cis(trans_df, phenotype_pos_df, pr.variant_df, window=cis_window)
+            try:
+                # Run trans mapping with thresholds to limit output size
+                trans_df = trans.map_trans(pr.genotypes, phenotype_df, covariates_df=covariates_df,
+                                        batch_size=batch_size, return_sparse=True,
+                                        pval_threshold=pval_threshold, maf_threshold=maf_threshold)
                 
-                # Calculate FDR and significant count
-                if 'pval' in trans_df.columns:
-                    trans_df = post.calculate_qvalues(trans_df, fdr=analysis_config.get('fdr_threshold', 0.05))
-                    significant_count = (trans_df['qval'] < analysis_config.get('fdr_threshold', 0.05)).sum()
+                # Remove cis associations following documentation example
+                if trans_df is not None and len(trans_df) > 0:
+                    logger.info("Filtering out cis associations from trans results...")
+                    cis_window = trans_config.get('cis_window', 5000000)  # 5Mb window
+                    trans_df = trans.filter_cis(trans_df, phenotype_pos_df, pr.variant_df, window=cis_window)
+                    
+                    # Calculate FDR and significant count
+                    if 'pval' in trans_df.columns:
+                        trans_df_updated = post.calculate_qvalues(trans_df, fdr=analysis_config.get('fdr_threshold', 0.05))
+                        if trans_df_updated is not None and 'qval' in trans_df_updated.columns:
+                            trans_df = trans_df_updated
+                            significant_count = (trans_df['qval'] < analysis_config.get('fdr_threshold', 0.05)).sum()
+                        else:
+                            significant_count = 0
+                    else:
+                        significant_count = 0
                 else:
+                    trans_df = pd.DataFrame()
                     significant_count = 0
                 
-                # Save results
-                result_file = f"{prefix}.trans_qtl.txt.gz"
-                trans_df.to_csv(result_file, sep='\t', compression='gzip')
+                # Save trans results using enhanced function
+                saved_trans_files = save_qtl_results_comprehensive({
+                    'trans_df': trans_df,
+                    'significant_count': significant_count,
+                    'status': 'completed', 
+                    'hardware_used': device.type.upper()
+                }, str(base_prefix), qtl_type, analysis_mode, 'trans')
                 
                 results.update({
-                    'result_file': result_file,
+                    'result_file': saved_trans_files.get('trans_full', f"{base_prefix}.trans_qtl.txt.gz"),
                     'significant_count': significant_count,
-                    'trans_df': trans_df
+                    'trans_df': trans_df,
+                    'trans_saved_files': saved_trans_files
                 })
-            else:
+                
+            except Exception as e:
+                logger.error(f"Trans mapping failed: {e}")
                 results.update({
-                    'result_file': f"{prefix}.trans_qtl.txt.gz",
+                    'result_file': f"{base_prefix}.trans_qtl.txt.gz",
                     'significant_count': 0,
-                    'trans_df': pd.DataFrame()
+                    'trans_df': pd.DataFrame(),
+                    'error': str(e)
                 })
-                # Create empty result file
-                pd.DataFrame().to_csv(results['result_file'], sep='\t', compression='gzip')
 
         logger.info(f"{qtl_type} {analysis_mode}: Found {results.get('significant_count', 0)} significant associations")
         
@@ -1764,7 +1972,9 @@ def validate_and_prepare_tensorqtl_inputs(config, qtl_type='eqtl'):
     logger.info("Validating and preparing tensorQTL inputs...")
     
     results_dir = config.get('results_dir', 'results')
-    os.makedirs(results_dir, exist_ok=True)
+    
+    # Initialize centralized directory manager
+    dm = get_directory_manager(results_dir)
     
     validator = FileFormatValidator(config)
     validation_results = validator.validate_all_input_files()
@@ -1810,6 +2020,10 @@ if __name__ == "__main__":
     try:
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
+        
+        # Initialize centralized directory manager for standalone execution
+        results_dir = config.get('results_dir', 'results')
+        dm = get_directory_manager(results_dir)
         
         # Validate and prepare inputs
         tensorqtl_inputs = validate_and_prepare_tensorqtl_inputs(config)

@@ -1,3 +1,4 @@
+# [file name]: normalization_comparison.py
 #!/usr/bin/env python3
 """
 Enhanced Normalization Comparison Visualization with Performance Optimizations
@@ -5,7 +6,8 @@ Creates comprehensive side-by-side plots of raw vs normalized data for QTL analy
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
-Enhanced with parallel processing, memory optimization, and comprehensive reporting.
+Enhanced with parallel processing, memory optimization, comprehensive reporting,
+and consistent directory management.
 Now includes batch correction pipeline integration and Python-based DESeq2 VST.
 """
 
@@ -26,6 +28,7 @@ import psutil
 import yaml
 import subprocess
 import tempfile
+from pathlib import Path
 
 # Conditional imports for interactive plots
 try:
@@ -53,6 +56,13 @@ try:
 except ImportError as e:
     DESEQ2_VST_AVAILABLE = False
     logging.warning(f"⚠️ DESeq2 VST Python module not available: {e}")
+
+# Import directory manager
+try:
+    from scripts.utils.directory_manager import get_module_directories
+except ImportError as e:
+    logging.warning(f"Directory manager not available: {e}")
+    get_module_directories = None
    
 warnings.filterwarnings('ignore')
 
@@ -61,9 +71,10 @@ logger = logging.getLogger('QTLPipeline')
 class NormalizationComparison:
     def __init__(self, config, results_dir):
         self.config = config
-        self.results_dir = results_dir
-        self.comparison_dir = os.path.join(results_dir, "normalization_comparison")
-        os.makedirs(self.comparison_dir, exist_ok=True)
+        self.results_dir = Path(results_dir)
+        
+        # Setup directories using directory manager
+        self.setup_directories()
         
         # Performance optimization settings
         self.max_samples = config.get('performance', {}).get('max_comparison_samples', 1000)
@@ -82,14 +93,61 @@ class NormalizationComparison:
         # Cache for expensive computations
         self._cache = {}
         
+    def setup_directories(self):
+        """Setup directories using directory manager"""
+        try:
+            if get_module_directories:
+                self.dirs = get_module_directories(
+                    'normalization_comparison',
+                    [
+                        'comparison_analysis',
+                        {'comparison_analysis': ['normalization_comparison']},
+                        'processed_data',
+                        {'processed_data': ['expression']},
+                        'system',
+                        {'system': ['temporary_files']}
+                    ],
+                    str(self.results_dir)
+                )
+                self.comparison_dir = self.dirs['comparison_analysis_normalization_comparison']
+                self.batch_corrected_dir = self.dirs.get('comparison_analysis_batch_correction', 
+                                                        self.results_dir / 'comparison_analysis' / 'batch_correction')
+                self.temp_dir = self.dirs['system_temporary_files']
+                
+                logger.info(f"✅ Normalization comparison directories setup in: {self.comparison_dir}")
+            else:
+                # Fallback directory creation
+                self.comparison_dir = self.results_dir / "comparison_analysis" / "normalization_comparison"
+                self.batch_corrected_dir = self.results_dir / "comparison_analysis" / "batch_correction"
+                self.temp_dir = self.results_dir / "system" / "temporary_files"
+                
+                self.comparison_dir.mkdir(parents=True, exist_ok=True)
+                self.batch_corrected_dir.mkdir(parents=True, exist_ok=True)
+                self.temp_dir.mkdir(parents=True, exist_ok=True)
+                
+                logger.info(f"✅ Fallback directories created in: {self.comparison_dir}")
+                
+        except Exception as e:
+            logger.error(f"❌ Directory setup failed: {e}")
+            # Ultimate fallback - maintain original structure for maximum compatibility
+            self.comparison_dir = self.results_dir / "normalization_comparison"
+            self.batch_corrected_dir = self.results_dir / "batch_corrected"
+            self.temp_dir = self.results_dir / "temp_normalization"
+            
+            self.comparison_dir.mkdir(parents=True, exist_ok=True)
+            self.batch_corrected_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.warning(f"⚠️ Using ultimate fallback directories: {self.comparison_dir}")
+    
     def generate_comprehensive_comparison(self, qtl_type, raw_data, normalized_data, normalization_method):
         """Generate comprehensive comparison plots for normalization with performance optimizations"""
         logger.info(f"📊 Generating enhanced normalization comparison for {qtl_type}...")
         
         try:
             # Create subdirectory for this QTL type
-            qtl_dir = os.path.join(self.comparison_dir, qtl_type)
-            os.makedirs(qtl_dir, exist_ok=True)
+            qtl_dir = self.comparison_dir / qtl_type
+            qtl_dir.mkdir(parents=True, exist_ok=True)
             
             # Sample data for performance if needed
             raw_data, normalized_data = self._sample_data_for_performance(raw_data, normalized_data)
@@ -184,8 +242,8 @@ class NormalizationComparison:
             logger.info(f"🔧 Running {method} normalization using Python for {qtl_type}...")
             
             # Create temporary directory for processing
-            temp_dir = os.path.join(self.results_dir, "temp_normalization")
-            os.makedirs(temp_dir, exist_ok=True)
+            temp_normalization_dir = self.temp_dir / "normalization_processing"
+            temp_normalization_dir.mkdir(parents=True, exist_ok=True)
             
             # Apply normalization using Python
             if method == 'vst':
@@ -205,7 +263,7 @@ class NormalizationComparison:
                 normalized_data = raw_data.copy()
             
             # Save normalized data
-            normalized_file = os.path.join(temp_dir, f"{qtl_type}.normalised.{method}.tsv")
+            normalized_file = temp_normalization_dir / f"{qtl_type}.normalised.{method}.tsv"
             normalized_data.to_csv(normalized_file, sep='\t')
             
             logger.info(f"✅ Python {method} normalization completed: {normalized_data.shape}")
@@ -348,15 +406,12 @@ class NormalizationComparison:
     
     def _run_batch_correction_pipeline(self, normalized_data, qtl_type, method):
         """Run batch correction pipeline - ALWAYS save to batch_corrected directory"""
-        # Create batch_corrected directory
-        corrected_dir = os.path.join(self.results_dir, "batch_corrected")
-        os.makedirs(corrected_dir, exist_ok=True)
+        # Use the batch_corrected_dir from directory manager
+        corrected_dir = self.batch_corrected_dir
+        corrected_dir.mkdir(parents=True, exist_ok=True)
         
         # Always prepare the corrected file path
-        corrected_file = os.path.join(
-            corrected_dir, 
-            f"{qtl_type}.normalised.{method}.corrected.tsv"
-        )
+        corrected_file = corrected_dir / f"{qtl_type}.normalised.{method}.corrected.tsv"
         
         if not BATCH_CORRECTION_AVAILABLE:
             logger.warning("⏭️ Batch correction module not available, saving normalized data as corrected")
@@ -365,7 +420,7 @@ class NormalizationComparison:
             return {
                 'batch_correction_skipped': True, 
                 'reason': 'Module not available',
-                'corrected_file': corrected_file,
+                'corrected_file': str(corrected_file),
                 'batch_correction_applied': False
             }
         
@@ -381,7 +436,7 @@ class NormalizationComparison:
                 return {
                     'batch_correction_skipped': True, 
                     'reason': 'Disabled in config',
-                    'corrected_file': corrected_file,
+                    'corrected_file': str(corrected_file),
                     'batch_correction_applied': False
                 }
             
@@ -392,7 +447,7 @@ class NormalizationComparison:
                 return {
                     'batch_correction_skipped': True, 
                     'reason': 'sQTL typically does not require batch correction',
-                    'corrected_file': corrected_file,
+                    'corrected_file': str(corrected_file),
                     'batch_correction_applied': False
                 }
             
@@ -408,12 +463,12 @@ class NormalizationComparison:
             # Save corrected data
             if correction_info.get('batch_correction_applied', False):
                 corrected_data.to_csv(corrected_file, sep='\t')
-                correction_info['corrected_file'] = corrected_file
+                correction_info['corrected_file'] = str(corrected_file)
                 logger.info(f"💾 Batch-corrected data saved: {corrected_file}")
             else:
                 # If batch correction was attempted but not applied, still save normalized data
                 normalized_data.to_csv(corrected_file, sep='\t')
-                correction_info['corrected_file'] = corrected_file
+                correction_info['corrected_file'] = str(corrected_file)
                 correction_info['batch_correction_applied'] = False
                 logger.info(f"💾 Normalized data saved as corrected (no batch effects): {corrected_file}")
             
@@ -426,7 +481,7 @@ class NormalizationComparison:
             return {
                 'batch_correction_failed': True, 
                 'error': str(e),
-                'corrected_file': corrected_file,
+                'corrected_file': str(corrected_file),
                 'batch_correction_applied': False
             }
     
@@ -610,8 +665,8 @@ class NormalizationComparison:
             corrected_data = pd.read_csv(corrected_file, sep='\t', index_col=0)
             
             # Create special directory for batch correction comparisons
-            batch_comp_dir = os.path.join(self.comparison_dir, "batch_correction")
-            os.makedirs(batch_comp_dir, exist_ok=True)
+            batch_comp_dir = self.comparison_dir / "batch_correction"
+            batch_comp_dir.mkdir(parents=True, exist_ok=True)
             
             # Determine comparison type based on whether batch correction was actually applied
             if batch_correction_info.get('batch_correction_applied', False):
@@ -647,7 +702,7 @@ class NormalizationComparison:
             'pipeline_version': 'enhanced_1.0'
         }
         
-        summary_file = os.path.join(self.comparison_dir, f"{qtl_type}_enhanced_pipeline_summary.yaml")
+        summary_file = self.comparison_dir / f"{qtl_type}_enhanced_pipeline_summary.yaml"
         with open(summary_file, 'w') as f:
             yaml.dump(summary, f, default_flow_style=False)
         
@@ -782,7 +837,7 @@ class NormalizationComparison:
             self._plot_qq_comparison(sampled_raw, sampled_norm, axes[1, 1], qtl_type)
             
             plt.tight_layout()
-            plot_file = os.path.join(output_dir, f"{qtl_type}_distribution_comparison.png")
+            plot_file = output_dir / f"{qtl_type}_distribution_comparison.png"
             plt.savefig(plot_file, dpi=200, bbox_inches='tight')  # Reduced DPI for performance
             plt.close()
             
@@ -791,7 +846,7 @@ class NormalizationComparison:
             if PLOTLY_AVAILABLE:
                 interactive_file = self._create_interactive_distribution(sampled_raw, sampled_norm, qtl_type, method, output_dir)
             
-            return {'static': plot_file, 'interactive': interactive_file}
+            return {'static': str(plot_file), 'interactive': str(interactive_file) if interactive_file else None}
             
         except Exception as e:
             logger.warning(f"Could not create distribution comparison: {e}")
@@ -989,7 +1044,7 @@ class NormalizationComparison:
                 height=500  # Smaller for performance
             )
             
-            plot_file = os.path.join(output_dir, f"{qtl_type}_interactive_distribution.html")
+            plot_file = output_dir / f"{qtl_type}_interactive_distribution.html"
             fig.write_html(plot_file, include_plotlyjs='cdn')  # Use CDN for smaller files
             
             return plot_file
@@ -1017,11 +1072,11 @@ class NormalizationComparison:
             self._plot_sample_correlation(raw_data, normalized_data, axes[1, 1])
             
             plt.tight_layout()
-            plot_file = os.path.join(output_dir, f"{qtl_type}_sample_comparison.png")
+            plot_file = output_dir / f"{qtl_type}_sample_comparison.png"
             plt.savefig(plot_file, dpi=200, bbox_inches='tight')
             plt.close()
             
-            return plot_file
+            return str(plot_file)
             
         except Exception as e:
             logger.warning(f"Could not create sample comparison: {e}")
@@ -1149,11 +1204,11 @@ class NormalizationComparison:
             self._plot_feature_detection(raw_data, normalized_data, axes[1, 1])
             
             plt.tight_layout()
-            plot_file = os.path.join(output_dir, f"{qtl_type}_feature_comparison.png")
+            plot_file = output_dir / f"{qtl_type}_feature_comparison.png"
             plt.savefig(plot_file, dpi=200, bbox_inches='tight')
             plt.close()
             
-            return plot_file
+            return str(plot_file)
             
         except Exception as e:
             logger.warning(f"Could not create feature comparison: {e}")
@@ -1292,15 +1347,15 @@ class NormalizationComparison:
             self._plot_statistical_tests(raw_data, normalized_data, axes[1, 1])
             
             plt.tight_layout()
-            plot_file = os.path.join(output_dir, f"{qtl_type}_statistical_comparison.png")
+            plot_file = output_dir / f"{qtl_type}_statistical_comparison.png"
             plt.savefig(plot_file, dpi=200, bbox_inches='tight')
             plt.close()
             
             # Save statistical summary
-            stats_file = os.path.join(output_dir, f"{qtl_type}_statistical_summary.txt")
+            stats_file = output_dir / f"{qtl_type}_statistical_summary.txt"
             stats_comparison.to_csv(stats_file, sep='\t')
             
-            return plot_file
+            return str(plot_file)
             
         except Exception as e:
             logger.warning(f"Could not create statistical comparison: {e}")
@@ -1537,7 +1592,7 @@ class NormalizationComparison:
                 ax2.set_zlabel(f'PC3 ({pca_norm.explained_variance_ratio_[2]:.2f})')
                 
                 plt.tight_layout()
-                plot_file = os.path.join(output_dir, f"{qtl_type}_pca_comparison.png")
+                plot_file = output_dir / f"{qtl_type}_pca_comparison.png"
                 plt.savefig(plot_file, dpi=200, bbox_inches='tight')
                 plt.close()
                 
@@ -1547,7 +1602,7 @@ class NormalizationComparison:
                     interactive_file = self._create_interactive_pca(pca_raw_result, pca_norm_result, 
                                                                   pca_raw, pca_norm, qtl_type, method, output_dir)
                 
-                return {'static': plot_file, 'interactive': interactive_file}
+                return {'static': str(plot_file), 'interactive': str(interactive_file) if interactive_file else None}
             
         except Exception as e:
             logger.warning(f"Could not create PCA comparison: {e}")
@@ -1606,7 +1661,7 @@ class NormalizationComparison:
                 showlegend=False
             )
             
-            plot_file = os.path.join(output_dir, f"{qtl_type}_interactive_pca.html")
+            plot_file = output_dir / f"{qtl_type}_interactive_pca.html"
             fig.write_html(plot_file, include_plotlyjs='cdn')
             
             return plot_file
@@ -1660,7 +1715,7 @@ class NormalizationComparison:
             axes[1, 1].grid(True, alpha=0.3)
             
             plt.tight_layout()
-            plot_file = os.path.join(output_dir, f"{qtl_type}_correlation_comparison.png")
+            plot_file = output_dir / f"{qtl_type}_correlation_comparison.png"
             plt.savefig(plot_file, dpi=200, bbox_inches='tight')
             plt.close()
             
@@ -1669,7 +1724,7 @@ class NormalizationComparison:
             if PLOTLY_AVAILABLE:
                 interactive_file = self._create_interactive_correlation(raw_sample, norm_sample, qtl_type, method, output_dir)
             
-            return {'static': plot_file, 'interactive': interactive_file}
+            return {'static': str(plot_file), 'interactive': str(interactive_file) if interactive_file else None}
             
         except Exception as e:
             logger.warning(f"Could not create correlation comparison: {e}")
@@ -1713,7 +1768,7 @@ class NormalizationComparison:
                 height=500
             )
             
-            plot_file = os.path.join(output_dir, f"{qtl_type}_interactive_correlation.html")
+            plot_file = output_dir / f"{qtl_type}_interactive_correlation.html"
             fig.write_html(plot_file, include_plotlyjs='cdn')
             
             return plot_file
@@ -1726,13 +1781,13 @@ class NormalizationComparison:
         """Generate comprehensive HTML report for normalization comparison"""
         try:
             html_content = self._generate_html_report_content(comparison_results, qtl_type, output_dir)
-            report_file = os.path.join(output_dir, f"{qtl_type}_normalization_report.html")
+            report_file = output_dir / f"{qtl_type}_normalization_report.html"
             
             with open(report_file, 'w') as f:
                 f.write(html_content)
             
             logger.info(f"💾 Normalization comparison HTML report generated: {report_file}")
-            return report_file
+            return str(report_file)
             
         except Exception as e:
             logger.error(f"❌ Error generating HTML report: {e}")

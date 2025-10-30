@@ -11,6 +11,7 @@ Enhanced with:
 - Additional fine-mapping methods
 - Comprehensive logging and progress tracking
 - Fixed import issues for pipeline compatibility
+- Consistent directory management using DirectoryManager
 """
 
 import os
@@ -25,6 +26,13 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 import time
 import json
 from pathlib import Path
+
+# Import directory manager
+try:
+    from scripts.utils.directory_manager import get_module_directories
+except ImportError as e:
+    logging.warning(f"Directory manager not available: {e}")
+    get_module_directories = None
 
 warnings.filterwarnings('ignore')
 
@@ -54,10 +62,62 @@ class FineMapping:
         self.finemap_config = config.get('fine_mapping', {})
         self.performance_config = config.get('performance', {})
         self.max_workers = self.performance_config.get('max_workers', 4)
+        self.results_dir = None
         
+    def setup_directories(self, results_dir: str):
+        """Setup directories using directory manager"""
+        self.results_dir = Path(results_dir)
+        
+        try:
+            if get_module_directories:
+                self.dirs = get_module_directories(
+                    'fine_mapping',
+                    [
+                        'analysis_results',
+                        {'analysis_results': ['fine_mapping']},
+                        'system',
+                        {'system': ['temporary_files']},
+                        'reports',
+                        {'reports': ['analysis_reports']}
+                    ],
+                    str(self.results_dir)
+                )
+                self.finemap_dir = self.dirs['analysis_results_fine_mapping']
+                self.temp_dir = self.dirs['system_temporary_files']
+                self.reports_dir = self.dirs['reports_analysis_reports']
+                
+                logger.info(f"✅ Fine-mapping directories setup in: {self.finemap_dir}")
+            else:
+                # Fallback directory creation
+                self.finemap_dir = self.results_dir / "analysis_results" / "fine_mapping"
+                self.temp_dir = self.results_dir / "system" / "temporary_files"
+                self.reports_dir = self.results_dir / "reports" / "analysis_reports"
+                
+                self.finemap_dir.mkdir(parents=True, exist_ok=True)
+                self.temp_dir.mkdir(parents=True, exist_ok=True)
+                self.reports_dir.mkdir(parents=True, exist_ok=True)
+                
+                logger.info(f"✅ Fallback directories created in: {self.finemap_dir}")
+                
+        except Exception as e:
+            logger.error(f"❌ Directory setup failed: {e}")
+            # Ultimate fallback - maintain original structure for maximum compatibility
+            self.finemap_dir = self.results_dir / "fine_mapping"
+            self.temp_dir = self.results_dir / "temp_finemap"
+            self.reports_dir = self.results_dir / "reports"
+            
+            self.finemap_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+            self.reports_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.warning(f"⚠️ Using ultimate fallback directories: {self.finemap_dir}")
+    
     def run_fine_mapping(self, qtl_results_file: str, vcf_file: str, output_dir: str, qtl_type: str) -> Dict[str, Any]:
         """Run fine-mapping for significant QTL regions for specific QTL type"""
         logger.info(f"🔍 Running {qtl_type} fine-mapping analysis...")
+        
+        # Setup directories first
+        self.setup_directories(output_dir)
         
         if not self.finemap_config.get('enable', False):
             logger.info("ℹ️ Fine-mapping disabled in config")
@@ -65,7 +125,7 @@ class FineMapping:
         
         try:
             # Validate inputs
-            if not self._validate_inputs(qtl_results_file, vcf_file, output_dir):
+            if not self._validate_inputs(qtl_results_file, vcf_file):
                 return {'status': 'failed', 'error': 'Input validation failed'}
             
             # Read QTL results with optimized loading
@@ -85,10 +145,10 @@ class FineMapping:
             logger.info(f"🔧 Fine-mapping {len(significant_qtls)} significant {qtl_type} associations")
             
             # Group by gene and process in parallel
-            results = self._process_genes_parallel(significant_qtls, vcf_file, output_dir, qtl_type)
+            results = self._process_genes_parallel(significant_qtls, vcf_file, qtl_type)
             
             # Generate comprehensive summary
-            summary = self.generate_finemap_summary(results, output_dir, qtl_type)
+            summary = self.generate_finemap_summary(results, qtl_type)
             
             logger.info(f"✅ {qtl_type} fine-mapping completed: {summary['successful_genes']} genes processed")
             
@@ -96,7 +156,7 @@ class FineMapping:
                 'status': 'completed',
                 'summary': summary,
                 'results': results,
-                'output_dir': output_dir,
+                'output_dir': str(self.finemap_dir),
                 'qtl_type': qtl_type
             }
             
@@ -106,7 +166,7 @@ class FineMapping:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {'status': 'failed', 'error': str(e)}
     
-    def _validate_inputs(self, qtl_results_file: str, vcf_file: str, output_dir: str) -> bool:
+    def _validate_inputs(self, qtl_results_file: str, vcf_file: str) -> bool:
         """Validate input files and directories"""
         if not os.path.exists(qtl_results_file):
             logger.error(f"❌ QTL results file not found: {qtl_results_file}")
@@ -116,7 +176,6 @@ class FineMapping:
             logger.error(f"❌ VCF file not found: {vcf_file}")
             return False
             
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
         return True
     
     def _load_qtl_results(self, qtl_results_file: str) -> pd.DataFrame:
@@ -192,8 +251,7 @@ class FineMapping:
         logger.info(f"🎯 Found {len(significant_qtls)} significant associations for fine-mapping")
         return significant_qtls
     
-    def _process_genes_parallel(self, significant_qtls: pd.DataFrame, vcf_file: str, 
-                              output_dir: str, qtl_type: str) -> Dict[str, Any]:
+    def _process_genes_parallel(self, significant_qtls: pd.DataFrame, vcf_file: str, qtl_type: str) -> Dict[str, Any]:
         """Process genes in parallel for fine-mapping"""
         results = {}
         
@@ -214,7 +272,7 @@ class FineMapping:
             logger.info("Using sequential processing for small dataset")
             for gene_id, gene_qtls in gene_groups.items():
                 try:
-                    gene_results = self.fine_map_gene(gene_qtls, vcf_file, output_dir, gene_id, qtl_type)
+                    gene_results = self.fine_map_gene(gene_qtls, vcf_file, gene_id, qtl_type)
                     results[gene_id] = gene_results
                 except Exception as e:
                     logger.error(f"❌ Fine-mapping failed for {gene_id}: {e}")
@@ -223,7 +281,7 @@ class FineMapping:
             # Process genes in parallel
             with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
                 future_to_gene = {
-                    executor.submit(self.fine_map_gene, gene_qtls, vcf_file, output_dir, gene_id, qtl_type): gene_id
+                    executor.submit(self.fine_map_gene, gene_qtls, vcf_file, gene_id, qtl_type): gene_id
                     for gene_id, gene_qtls in gene_groups.items()
                 }
                 
@@ -238,8 +296,7 @@ class FineMapping:
         
         return results
     
-    def fine_map_gene(self, gene_qtls: pd.DataFrame, vcf_file: str, output_dir: str, 
-                     gene_id: str, qtl_type: str) -> Dict[str, Any]:
+    def fine_map_gene(self, gene_qtls: pd.DataFrame, vcf_file: str, gene_id: str, qtl_type: str) -> Dict[str, Any]:
         """Run fine-mapping for a single gene with enhanced methods"""
         start_time = time.time()
         
@@ -251,14 +308,14 @@ class FineMapping:
             logger.debug(f"🔬 Fine-mapping {gene_id} with {method} method")
             
             if method == 'susie':
-                result = self.run_susie_finemap(gene_qtls, credible_threshold, max_causal, gene_id, output_dir, qtl_type)
+                result = self.run_susie_finemap(gene_qtls, credible_threshold, max_causal, gene_id, qtl_type)
             elif method == 'finemap':
-                result = self.run_finemap(gene_qtls, credible_threshold, max_causal, gene_id, output_dir, qtl_type)
+                result = self.run_finemap(gene_qtls, credible_threshold, max_causal, gene_id, qtl_type)
             elif method == 'abf':
-                result = self.run_abf_finemap(gene_qtls, credible_threshold, max_causal, gene_id, output_dir, qtl_type)
+                result = self.run_abf_finemap(gene_qtls, credible_threshold, max_causal, gene_id, qtl_type)
             else:
                 logger.warning(f"Unknown fine-mapping method: {method}, using SUSIE")
-                result = self.run_susie_finemap(gene_qtls, credible_threshold, max_causal, gene_id, output_dir, qtl_type)
+                result = self.run_susie_finemap(gene_qtls, credible_threshold, max_causal, gene_id, qtl_type)
             
             # Add timing information
             result['processing_time'] = time.time() - start_time
@@ -274,7 +331,7 @@ class FineMapping:
             }
     
     def run_susie_finemap(self, gene_qtls: pd.DataFrame, credible_threshold: float, 
-                         max_causal: int, gene_id: str, output_dir: str, qtl_type: str) -> Dict[str, Any]:
+                         max_causal: int, gene_id: str, qtl_type: str) -> Dict[str, Any]:
         """Run SuSiE fine-mapping with enhanced implementation"""
         try:
             # Prepare data for fine-mapping
@@ -317,9 +374,9 @@ class FineMapping:
             }
             
             # Save results
-            output_file = os.path.join(output_dir, f"finemap_{qtl_type}_susie_{gene_id}.txt")
+            output_file = self.finemap_dir / f"finemap_{qtl_type}_susie_{gene_id}.txt"
             self.save_finemap_results(results, output_file)
-            results['results_file'] = output_file
+            results['results_file'] = str(output_file)
             
             logger.debug(f"✅ {qtl_type} {gene_id}: Found {len(credible_sets)} credible set(s)")
             
@@ -330,7 +387,7 @@ class FineMapping:
             return {'error': str(e)}
     
     def run_finemap(self, gene_qtls: pd.DataFrame, credible_threshold: float,
-                   max_causal: int, gene_id: str, output_dir: str, qtl_type: str) -> Dict[str, Any]:
+                   max_causal: int, gene_id: str, qtl_type: str) -> Dict[str, Any]:
         """Run FINEMAP-style fine-mapping with enhanced implementation"""
         try:
             variants = gene_qtls['variant_id'].tolist()
@@ -364,9 +421,9 @@ class FineMapping:
             }
             
             # Save results
-            output_file = os.path.join(output_dir, f"finemap_{qtl_type}_finemap_{gene_id}.txt")
+            output_file = self.finemap_dir / f"finemap_{qtl_type}_finemap_{gene_id}.txt"
             self.save_finemap_results(results, output_file)
-            results['results_file'] = output_file
+            results['results_file'] = str(output_file)
             
             logger.debug(f"✅ {qtl_type} {gene_id}: Found {len(credible_sets)} credible set(s)")
             
@@ -377,7 +434,7 @@ class FineMapping:
             return {'error': str(e)}
     
     def run_abf_finemap(self, gene_qtls: pd.DataFrame, credible_threshold: float,
-                       max_causal: int, gene_id: str, output_dir: str, qtl_type: str) -> Dict[str, Any]:
+                       max_causal: int, gene_id: str, qtl_type: str) -> Dict[str, Any]:
         """Run Approximate Bayes Factor fine-mapping"""
         try:
             variants = gene_qtls['variant_id'].tolist()
@@ -412,9 +469,9 @@ class FineMapping:
                 'credible_set_count': len(credible_sets)
             }
             
-            output_file = os.path.join(output_dir, f"finemap_{qtl_type}_abf_{gene_id}.txt")
+            output_file = self.finemap_dir / f"finemap_{qtl_type}_abf_{gene_id}.txt"
             self.save_finemap_results(results, output_file)
-            results['results_file'] = output_file
+            results['results_file'] = str(output_file)
             
             logger.debug(f"✅ {qtl_type} {gene_id}: ABF found {len(credible_sets)} credible set(s)")
             
@@ -521,7 +578,7 @@ class FineMapping:
         
         return credible_sets
     
-    def save_finemap_results(self, results: Dict[str, Any], output_file: str):
+    def save_finemap_results(self, results: Dict[str, Any], output_file: Path):
         """Save fine-mapping results to file with comprehensive information"""
         try:
             with open(output_file, 'w') as f:
@@ -550,13 +607,13 @@ class FineMapping:
         except Exception as e:
             logger.error(f"❌ Error saving fine-mapping results: {e}")
     
-    def generate_finemap_summary(self, results: Dict[str, Any], output_dir: str, qtl_type: str) -> Dict[str, Any]:
+    def generate_finemap_summary(self, results: Dict[str, Any], qtl_type: str) -> Dict[str, Any]:
         """Generate comprehensive summary of fine-mapping results"""
         logger.info(f"📊 Generating {qtl_type} fine-mapping summary...")
         
         try:
-            summary_file = os.path.join(output_dir, f"{qtl_type}_fine_mapping_summary.txt")
-            json_summary_file = os.path.join(output_dir, f"{qtl_type}_fine_mapping_summary.json")
+            summary_file = self.reports_dir / f"{qtl_type}_fine_mapping_summary.txt"
+            json_summary_file = self.reports_dir / f"{qtl_type}_fine_mapping_summary.json"
             
             successful_genes = 0
             total_credible_sets = 0
@@ -657,7 +714,6 @@ def run_fine_mapping_wrapper(config: Dict[str, Any], qtl_type: str, results_dir:
         # Construct file paths based on qtl_type and results_dir
         qtl_results_file = os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz")
         vcf_file = config['input_files']['genotypes']
-        output_dir = os.path.join(results_dir, f"{qtl_type}_fine_mapping")
         
         # Check if QTL results file exists
         if not os.path.exists(qtl_results_file):
@@ -666,7 +722,7 @@ def run_fine_mapping_wrapper(config: Dict[str, Any], qtl_type: str, results_dir:
             return {'status': 'failed', 'error': 'QTL results file not found'}
         
         # Run fine-mapping
-        return run_fine_mapping(config, qtl_results_file, vcf_file, output_dir, qtl_type)
+        return run_fine_mapping(config, qtl_results_file, vcf_file, results_dir, qtl_type)
         
     except Exception as e:
         logger.error(f"❌ Fine-mapping wrapper failed for {qtl_type}: {e}")

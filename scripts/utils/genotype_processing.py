@@ -24,20 +24,29 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 logger = logging.getLogger('QTLPipeline')
 
+try:
+    from scripts.utils.directory_manager import get_directory_manager, get_module_directories
+except ImportError as e:
+    logger.error(f"Directory manager import error: {e}")
+    raise
+
 class GenotypeProcessor:
     def __init__(self, config):
         self.config = config
         self.processing_config = config.get('genotype_processing', {})
         self.large_data_config = config.get('large_data', {})
         self.tensorqtl_config = config.get('tensorqtl', {})
+        self.results_dir = Path(config.get('results_dir', 'results'))
         
-    def process_genotypes(self, input_file, output_dir):
+        # Initialize directory manager
+        self.dm = get_directory_manager(self.results_dir)
+        
+    def process_genotypes(self, input_file, output_dir=None):
         """Main genotype processing function with comprehensive QC and tensorQTL optimization"""
         logger.info(f"🔧 Processing genotype file: {input_file}")
         
-        # Create processing directory
-        process_dir = os.path.join(output_dir, "genotype_processing")
-        Path(process_dir).mkdir(parents=True, exist_ok=True)
+        # Use directory manager for processing directory
+        process_dir = self.dm.get_directory('processed_data', 'genotypes/processing')
         
         # Step 0: Validate input file and system resources
         self.validate_input_file(input_file)
@@ -97,11 +106,11 @@ class GenotypeProcessor:
         """Convert directly to PLINK format for large datasets - Enhanced for tensorQTL"""
         logger.info("🔄 Converting directly to PLINK format for tensorQTL optimization...")
         
-        plink_base = os.path.join(output_dir, "genotypes")
+        plink_base = output_dir / "genotypes"
         
         if input_format in ['vcf', 'vcf.gz', 'bcf']:
             # Convert VCF to PLINK with tensorQTL optimization
-            self.convert_vcf_to_plink_tensorqtl(input_file, plink_base)
+            self.convert_vcf_to_plink_tensorqtl(input_file, str(plink_base))
         elif input_format == 'plink_bed':
             # Already in PLINK format, just ensure all files exist
             base_name = input_file.replace('.bed', '')
@@ -119,7 +128,8 @@ class GenotypeProcessor:
             raise ValueError(f"Cannot convert {input_format} directly to PLINK for tensorQTL")
         
         logger.info(f"✅ PLINK conversion completed for tensorQTL: {plink_base}")
-        return plink_base    
+        return str(plink_base)
+    
     def convert_vcf_to_plink_tensorqtl(self, vcf_file, plink_base):
         """Convert VCF to PLINK with tensorQTL-optimized parameters"""
         logger.info("🔧 Converting VCF to PLINK with tensorQTL optimization...")
@@ -204,7 +214,7 @@ class GenotypeProcessor:
         """Apply tensorQTL-optimized processing and filtering"""
         logger.info("🔧 Applying tensorQTL-optimized processing...")
         
-        filtered_base = os.path.join(output_dir, "filtered_genotypes_tensorqtl")
+        filtered_base = output_dir / "filtered_genotypes_tensorqtl"
         
         # Start with basic filter command
         filter_cmd = f"{self.config['paths']['plink']} --bfile {plink_base}"
@@ -236,9 +246,9 @@ class GenotypeProcessor:
         self.run_command(filter_cmd, "Applying tensorQTL-optimized filters")
         
         # Extract and save sample list for tensorQTL alignment
-        self.extract_tensorqtl_sample_list(filtered_base, output_dir)
+        self.extract_tensorqtl_sample_list(str(filtered_base), output_dir)
         
-        return filtered_base
+        return str(filtered_base)
     
     def extract_tensorqtl_sample_list(self, plink_base, output_dir):
         """Extract and save sample list for tensorQTL sample alignment"""
@@ -249,8 +259,8 @@ class GenotypeProcessor:
                 fam_df = pd.read_csv(fam_file, sep='\s+', header=None, names=['FID', 'IID', 'PID', 'MID', 'Sex', 'Pheno'])
                 samples = fam_df['IID'].tolist()
                 
-                # Save sample list for tensorQTL
-                sample_file = os.path.join(output_dir, "tensorqtl_samples.txt")
+                # Save sample list for tensorQTL using directory manager
+                sample_file = self.dm.get_directory('processed_data', 'quality_control/sample_lists') / 'tensorqtl_samples.txt'
                 with open(sample_file, 'w') as f:
                     for sample in samples:
                         f.write(f"{sample}\n")
@@ -268,8 +278,8 @@ class GenotypeProcessor:
         """Generate comprehensive QC reports with tensorQTL compatibility info"""
         logger.info("📊 Generating tensorQTL QC reports...")
         
-        qc_dir = os.path.join(output_dir, "tensorqtl_qc_reports")
-        os.makedirs(qc_dir, exist_ok=True)
+        # Use directory manager for QC reports
+        qc_dir = self.dm.get_directory('reports', 'qc_reports/tensorqtl_genotype_qc')
         
         # Basic stats using PLINK
         self.run_command(
@@ -288,14 +298,14 @@ class GenotypeProcessor:
         )
         
         # Generate tensorQTL compatibility report
-        self.generate_tensorqtl_compatibility_report(plink_base, qc_dir)
+        self.generate_tensorqtl_compatibility_report(plink_base, str(qc_dir))
         
         logger.info("✅ TensorQTL QC reports generated")
     
     def generate_tensorqtl_compatibility_report(self, plink_base, output_dir):
         """Generate tensorQTL-specific compatibility report"""
         try:
-            report_file = os.path.join(output_dir, "tensorqtl_compatibility_report.html")
+            report_file = Path(output_dir) / "tensorqtl_compatibility_report.html"
             
             # Gather statistics
             stats = self.gather_tensorqtl_stats(plink_base)
@@ -423,7 +433,9 @@ class GenotypeProcessor:
     
     def prepare_tensorqtl_final_file(self, plink_base, output_dir):
         """Prepare final genotype file optimized for tensorQTL"""
-        final_base = os.path.join(output_dir, "final_genotypes_tensorqtl")
+        # Use directory manager for final genotypes location
+        final_dir = self.dm.get_directory('processed_data', 'genotypes/final')
+        final_base = final_dir / "genotypes_tensorqtl"
         
         # Copy to final location with tensorQTL-optimized name
         for ext in ['.bed', '.bim', '.fam']:
@@ -433,12 +445,12 @@ class GenotypeProcessor:
                 self.run_command(f"cp {src} {dst}", f"Creating final {ext} file")
         
         # Validate final files
-        self.validate_tensorqtl_files(final_base)
+        self.validate_tensorqtl_files(str(final_base))
         
         # Log final statistics
-        self.log_tensorqtl_final_stats(final_base)
+        self.log_tensorqtl_final_stats(str(final_base))
         
-        return final_base + ".bed"
+        return str(final_base) + ".bed"
     
     def validate_tensorqtl_files(self, plink_base):
         """Validate that all PLINK files exist and are readable for tensorQTL"""
@@ -610,7 +622,7 @@ class GenotypeProcessor:
         """Apply comprehensive filters to PLINK data - ORIGINAL FUNCTION"""
         logger.info("🔧 Applying PLINK filters...")
         
-        filtered_base = os.path.join(output_dir, "filtered_genotypes")
+        filtered_base = output_dir / "filtered_genotypes"
         
         filter_cmd = f"{self.config['paths']['plink']} --bfile {plink_base}"
         
@@ -631,7 +643,7 @@ class GenotypeProcessor:
         
         self.run_command(filter_cmd, "Applying PLINK filters")
         
-        return filtered_base
+        return str(filtered_base)
     
     def check_system_resources(self):
         """Check if system has sufficient resources for large dataset processing - ORIGINAL FUNCTION"""
@@ -756,7 +768,7 @@ class GenotypeProcessor:
     
     def standardize_format(self, input_file, output_dir, input_format):
         """Convert various formats to standard VCF.gz - ORIGINAL FUNCTION"""
-        output_file = os.path.join(output_dir, "standardized.vcf.gz")
+        output_file = output_dir / "standardized.vcf.gz"
         
         if input_format in ['vcf', 'vcf.gz']:
             if input_file.endswith('.gz'):
@@ -768,11 +780,11 @@ class GenotypeProcessor:
                     f"{self.config['paths']['bgzip']} -c {input_file} > {output_file}",
                     "Compressing VCF file"
                 )
-                return output_file
+                return str(output_file)
                 
         elif input_format == 'bcf':
             # Convert BCF to VCF.gz
-            temp_vcf = os.path.join(output_dir, "temp_standardized.vcf")
+            temp_vcf = output_dir / "temp_standardized.vcf"
             self.run_command(
                 f"{self.config['paths']['bcftools']} view {input_file} -Ov -o {temp_vcf}",
                 "Converting BCF to VCF"
@@ -782,12 +794,12 @@ class GenotypeProcessor:
                 "Compressing VCF file"
             )
             os.remove(temp_vcf)
-            return output_file
+            return str(output_file)
             
         elif input_format == 'plink_bed':
             # Convert PLINK to VCF.gz
             base_name = input_file.replace('.bed', '')
-            temp_vcf = os.path.join(output_dir, "temp_plink.vcf")
+            temp_vcf = output_dir / "temp_plink.vcf"
             
             self.run_command(
                 f"{self.config['paths']['plink']} --bfile {base_name} --recode vcf --out {temp_vcf}.plink",
@@ -802,7 +814,7 @@ class GenotypeProcessor:
                 if os.path.exists(f"{temp_vcf}.plink{ext}"):
                     os.remove(f"{temp_vcf}.plink{ext}")
                     
-            return output_file
+            return str(output_file)
             
         else:
             raise ValueError(f"Unsupported input format: {input_format}")
@@ -830,7 +842,7 @@ class GenotypeProcessor:
     
     def filter_variants(self, input_file, output_dir):
         """Apply comprehensive variant filtering - ORIGINAL FUNCTION"""
-        output_file = os.path.join(output_dir, "filtered.vcf.gz")
+        output_file = output_dir / "filtered.vcf.gz"
         
         filter_expr = []
         
@@ -865,11 +877,11 @@ class GenotypeProcessor:
             "Indexing filtered VCF"
         )
         
-        return output_file
+        return str(output_file)
     
     def handle_multiallelic(self, input_file, output_dir):
         """Handle multi-allelic sites - ORIGINAL FUNCTION"""
-        output_file = os.path.join(output_dir, "biallelic.vcf.gz")
+        output_file = output_dir / "biallelic.vcf.gz"
         action = self.processing_config.get('multiallelic_action', 'split')
         
         if action == 'split':
@@ -906,11 +918,11 @@ class GenotypeProcessor:
             "Indexing biallelic VCF"
         )
         
-        return output_file
+        return str(output_file)
     
     def normalize_chromosomes(self, input_file, output_dir):
         """Normalize chromosome naming convention - ORIGINAL FUNCTION"""
-        output_file = os.path.join(output_dir, "chrom_normalized.vcf.gz")
+        output_file = output_dir / "chrom_normalized.vcf.gz"
         prefix_config = self.processing_config.get('chromosome_prefix', 'auto')
         
         if prefix_config == 'auto':
@@ -924,7 +936,7 @@ class GenotypeProcessor:
                 f"-Oz -o {output_file}",
                 "Adding 'chr' prefix to chromosomes"
             )
-            current_file = output_file
+            current_file = str(output_file)
         elif prefix_config == 'none':
             # Remove 'chr' prefix if present
             self.run_command(
@@ -933,7 +945,7 @@ class GenotypeProcessor:
                 f"-Oz -o {output_file}",
                 "Removing 'chr' prefix from chromosomes"
             )
-            current_file = output_file
+            current_file = str(output_file)
         else:
             logger.warning(f"Unknown chromosome prefix setting: {prefix_config}")
             current_file = input_file
@@ -959,18 +971,18 @@ class GenotypeProcessor:
             return input_file
         else:
             # Add chr prefix
-            output_file = os.path.join(output_dir, "chrom_normalized.vcf.gz")
+            output_file = output_dir / "chrom_normalized.vcf.gz"
             self.run_command(
                 f"{self.config['paths']['bcftools']} annotate {input_file} "
                 f"--rename-chrs <(echo -e '1\\tchr1\\n2\\tchr2\\n3\\tchr3\\n4\\tchr4\\n5\\tchr5\\n6\\tchr6\\n7\\tchr7\\n8\\tchr8\\n9\\tchr9\\n10\\tchr10\\n11\\tchr11\\n12\\tchr12\\n13\\tchr13\\n14\\tchr14\\n15\\tchr15\\n16\\tchr16\\n17\\tchr17\\n18\\tchr18\\n19\\tchr19\\n20\\tchr20\\n21\\tchr21\\n22\\tchr22\\nX\\tchrX\\nY\\tchrY\\nMT\\tchrM') "
                 f"-Oz -o {output_file}",
                 "Auto-adding 'chr' prefix to chromosomes"
             )
-            return output_file
+            return str(output_file)
     
     def remove_phasing(self, input_file, output_dir):
         """Remove phasing information from genotypes - ORIGINAL FUNCTION"""
-        output_file = os.path.join(output_dir, "unphased.vcf.gz")
+        output_file = output_dir / "unphased.vcf.gz"
         
         self.run_command(
             f"{self.config['paths']['bcftools']} view {input_file} -U -Oz -o {output_file}",
@@ -982,11 +994,11 @@ class GenotypeProcessor:
             "Indexing unphased VCF"
         )
         
-        return output_file
+        return str(output_file)
     
     def normalize_indels(self, input_file, output_dir):
         """Normalize INDEL representations (requires reference genome) - ORIGINAL FUNCTION"""
-        output_file = os.path.join(output_dir, "indel_normalized.vcf.gz")
+        output_file = output_dir / "indel_normalized.vcf.gz"
         
         # Check if reference genome is available
         ref_genome = self.processing_config.get('reference_genome')
@@ -1015,11 +1027,11 @@ class GenotypeProcessor:
             "Indexing INDEL-normalized VCF"
         )
         
-        return output_file
+        return str(output_file)
     
     def remove_duplicates(self, input_file, output_dir):
         """Remove duplicate variants - ORIGINAL FUNCTION"""
-        output_file = os.path.join(output_dir, "deduplicated.vcf.gz")
+        output_file = output_dir / "deduplicated.vcf.gz"
         
         self.run_command(
             f"{self.config['paths']['bcftools']} norm {input_file} "
@@ -1032,11 +1044,11 @@ class GenotypeProcessor:
             "Indexing deduplicated VCF"
         )
         
-        return output_file
+        return str(output_file)
     
     def left_align_variants(self, input_file, output_dir):
         """Left-align variants (requires reference genome) - ORIGINAL FUNCTION"""
-        output_file = os.path.join(output_dir, "left_aligned.vcf.gz")
+        output_file = output_dir / "left_aligned.vcf.gz"
         
         # Check if reference genome is available
         ref_genome = self.processing_config.get('reference_genome')
@@ -1065,27 +1077,30 @@ class GenotypeProcessor:
             "Indexing left-aligned VCF"
         )
         
-        return output_file
+        return str(output_file)
     
     def generate_qc_reports(self, vcf_file, output_dir):
         """Generate comprehensive QC reports - ORIGINAL FUNCTION"""
         logger.info("📊 Generating QC reports...")
         
+        # Use directory manager for QC reports
+        qc_dir = self.dm.get_directory('reports', 'qc_reports/genotype_qc')
+        
         # Basic stats
         self.run_command(
-            f"{self.config['paths']['bcftools']} stats {vcf_file} > {output_dir}/vcf_stats.txt",
+            f"{self.config['paths']['bcftools']} stats {vcf_file} > {qc_dir}/vcf_stats.txt",
             "Generating VCF statistics"
         )
         
         # Sample statistics
         self.run_command(
-            f"{self.config['paths']['bcftools']} query -l {vcf_file} | wc -l > {output_dir}/sample_count.txt",
+            f"{self.config['paths']['bcftools']} query -l {vcf_file} | wc -l > {qc_dir}/sample_count.txt",
             "Counting samples"
         )
         
         # Variant statistics
         self.run_command(
-            f"{self.config['paths']['bcftools']} view -H {vcf_file} | wc -l > {output_dir}/variant_count.txt",
+            f"{self.config['paths']['bcftools']} view -H {vcf_file} | wc -l > {qc_dir}/variant_count.txt",
             "Counting variants"
         )
         
@@ -1093,7 +1108,9 @@ class GenotypeProcessor:
     
     def prepare_final_file(self, input_file, output_dir):
         """Prepare final genotype file for analysis - ORIGINAL FUNCTION"""
-        final_file = os.path.join(output_dir, "final_genotypes.vcf.gz")
+        # Use directory manager for final genotypes location
+        final_dir = self.dm.get_directory('processed_data', 'genotypes/final')
+        final_file = final_dir / "final_genotypes.vcf.gz"
         
         # Copy to final location
         self.run_command(
@@ -1107,7 +1124,7 @@ class GenotypeProcessor:
         )
         
         # Validate final file
-        self.validate_vcf(final_file)
+        self.validate_vcf(str(final_file))
         
         # Log final file info
         result = self.run_command(
@@ -1124,7 +1141,7 @@ class GenotypeProcessor:
         
         logger.info(f"📊 Final genotype data: {variant_count} variants, {sample_count} samples")
         
-        return final_file
+        return str(final_file)
     
     def validate_vcf(self, vcf_file):
         """Validate VCF file structure - ORIGINAL FUNCTION"""

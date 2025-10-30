@@ -12,8 +12,79 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import LabelEncoder
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger('QTLPipeline')
+
+class BatchCorrection:
+    def __init__(self, config, results_dir):
+        self.config = config
+        self.results_dir = Path(results_dir)
+        
+        # Setup directories using directory manager
+        self.setup_directories()
+        
+    def setup_directories(self):
+        """Setup directories using directory manager"""
+        try:
+            from scripts.utils.directory_manager import get_module_directories
+            
+            self.dirs = get_module_directories(
+                'batch_correction',
+                [
+                    'comparison_analysis',
+                    {'comparison_analysis': ['batch_correction']},
+                    'processed_data',
+                    {'processed_data': ['expression']},
+                    'system',
+                    {'system': ['temporary_files']},
+                    'reports',
+                    {'reports': ['batch_correction_reports']}
+                ],
+                str(self.results_dir)
+            )
+            
+            # Set main directory paths
+            self.batch_correction_dir = self.dirs['comparison_analysis_batch_correction']
+            self.processed_data_dir = self.dirs['processed_data_expression']
+            self.temp_dir = self.dirs['system_temporary_files']
+            self.reports_dir = self.dirs['reports_batch_correction_reports']
+            
+            logger.info(f"✅ Batch correction directories setup in: {self.batch_correction_dir}")
+            
+        except ImportError as e:
+            logger.warning(f"Directory manager not available: {e}, using fallback directories")
+            self.setup_fallback_directories()
+        except Exception as e:
+            logger.error(f"❌ Directory setup failed: {e}")
+            self.setup_fallback_directories()
+    
+    def setup_fallback_directories(self):
+        """Fallback directory creation when directory manager is not available"""
+        try:
+            # Main directories
+            self.batch_correction_dir = self.results_dir / "comparison_analysis" / "batch_correction"
+            self.processed_data_dir = self.results_dir / "processed_data" / "expression"
+            self.temp_dir = self.results_dir / "system" / "temporary_files"
+            self.reports_dir = self.results_dir / "reports" / "batch_correction_reports"
+            
+            # Create all directories
+            directories = [
+                self.batch_correction_dir, self.processed_data_dir,
+                self.temp_dir, self.reports_dir
+            ]
+            
+            for directory in directories:
+                directory.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"✅ Fallback batch correction directories created in: {self.batch_correction_dir}")
+            
+        except Exception as e:
+            logger.error(f"❌ Fallback directory creation failed: {e}")
+            # Ultimate fallback
+            self.batch_correction_dir = self.results_dir / "batch_correction"
+            self.batch_correction_dir.mkdir(parents=True, exist_ok=True)
+            logger.warning(f"⚠️ Using ultimate fallback directory: {self.batch_correction_dir}")
 
 def remove_batch_effect_optimized(x, categorical_covariates=None, linear_covariates=None, design_matrix=None):
     """
@@ -379,7 +450,7 @@ def remove_batch_effect_custom(x, batches=None, covariates=None, design=None):
         raise
 
 # ENHANCED: Updated main pipeline function that accepts batch_covariates parameter
-def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covariates=None):
+def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covariates=None, results_dir=None):
     """
     Enhanced batch correction pipeline that accepts batch_covariates parameter
     for compatibility with qtl_analysis.py
@@ -394,6 +465,8 @@ def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covar
         Configuration dictionary
     batch_covariates : pandas DataFrame, optional
         Pre-loaded batch covariates from qtl_analysis.py
+    results_dir : str, optional
+        Results directory path
     
     Returns:
     --------
@@ -404,6 +477,19 @@ def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covar
     """
     try:
         logger.info(f"🚀 Starting batch correction pipeline for {qtl_type}...")
+        
+        # Initialize directory structure if results_dir provided
+        if results_dir:
+            batch_corrector = BatchCorrection(config, results_dir)
+            batch_correction_dir = batch_corrector.batch_correction_dir
+            reports_dir = batch_corrector.reports_dir
+        else:
+            # Fallback to config results_dir
+            results_dir = config.get('results_dir', 'results')
+            batch_correction_dir = Path(results_dir) / "comparison_analysis" / "batch_correction"
+            reports_dir = Path(results_dir) / "reports" / "batch_correction_reports"
+            batch_correction_dir.mkdir(parents=True, exist_ok=True)
+            reports_dir.mkdir(parents=True, exist_ok=True)
         
         # Skip if disabled for this QTL type
         if qtl_type == 'sqtl':
@@ -517,20 +603,48 @@ def run_batch_correction_pipeline(normalized_data, qtl_type, config, batch_covar
                 'samples_used': available_samples_sorted,
                 'categorical_covariates': available_categorical,
                 'linear_covariates': available_linear,
-                'covariate_source': 'provided_from_qtl_analysis'
+                'covariate_source': 'provided_from_qtl_analysis',
+                'batch_correction_dir': str(batch_correction_dir)
             }
+            
+            # Save batch correction report
+            save_batch_correction_report(correction_info, reports_dir, qtl_type)
             
         else:
             # Use the config-based approach
             corrected_data, correction_info = run_optimized_batch_correction(
                 normalized_data, qtl_type, config
             )
+            correction_info['batch_correction_dir'] = str(batch_correction_dir)
+            
+            # Save batch correction report
+            save_batch_correction_report(correction_info, reports_dir, qtl_type)
         
         return corrected_data, correction_info
         
     except Exception as e:
         logger.error(f"❌ Batch correction pipeline failed for {qtl_type}: {e}")
         raise
+
+def save_batch_correction_report(correction_info, reports_dir, qtl_type):
+    """Save batch correction report"""
+    try:
+        import json
+        from datetime import datetime
+        
+        report_file = reports_dir / f"{qtl_type}_batch_correction_report.json"
+        
+        # Add timestamp
+        correction_info['timestamp'] = datetime.now().isoformat()
+        correction_info['pipeline_version'] = 'enhanced_1.0'
+        
+        with open(report_file, 'w') as f:
+            json.dump(correction_info, f, indent=2, default=str)
+        
+        logger.info(f"💾 Batch correction report saved: {report_file}")
+        
+    except Exception as e:
+        logger.warning(f"Could not save batch correction report: {e}")
 
 # Backward compatibility functions
 def run_batch_correction(normalized_data, qtl_type, config):

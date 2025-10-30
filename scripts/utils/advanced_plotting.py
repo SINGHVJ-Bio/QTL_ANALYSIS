@@ -12,27 +12,44 @@ Enhanced with:
 - Parallel processing for plot generation
 - Comprehensive data validation
 - Export functionality for publications
+- Consistent directory management using DirectoryManager
 """
 
 import os
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for better performance
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 import logging
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-import plotly.io as pio
-from typing import Dict, List, Any, Optional, Tuple, Union
-from pathlib import Path
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import gc
 import json
+from typing import Dict, List, Any, Optional, Tuple, Union
+from pathlib import Path
 
+# Conditional imports for interactive plots
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+    import plotly.io as pio
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    logging.warning("Plotly not available, interactive plots will be disabled")
+
+# Import directory manager
+try:
+    from scripts.utils.directory_manager import get_module_directories
+except ImportError as e:
+    logging.warning(f"Directory manager not available: {e}")
+    get_module_directories = None
+   
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger('QTLPipeline')
@@ -40,17 +57,70 @@ logger = logging.getLogger('QTLPipeline')
 class AdvancedPlotter:
     def __init__(self, config: Dict[str, Any], results_dir: str):
         self.config = config
-        self.results_dir = results_dir
-        self.plots_dir = os.path.join(results_dir, "plots", "interactive")
+        self.results_dir = Path(results_dir)
         self.plot_config = config.get('plotting', {})
         self.performance_config = config.get('performance', {})
         self.max_workers = self.performance_config.get('max_workers', 4)
         
-        # Create plots directory
-        Path(self.plots_dir).mkdir(parents=True, exist_ok=True)
+        # Setup directories using directory manager
+        self.setup_directories()
         
         self.setup_plotly()
         
+    def setup_directories(self):
+        """Setup directories using directory manager"""
+        try:
+            if get_module_directories:
+                self.dirs = get_module_directories(
+                    'advanced_plotting',
+                    [
+                        'visualization',
+                        {'visualization': ['summary_plots', 'interactive_plots', 'manhattan_plots', 'qq_plots']},
+                        'system',
+                        {'system': ['temporary_files']}
+                    ],
+                    str(self.results_dir)
+                )
+                self.plots_dir = self.dirs['visualization_interactive_plots']
+                self.summary_plots_dir = self.dirs['visualization_summary_plots']
+                self.manhattan_plots_dir = self.dirs['visualization_manhattan_plots']
+                self.qq_plots_dir = self.dirs['visualization_qq_plots']
+                self.temp_dir = self.dirs['system_temporary_files']
+                
+                logger.info(f"✅ Advanced plotting directories setup in: {self.plots_dir}")
+            else:
+                # Fallback directory creation
+                self.plots_dir = self.results_dir / "visualization" / "interactive_plots"
+                self.summary_plots_dir = self.results_dir / "visualization" / "summary_plots"
+                self.manhattan_plots_dir = self.results_dir / "visualization" / "manhattan_plots"
+                self.qq_plots_dir = self.results_dir / "visualization" / "qq_plots"
+                self.temp_dir = self.results_dir / "system" / "temporary_files"
+                
+                self.plots_dir.mkdir(parents=True, exist_ok=True)
+                self.summary_plots_dir.mkdir(parents=True, exist_ok=True)
+                self.manhattan_plots_dir.mkdir(parents=True, exist_ok=True)
+                self.qq_plots_dir.mkdir(parents=True, exist_ok=True)
+                self.temp_dir.mkdir(parents=True, exist_ok=True)
+                
+                logger.info(f"✅ Fallback plotting directories created in: {self.plots_dir}")
+                
+        except Exception as e:
+            logger.error(f"❌ Directory setup failed: {e}")
+            # Ultimate fallback - maintain original structure for maximum compatibility
+            self.plots_dir = self.results_dir / "plots" / "interactive"
+            self.summary_plots_dir = self.results_dir / "plots" / "summary"
+            self.manhattan_plots_dir = self.results_dir / "plots" / "manhattan"
+            self.qq_plots_dir = self.results_dir / "plots" / "qq"
+            self.temp_dir = self.results_dir / "temp_plots"
+            
+            self.plots_dir.mkdir(parents=True, exist_ok=True)
+            self.summary_plots_dir.mkdir(parents=True, exist_ok=True)
+            self.manhattan_plots_dir.mkdir(parents=True, exist_ok=True)
+            self.qq_plots_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.warning(f"⚠️ Using ultimate fallback directories: {self.plots_dir}")
+    
     def setup_plotly(self):
         """Setup Plotly configuration with enhanced settings"""
         try:
@@ -293,8 +363,8 @@ class AdvancedPlotter:
             output_prefix = f"locus_zoom_{gene_id}"
         
         # Save interactive version
-        output_file = os.path.join(self.plots_dir, f"{output_prefix}.html")
-        fig.write_html(output_file, include_plotlyjs='cdn', config={
+        output_file = self.plots_dir / f"{output_prefix}.html"
+        fig.write_html(str(output_file), include_plotlyjs='cdn', config={
             'displayModeBar': True,
             'scrollZoom': True,
             'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'eraseshape'],
@@ -308,17 +378,17 @@ class AdvancedPlotter:
         })
         
         # Save static version
-        static_file = os.path.join(self.plots_dir, f"{output_prefix}.png")
+        static_file = self.summary_plots_dir / f"{output_prefix}.png"
         try:
-            fig.write_image(static_file, engine="kaleido")
+            fig.write_image(str(static_file), engine="kaleido")
         except Exception as e:
             logger.warning(f"Could not save static image: {e}")
             # Fallback: save as SVG
-            static_file = os.path.join(self.plots_dir, f"{output_prefix}.svg")
-            fig.write_image(static_file)
+            static_file = self.summary_plots_dir / f"{output_prefix}.svg"
+            fig.write_image(str(static_file))
         
         logger.info(f"💾 Enhanced locus zoom plot saved: {output_file}")
-        return output_file
+        return str(output_file)
     
     def _create_hover_text(self, row: pd.Series) -> str:
         """Create enhanced hover text for plots"""
@@ -519,20 +589,20 @@ class AdvancedPlotter:
             )
             
             # Save interactive version
-            output_file = os.path.join(self.plots_dir, f"{output_prefix}_correlation_heatmap.html")
-            fig.write_html(output_file, include_plotlyjs='cdn')
+            output_file = self.plots_dir / f"{output_prefix}_correlation_heatmap.html"
+            fig.write_html(str(output_file), include_plotlyjs='cdn')
             
             # Create static version with clustering
-            self._create_static_clustermap(corr_matrix, output_prefix, title)
+            static_file = self._create_static_clustermap(corr_matrix, output_prefix, title)
             
             logger.info(f"💾 Enhanced correlation heatmap saved: {output_file}")
-            return output_file
+            return str(output_file)
             
         except Exception as e:
             logger.error(f"❌ Error creating correlation heatmap: {e}")
             return None
     
-    def _create_static_clustermap(self, corr_matrix: pd.DataFrame, output_prefix: str, title: str):
+    def _create_static_clustermap(self, corr_matrix: pd.DataFrame, output_prefix: str, title: str) -> str:
         """Create static clustermap using seaborn"""
         try:
             plt.figure(figsize=(12, 10))
@@ -549,14 +619,16 @@ class AdvancedPlotter:
             g.ax_heatmap.set_title(title, fontsize=16, fontweight='bold', pad=20)
             
             # Save static version
-            static_file = os.path.join(self.plots_dir, f"{output_prefix}_correlation_heatmap.png")
-            plt.savefig(static_file, dpi=300, bbox_inches='tight', facecolor='white')
+            static_file = self.summary_plots_dir / f"{output_prefix}_correlation_heatmap.png"
+            plt.savefig(str(static_file), dpi=300, bbox_inches='tight', facecolor='white')
             plt.close()
             
             logger.debug(f"💾 Static clustermap saved: {static_file}")
+            return str(static_file)
             
         except Exception as e:
             logger.warning(f"Could not create static clustermap: {e}")
+            return ""
     
     def create_network_plot(self, significant_associations: pd.DataFrame, output_prefix: str, 
                            max_nodes: int = 50, **kwargs) -> Optional[str]:
@@ -726,11 +798,11 @@ class AdvancedPlotter:
                 width=1000
             )
             
-            output_file = os.path.join(self.plots_dir, f"{output_prefix}_network.html")
-            fig.write_html(output_file, include_plotlyjs='cdn')
+            output_file = self.plots_dir / f"{output_prefix}_network.html"
+            fig.write_html(str(output_file), include_plotlyjs='cdn')
             
             logger.info(f"💾 Enhanced network plot saved: {output_file}")
-            return output_file
+            return str(output_file)
             
         except Exception as e:
             logger.error(f"❌ Error creating enhanced network plot: {e}")
@@ -955,8 +1027,8 @@ class AdvancedPlotter:
         )
         
         # Save plot
-        output_file = os.path.join(self.plots_dir, f"{output_prefix}_interactive_manhattan.html")
-        fig.write_html(output_file, include_plotlyjs='cdn', config={
+        output_file = self.plots_dir / f"{output_prefix}_interactive_manhattan.html"
+        fig.write_html(str(output_file), include_plotlyjs='cdn', config={
             'displayModeBar': True,
             'scrollZoom': True,
             'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'eraseshape'],
@@ -969,8 +1041,15 @@ class AdvancedPlotter:
             }
         })
         
+        # Save static version in manhattan plots directory
+        static_file = self.manhattan_plots_dir / f"{output_prefix}_manhattan.png"
+        try:
+            fig.write_image(str(static_file), width=1200, height=600, scale=2)
+        except Exception as e:
+            logger.warning(f"Could not save static Manhattan plot: {e}")
+        
         logger.info(f"💾 Enhanced interactive Manhattan plot saved: {output_file}")
-        return output_file
+        return str(output_file)
     
     def create_multi_panel_figure(self, qtl_results: Dict[str, Any], output_prefix: str,
                                 **kwargs) -> Optional[str]:
@@ -1039,18 +1118,18 @@ class AdvancedPlotter:
                 fig.layout.annotations[i].update(font=dict(size=12, family="Arial, sans-serif"))
             
             # Save plot
-            output_file = os.path.join(self.plots_dir, f"{output_prefix}_multi_panel_summary.html")
-            fig.write_html(output_file, include_plotlyjs='cdn')
+            output_file = self.plots_dir / f"{output_prefix}_multi_panel_summary.html"
+            fig.write_html(str(output_file), include_plotlyjs='cdn')
             
             # Static version
-            static_file = os.path.join(self.plots_dir, f"{output_prefix}_multi_panel_summary.png")
+            static_file = self.summary_plots_dir / f"{output_prefix}_multi_panel_summary.png"
             try:
-                fig.write_image(static_file, width=1400, height=1200)
+                fig.write_image(str(static_file), width=1400, height=1200)
             except Exception as e:
                 logger.warning(f"Could not save static multi-panel: {e}")
             
             logger.info(f"💾 Enhanced multi-panel summary saved: {output_file}")
-            return output_file
+            return str(output_file)
             
         except Exception as e:
             logger.error(f"❌ Error creating multi-panel figure: {e}")
@@ -1338,11 +1417,11 @@ class AdvancedPlotter:
                 title_font=dict(size=16, family="Arial, sans-serif")
             )
             
-            output_file = os.path.join(self.plots_dir, f"{output_prefix}_expression_heatmap.html")
-            fig.write_html(output_file, include_plotlyjs='cdn')
+            output_file = self.plots_dir / f"{output_prefix}_expression_heatmap.html"
+            fig.write_html(str(output_file), include_plotlyjs='cdn')
             
             logger.info(f"💾 Enhanced expression heatmap saved: {output_file}")
-            return output_file
+            return str(output_file)
             
         except Exception as e:
             logger.error(f"❌ Error creating expression heatmap: {e}")
@@ -1432,11 +1511,18 @@ class AdvancedPlotter:
                     borderwidth=1
                 )
             
-            output_file = os.path.join(self.plots_dir, f"{output_prefix}_interactive_qq.html")
-            fig.write_html(output_file, include_plotlyjs='cdn')
+            output_file = self.plots_dir / f"{output_prefix}_interactive_qq.html"
+            fig.write_html(str(output_file), include_plotlyjs='cdn')
+            
+            # Save static version in QQ plots directory
+            static_file = self.qq_plots_dir / f"{output_prefix}_qq.png"
+            try:
+                fig.write_image(str(static_file), width=700, height=600, scale=2)
+            except Exception as e:
+                logger.warning(f"Could not save static QQ plot: {e}")
             
             logger.info(f"💾 Enhanced interactive QQ plot saved: {output_file}")
-            return output_file
+            return str(output_file)
             
         except Exception as e:
             logger.error(f"❌ Error creating interactive QQ plot: {e}")
@@ -1536,7 +1622,7 @@ class AdvancedPlotter:
                 # Convert to requested formats
                 for fmt in formats:
                     try:
-                        output_file = os.path.join(output_dir, f"{base_name}.{fmt}")
+                        output_file = Path(output_dir) / f"{base_name}.{fmt}"
                         
                         # Read the HTML and convert to static format
                         # This is a simplified implementation - in practice would use proper conversion
@@ -1550,9 +1636,9 @@ class AdvancedPlotter:
                                 showarrow=False,
                                 font=dict(size=20)
                             )
-                            fig.write_image(output_file, width=1200, height=800, scale=2)
+                            fig.write_image(str(output_file), width=1200, height=800, scale=2)
                         
-                        exported_files[base_name].append(output_file)
+                        exported_files[base_name].append(str(output_file))
                         
                     except Exception as e:
                         logger.warning(f"Could not export {base_name} as {fmt}: {e}")
@@ -1563,3 +1649,103 @@ class AdvancedPlotter:
         except Exception as e:
             logger.error(f"❌ Error exporting publication plots: {e}")
             return {}
+
+# Utility function for modular pipeline integration - MAINTAIN EXACT SIGNATURE FOR BACKWARD COMPATIBILITY
+def create_advanced_plots(config, plot_type, data, output_prefix, results_dir, **kwargs):
+    """
+    Main function for advanced plotting module in the modular pipeline
+    Returns: dict (plot results)
+    
+    MAINTAINS EXACT SIGNATURE FOR BACKWARD COMPATIBILITY
+    """
+    try:
+        logger.info(f"🚀 Starting advanced plotting for {plot_type}...")
+        
+        # Initialize plotter
+        plotter = AdvancedPlotter(config, results_dir)
+        
+        # Dispatch to appropriate plot function based on plot_type
+        plot_functions = {
+            'locus_zoom': plotter.create_locus_zoom,
+            'correlation_heatmap': plotter.create_correlation_heatmap,
+            'network_plot': plotter.create_network_plot,
+            'interactive_manhattan': plotter.create_interactive_manhattan,
+            'multi_panel': plotter.create_multi_panel_figure,
+            'expression_heatmap': plotter.create_expression_heatmap,
+            'qq_plot': plotter.create_qq_plot_interactive,
+            'dashboard': plotter.create_comprehensive_dashboard
+        }
+        
+        if plot_type in plot_functions:
+            plot_function = plot_functions[plot_type]
+            
+            # Prepare arguments based on function signature
+            if plot_type == 'locus_zoom':
+                # For locus_zoom, data should be a tuple (result_file, gene_id, chrom, position)
+                if isinstance(data, (list, tuple)) and len(data) >= 4:
+                    result = plot_function(data[0], data[1], data[2], data[3], output_prefix, **kwargs)
+                else:
+                    logger.error(f"Invalid data format for locus_zoom: {type(data)}")
+                    return {'plot_generated': False}
+            elif plot_type in ['correlation_heatmap', 'expression_heatmap']:
+                # For heatmaps, data should be a DataFrame
+                result = plot_function(data, output_prefix, **kwargs)
+            elif plot_type == 'network_plot':
+                # For network plots, data should be significant associations DataFrame
+                result = plot_function(data, output_prefix, **kwargs)
+            elif plot_type == 'interactive_manhattan':
+                # For Manhattan plots, data should be result file path
+                result = plot_function(data, output_prefix, **kwargs)
+            elif plot_type in ['multi_panel', 'dashboard']:
+                # For multi-panel and dashboard, data should be qtl_results dict
+                result = plot_function(data, output_prefix, **kwargs)
+            elif plot_type == 'qq_plot':
+                # For QQ plots, data should be p-values array
+                result = plot_function(data, output_prefix, **kwargs)
+            else:
+                logger.error(f"Unknown plot type: {plot_type}")
+                return {'plot_generated': False}
+            
+            if result:
+                logger.info(f"✅ Advanced plotting completed for {plot_type}")
+                return {'plot_generated': True, 'plot_file': result}
+            else:
+                logger.error(f"❌ Advanced plotting failed for {plot_type}")
+                return {'plot_generated': False}
+        else:
+            logger.error(f"❌ Unknown plot type: {plot_type}")
+            return {'plot_generated': False}
+            
+    except Exception as e:
+        logger.error(f"❌ Advanced plotting module failed: {e}")
+        return {'plot_generated': False}
+
+# Maintain backward compatibility
+if __name__ == "__main__":
+    # Example usage
+    import yaml
+    
+    # Load config
+    with open("config/config.yaml", 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Generate sample data for testing
+    np.random.seed(42)
+    
+    # Test correlation heatmap
+    sample_data = pd.DataFrame(np.random.randn(50, 30))
+    
+    # Test advanced plotting
+    plotter = AdvancedPlotter(config, 'test_results')
+    
+    # Test correlation heatmap
+    result = plotter.create_correlation_heatmap(sample_data, 'test_correlation', 'Test Correlation Heatmap')
+    print(f"Correlation heatmap test: {result}")
+    
+    # Test QQ plot
+    p_values = np.random.uniform(0, 1, 1000)
+    p_values[:10] = np.random.uniform(0, 1e-8, 10)  # Add some significant p-values
+    result = plotter.create_qq_plot_interactive(p_values, 'test_qq', 'Test QQ Plot')
+    print(f"QQ plot test: {result}")
+    
+    print("✅ Advanced plotting test completed successfully")
