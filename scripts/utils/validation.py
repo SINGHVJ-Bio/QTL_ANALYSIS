@@ -117,7 +117,7 @@ class EnhancedQC:
         
         try:
             steps = [
-                ("📋 Validating input files", self.validate_input_files),
+                ("📋 Validating input files", self.validate_input),
                 ("🔍 Performing basic data quality checks", self.basic_data_quality_checks),
                 ("📊 Generating data preparation report", lambda: self.generate_data_preparation_report(
                     self._validation_results, self._quality_results)),
@@ -488,7 +488,7 @@ class EnhancedQC:
             logger.warning(f"Could not generate tensorQTL compatibility report: {e}")
             return False
 
-    def validate_input_files(self) -> Dict[str, Any]:
+    def validate_input(self) -> Dict[str, Any]:
         """Validate all input files exist and are accessible"""
         logger.info("🔍 Validating input files...")
         
