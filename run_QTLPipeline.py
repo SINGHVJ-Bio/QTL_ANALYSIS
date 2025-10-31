@@ -37,12 +37,21 @@ warnings.filterwarnings('ignore')
 class ModularQTLPipeline:
     def __init__(self, config_path="config/config.yaml"):
         self.config_path = config_path
+        self.directory_manager = None
+        self.logger = None
+        
+        # Step 1: Load config
         self.config = self.load_config()
         self.results_dir = Path(self.config['results_dir'])
         
-        # REORDERED: Setup logging FIRST
-        self.setup_logging()
+        # Step 2: Setup minimal logging for initialization
+        self._setup_minimal_logging()
+        
+        # Step 3: Setup directories
         self.setup_directories()
+        
+        # Step 4: Setup proper logging with directory structure
+        self.setup_logging()
         
         # Define modules with dependencies and descriptions
         self.modules = {
@@ -111,11 +120,19 @@ class ModularQTLPipeline:
         # Track which modules have been run in this session
         self.completed_modules = set()
         self.execution_times = {}
-        self.directory_manager = None
+
+    def _setup_minimal_logging(self):
+        """Setup minimal logging for initialization phase"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[logging.StreamHandler()]
+        )
+        self.temp_logger = logging.getLogger('ModularQTLPipeline_Init')
 
     def setup_logging(self):
-        """Setup logging to use results directory"""
-        # Get logs directory from directory manager
+        """Setup proper logging with file handler"""
+        # Get logs directory
         if self.directory_manager:
             logs_dir = self.directory_manager.get_directory('system', 'logs')
         else:
@@ -124,16 +141,27 @@ class ModularQTLPipeline:
         
         log_file = logs_dir / 'qtl_pipeline.log'
         
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.StreamHandler(),
-                logging.FileHandler(log_file)
-            ]
-        )
-        self.logger = logging.getLogger('ModularQTLPipeline')
+        # Remove existing handlers and setup new ones
+        logger = logging.getLogger('ModularQTLPipeline')
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+        
+        logger.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        
+        # Add file handler
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        
+        # Add console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+        
+        self.logger = logger
         self.logger.info(f"✅ Logging to: {log_file}")
+        self.logger.info("🚀 Modular QTL Pipeline initialized successfully")
 
     def load_config(self):
         """Load configuration from YAML file with enhanced error handling"""
@@ -141,18 +169,18 @@ class ModularQTLPipeline:
             with open(self.config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
-            logging.info(f"✅ Configuration loaded from: {self.config_path}")
+            self.temp_logger.info(f"✅ Configuration loaded from: {self.config_path}")
             return config
         except FileNotFoundError:
-            logging.error(f"❌ Config file not found: {self.config_path}")
-            logging.info("💡 Available config files:")
+            self.temp_logger.error(f"❌ Config file not found: {self.config_path}")
+            self.temp_logger.info("💡 Available config files:")
             config_dir = Path("config")
             if config_dir.exists():
                 for config_file in config_dir.glob("*.yaml"):
-                    logging.info(f"   - {config_file}")
+                    self.temp_logger.info(f"   - {config_file}")
             sys.exit(1)
         except Exception as e:
-            logging.error(f"❌ Error loading config file: {e}")
+            self.temp_logger.error(f"❌ Error loading config file: {e}")
             sys.exit(1)
 
     def setup_directories(self):
@@ -162,14 +190,14 @@ class ModularQTLPipeline:
             self.directory_manager = get_directory_manager(self.results_dir)
             self.directory_manager.initialize_pipeline_directories()
             
-            self.logger.info(f"✅ Directory structure initialized in: {self.results_dir}")
-            self.logger.info("📁 Subdirectories will be created by processing modules as needed")
+            self.temp_logger.info(f"✅ Directory structure initialized in: {self.results_dir}")
+            self.temp_logger.info("📁 Subdirectories will be created by processing modules as needed")
             
         except Exception as e:
-            self.logger.error(f"❌ Directory setup failed: {e}")
+            self.temp_logger.error(f"❌ Directory setup failed: {e}")
             # Fallback: create minimal directory structure
             (self.results_dir / 'system' / 'logs').mkdir(parents=True, exist_ok=True)
-            self.logger.warning("⚠️ Using fallback directory structure")
+            self.temp_logger.warning("⚠️ Using fallback directory structure")
 
     def check_dependencies(self, module_name):
         """Check if all dependencies for a module are satisfied with detailed reporting"""
