@@ -1397,7 +1397,7 @@ class GenotypeLoader:
 def save_qtl_results_comprehensive(results_dict, base_prefix, qtl_type, analysis_mode, result_type):
     """
     Enhanced function to save all QTL results in proper TSV format with separate folders
-    for nominal and permutation results
+    for nominal and permutation results - NOW WITH PARALLEL PROCESSING
     """
     # Create appropriate directory structure using centralized directory manager
     results_dir = Path(base_prefix).parent
@@ -1445,30 +1445,106 @@ def save_qtl_results_comprehensive(results_dict, base_prefix, qtl_type, analysis
                     logger.info(f"✅ Saved permutation results as TSV: {tsv_file}")
         
         elif result_type == 'nominal':
-            # Save nominal results
+            # Save nominal results WITH PARALLEL PROCESSING
             if 'nominal_prefix' in results_dict:
                 nominal_prefix = results_dict['nominal_prefix']
-                # Convert parquet files to TSV
+                # Convert parquet files to TSV in parallel
                 import glob
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                
                 parquet_files = glob.glob(f"{nominal_prefix}.cis_qtl_pairs.*.parquet")
                 
-                for pq_file in parquet_files:
+                if parquet_files:
+                    # Get config for thread count - access it from the global context
+                    # Since this function is called from run_qtl_analysis_enhanced which has config
                     try:
-                        # Read parquet and save as TSV
-                        pairs_df = pd.read_parquet(pq_file)
-                        chrom = os.path.basename(pq_file).split('.')[-2]  # Extract chromosome
-                        tsv_file = prefix.with_name(prefix.name + f".cis_qtl_pairs.{chrom}.tsv.gz")
-                        pairs_df.to_csv(str(tsv_file), sep='\t', compression='gzip', index=False)
-                        saved_files[f'nominal_chr{chrom}'] = str(tsv_file)
-                        logger.info(f"✅ Converted nominal results for chr{chrom}: {tsv_file}")
+                        # Try to get config from the calling context or use default
+                        import inspect
+                        config = None
+                        for frame_info in inspect.stack():
+                            frame = frame_info.frame
+                            if 'config' in frame.f_locals:
+                                config = frame.f_locals['config']
+                                break
+                            elif 'self' in frame.f_locals and hasattr(frame.f_locals['self'], 'config'):
+                                config = frame.f_locals['self'].config
+                                break
                         
-                        # Also save uncompressed version
-                        tsv_uncompressed = prefix.with_name(prefix.name + f".cis_qtl_pairs.{chrom}.tsv")
-                        pairs_df.to_csv(str(tsv_uncompressed), sep='\t', index=False)
-                        saved_files[f'nominal_chr{chrom}_uncompressed'] = str(tsv_uncompressed)
-                        
+                        if config:
+                            num_threads = config.get('performance', {}).get('num_threads', 1)
+                        else:
+                            num_threads = 1
+                            logger.warning("Could not access config, using 1 thread for conversion")
                     except Exception as e:
-                        logger.warning(f"Could not convert {pq_file}: {e}")
+                        logger.warning(f"Could not determine thread count: {e}, using 1 thread")
+                        num_threads = 1
+                    
+                    logger.info(f"🔄 Converting {len(parquet_files)} nominal result files with {num_threads} threads")
+                    
+                    # Function to process a single chromosome file
+                    def process_single_chromosome(pq_file):
+                        try:
+                            # Read parquet and save as TSV
+                            pairs_df = pd.read_parquet(pq_file)
+                            chrom = os.path.basename(pq_file).split('.')[-2]  # Extract chromosome
+                            
+                            # Create output file paths
+                            tsv_file = prefix.with_name(prefix.name + f".cis_qtl_pairs.{chrom}.tsv.gz")
+                            tsv_uncompressed = prefix.with_name(prefix.name + f".cis_qtl_pairs.{chrom}.tsv")
+                            
+                            # Save compressed version
+                            pairs_df.to_csv(str(tsv_file), sep='\t', compression='gzip', index=False)
+                            
+                            # Save uncompressed version
+                            pairs_df.to_csv(str(tsv_uncompressed), sep='\t', index=False)
+                            
+                            return {
+                                'chrom': chrom,
+                                'files': {
+                                    f'nominal_chr{chrom}': str(tsv_file),
+                                    f'nominal_chr{chrom}_uncompressed': str(tsv_uncompressed)
+                                },
+                                'success': True
+                            }
+                        except Exception as e:
+                            logger.error(f"Error converting {pq_file}: {e}")
+                            return {
+                                'chrom': os.path.basename(pq_file).split('.')[-2],
+                                'files': {},
+                                'success': False,
+                                'error': str(e)
+                            }
+                    
+                    # Process files in parallel if we have multiple threads
+                    if num_threads > 1 and len(parquet_files) > 1:
+                        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+                            # Submit all conversion tasks
+                            future_to_file = {executor.submit(process_single_chromosome, pq_file): pq_file for pq_file in parquet_files}
+                            
+                            # Collect results as they complete
+                            for future in as_completed(future_to_file):
+                                pq_file = future_to_file[future]
+                                try:
+                                    result = future.result()
+                                    if result['success']:
+                                        saved_files.update(result['files'])
+                                        logger.info(f"✅ Converted nominal results for chr{result['chrom']}")
+                                    else:
+                                        logger.warning(f"❌ Failed to convert chr{result['chrom']}: {result.get('error', 'Unknown error')}")
+                                except Exception as e:
+                                    logger.error(f"❌ Error processing {pq_file}: {e}")
+                    else:
+                        # Sequential processing as fallback
+                        logger.info("Using sequential processing for nominal results conversion")
+                        for pq_file in parquet_files:
+                            result = process_single_chromosome(pq_file)
+                            if result['success']:
+                                saved_files.update(result['files'])
+                                logger.info(f"✅ Converted nominal results for chr{result['chrom']}: {list(result['files'].values())[0]}")
+                            else:
+                                logger.warning(f"Could not convert {pq_file}: {result.get('error', 'Unknown error')}")
+                else:
+                    logger.warning("No parquet files found for nominal results conversion")
         
         elif result_type == 'trans':
             # Save trans results

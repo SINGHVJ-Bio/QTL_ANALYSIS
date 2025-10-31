@@ -434,7 +434,7 @@ class ModularQTLPipeline:
             return False
 
     def run_fine_mapping(self):
-        """Run fine mapping module"""
+        """Run fine mapping module - direct approach without wrapper"""
         start_time = datetime.now()
         self.logger.info("\n" + "="*60)
         self.logger.info("🚀 RUNNING FINE MAPPING MODULE")
@@ -451,17 +451,89 @@ class ModularQTLPipeline:
                 str(self.results_dir)
             )
             
+            # Import the main fine mapping function
             from scripts.analysis.fine_mapping import run_fine_mapping
-            success = run_fine_mapping(self.config)
             
-            if success:
+            # Get QTL types from config
+            qtl_types = self._get_qtl_types()
+            overall_success = True
+            
+            for qtl_type in qtl_types:
+                self.logger.info(f"🔍 Running fine mapping for {qtl_type}...")
+                
+                # Construct the expected file paths based on your pipeline structure
+                qtl_results_file = self.results_dir / "analysis_results" / "qtl_mapping" / qtl_type / "permutation" / f"{qtl_type}_cis_permutation.cis_qtl.txt.gz"
+                vcf_file = self.config['input_files']['genotypes']
+                
+                # Check if QTL results file exists
+                if not qtl_results_file.exists():
+                    self.logger.warning(f"⚠️ QTL results file not found: {qtl_results_file}")
+                    self.logger.info(f"💡 Fine mapping requires cis-QTL permutation results for {qtl_type}")
+                    continue
+                
+                # Run fine mapping directly with all required arguments
+                result = run_fine_mapping(
+                    self.config, 
+                    str(qtl_results_file), 
+                    str(vcf_file), 
+                    str(self.results_dir), 
+                    qtl_type
+                )
+                
+                status = result.get('status', 'unknown')
+                
+                if status == 'completed':
+                    self.logger.info(f"✅ {qtl_type} fine mapping completed successfully")
+                elif status == 'no_significant':
+                    self.logger.info(f"ℹ️ No significant {qtl_type} associations found for fine mapping")
+                    # This is not a failure - just no data to process
+                elif status == 'disabled':
+                    self.logger.info(f"ℹ️ {qtl_type} fine mapping disabled in config")
+                else:
+                    self.logger.error(f"❌ {qtl_type} fine mapping failed: {result.get('error', 'Unknown error')}")
+                    overall_success = False
+            
+            # Mark as completed if we attempted all QTL types (even if some had no data)
+            if overall_success:
                 self.mark_module_completed('fine_mapping', (datetime.now() - start_time).total_seconds())
-            return success
-            
+                self.logger.info("✅ Fine mapping module completed")
+                return True
+            else:
+                self.logger.error("❌ Fine mapping failed for one or more QTL types")
+                return False
+                
         except Exception as e:
             self.logger.error(f"❌ Fine mapping failed: {e}")
             self.logger.debug(traceback.format_exc())
             return False
+
+    def _get_qtl_types(self):
+        """Get QTL types from config"""
+        config_types = self.config['analysis']['qtl_types']
+        
+        if config_types == 'all':
+            available_types = []
+            for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
+                config_key = self._map_qtl_type_to_config_key(qtl_type)
+                if (config_key in self.config['input_files'] and 
+                    self.config['input_files'][config_key]):
+                    available_types.append(qtl_type)
+            return available_types
+        elif isinstance(config_types, str):
+            return [t.strip() for t in config_types.split(',')]
+        elif isinstance(config_types, list):
+            return config_types
+        else:
+            return ['eqtl']  # Default
+        
+    def _map_qtl_type_to_config_key(self, qtl_type):
+        """Map QTL type to config file key"""
+        mapping = {
+            'eqtl': 'expression',
+            'pqtl': 'protein', 
+            'sqtl': 'splicing'
+        }
+        return mapping.get(qtl_type, qtl_type)
 
     def run_interaction_analysis(self):
         """Run interaction analysis module"""

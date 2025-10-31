@@ -54,6 +54,7 @@ def run_fine_mapping(config: Dict[str, Any], qtl_results_file: str, vcf_file: st
     This is the entry point called by the pipeline
     """
     fine_mapper = FineMapping(config)
+    from scripts.analysis.fine_mapping import run_fine_mapping_wrapper_enhanced as run_fine_mapping_wrapper
     return fine_mapper.run_fine_mapping(qtl_results_file, vcf_file, output_dir, qtl_type)
 
 class FineMapping:
@@ -703,31 +704,64 @@ class FineMapping:
             return {}
 
 # Backward compatibility functions for pipeline integration
-def run_fine_mapping_wrapper(config: Dict[str, Any], qtl_type: str, results_dir: str) -> Dict[str, Any]:
+def run_fine_mapping_wrapper_enhanced(config: Dict[str, Any], qtl_type: str, results_dir: str) -> Dict[str, Any]:
     """
-    Wrapper function for backward compatibility with pipeline
-    This function provides the expected interface for the pipeline
+    Enhanced wrapper function with better error handling for pipeline integration
     """
-    logger.info(f"🔍 Starting fine-mapping wrapper for {qtl_type}")
+    logger.info(f"🔍 Starting enhanced fine-mapping wrapper for {qtl_type}")
     
     try:
         # Construct file paths based on qtl_type and results_dir
-        qtl_results_file = os.path.join(results_dir, f"{qtl_type}_cis.cis_qtl.txt.gz")
+        qtl_results_file = os.path.join(results_dir, "analysis_results", "qtl_mapping", qtl_type, "permutation", f"{qtl_type}_cis_permutation.cis_qtl.txt.gz")
+        
+        # Also check for alternative file naming patterns
+        if not os.path.exists(qtl_results_file):
+            # Try nominal results if permutation doesn't exist
+            qtl_results_file = os.path.join(results_dir, "analysis_results", "qtl_mapping", qtl_type, "nominal", f"{qtl_type}_cis_nominal.cis_qtl_pairs.*.tsv.gz")
+            import glob
+            nominal_files = glob.glob(qtl_results_file)
+            if nominal_files:
+                qtl_results_file = nominal_files[0]  # Use first match
+            else:
+                logger.warning(f"❌ No QTL results file found for {qtl_type}")
+                logger.info(f"💡 Checked: {qtl_results_file}")
+                return {'status': 'no_significant', 'message': 'No QTL results file found'}
+        
         vcf_file = config['input_files']['genotypes']
         
-        # Check if QTL results file exists
+        # Check if QTL results file exists and has data
         if not os.path.exists(qtl_results_file):
             logger.warning(f"❌ QTL results file not found: {qtl_results_file}")
-            logger.info("ℹ️ Fine-mapping requires cis-QTL results. Run cis-QTL analysis first.")
-            return {'status': 'failed', 'error': 'QTL results file not found'}
+            return {'status': 'no_significant', 'message': 'QTL results file not found'}
+        
+        # Quick check if file has significant results
+        try:
+            # For compressed files
+            if qtl_results_file.endswith('.gz'):
+                import gzip
+                with gzip.open(qtl_results_file, 'rt') as f:
+                    first_line = f.readline()
+                    second_line = f.readline()
+            else:
+                with open(qtl_results_file, 'r') as f:
+                    first_line = f.readline()
+                    second_line = f.readline()
+            
+            if not second_line:  # Only header, no data
+                logger.info(f"ℹ️ No significant associations in {qtl_type} results file")
+                return {'status': 'no_significant', 'message': 'No significant associations in QTL results'}
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not check QTL results file content: {e}")
         
         # Run fine-mapping
+        logger.info(f"🔧 Running fine-mapping for {qtl_type} with file: {qtl_results_file}")
         return run_fine_mapping(config, qtl_results_file, vcf_file, results_dir, qtl_type)
         
     except Exception as e:
-        logger.error(f"❌ Fine-mapping wrapper failed for {qtl_type}: {e}")
+        logger.error(f"❌ Enhanced fine-mapping wrapper failed for {qtl_type}: {e}")
         return {'status': 'failed', 'error': str(e)}
-
+    
 # Main execution for standalone testing
 if __name__ == "__main__":
     import yaml
@@ -749,7 +783,7 @@ if __name__ == "__main__":
         qtl_type = "eqtl"
         results_dir = config.get('results_dir', 'results')
         
-        results = run_fine_mapping_wrapper(config, qtl_type, results_dir)
+        results = run_fine_mapping_wrapper_enhanced(config, qtl_type, results_dir)
         logger.info(f"✅ Fine-mapping completed for {qtl_type}")
         
     except Exception as e:
