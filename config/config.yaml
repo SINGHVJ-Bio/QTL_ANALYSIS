@@ -60,6 +60,7 @@ normalization:
 
 # tensorQTL-specific configuration
 tensorqtl:
+  # Statistical methods
   run_nominal: true
   run_permutation: false
 
@@ -75,8 +76,6 @@ tensorqtl:
   chunk_size: 200
   num_permutations: 1000
   
-  # Statistical methods
-  run_permutations: true
   run_eigenmt: false
   seed: 12345
   
