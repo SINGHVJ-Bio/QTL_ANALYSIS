@@ -1107,7 +1107,7 @@ class GenotypeProcessor:
         # Sample statistics
         bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         self.run_command(
-            f"{self.config['paths']['bcftools']} query -l {vcf_file} --threads {bcftools_threads} | wc -l > {qc_dir}/sample_count.txt",
+            f"{self.config['paths']['bcftools']} query -l {vcf_file} | wc -l > {qc_dir}/sample_count.txt",
             "Counting samples"
         )
         
@@ -1150,7 +1150,7 @@ class GenotypeProcessor:
         
         bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         result = self.run_command(
-            f"{self.config['paths']['bcftools']} query -l {final_file} --threads {bcftools_threads} | wc -l", 
+            f"{self.config['paths']['bcftools']} query -l {final_file} | wc -l", 
             "Counting final samples", check=False
         )
         sample_count = int(result.stdout.strip()) if result.stdout.strip().isdigit() else 0
