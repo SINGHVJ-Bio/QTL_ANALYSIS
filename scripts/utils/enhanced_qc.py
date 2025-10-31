@@ -662,7 +662,8 @@ class EnhancedQC:
             quality_info['details']['file_exists'] = True
             
             # Check 2: Basic stats using bcftools
-            stats_cmd = f"{self.config['paths']['bcftools']} stats {vcf_file} 2>/dev/null | head -20 || true"
+            bcftools_threads = self.config.get('genotype_processing', {}).get('bcftools_threads', 1)
+            stats_cmd = f"{self.config['paths']['bcftools']} stats --threads {bcftools_threads} {vcf_file} 2>/dev/null | head -20 || true"
             result = subprocess.run(stats_cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
             
             if result.returncode == 0 and result.stdout.strip():

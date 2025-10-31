@@ -22,6 +22,7 @@ import psutil
 
 warnings.filterwarnings('ignore')
 
+# Import utility modules with better error handling
 try:
     from scripts.utils import validation, plotting, qtl_analysis, gwas_analysis, report_generator
     from scripts.utils.enhanced_qc import EnhancedQC
@@ -32,6 +33,8 @@ try:
     from scripts.utils.deseq2_vst_python import deseq2_vst_python, simple_vst_fallback
     from scripts.utils.directory_manager import get_directory_manager, get_module_directories
 except ImportError as e:
+    # Setup basic logging first for import errors
+    logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
     logging.error(f"Import error: {e}")
     logging.error("Please ensure all utility modules are available")
     raise
@@ -49,40 +52,82 @@ except ImportError:
 class QTLPipeline:
     def __init__(self, config_file=None):
         self.start_time = datetime.now()
+        
+        # Step 1: Setup basic logging immediately for initialization phase
+        self._setup_basic_logging()
+        
+        # Step 2: Load config (will use basic logger)
         self.config = self.load_config(config_file)
         self.results_dir = Path(self.config['results_dir'])
-        self.setup_directories()
+        
+        # Step 3: Create essential directories for proper logging
+        self._create_essential_directories()
+        
+        # Step 4: Setup proper logging with file handler
         self.setup_logging()
+        
+        # Step 5: Setup full directory structure
+        self.setup_directories()
+        
         self.results = {}
         self.monitor_resources = self.config.get('large_data', {}).get('monitor_resources', True)
         self.directory_manager = None
         
-    def setup_logging(self):
-        """Setup logging to use results directory"""
-        timestamp = self.start_time.strftime("%Y%m%d_%H%M%S")
-        
-        # Use directory manager to get logs directory
-        if self.directory_manager:
-            logs_dir = self.directory_manager.get_directory('system', 'logs')
-        else:
-            logs_dir = self.results_dir / 'system' / 'logs'
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            
-        log_file = logs_dir / f"pipeline_{timestamp}.log"
-        
+    def _setup_basic_logging(self):
+        """Setup basic logging for initialization phase before directories exist"""
+        # Remove any existing handlers
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
             
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler(sys.stdout)
-            ]
+            handlers=[logging.StreamHandler(sys.stdout)]
         )
+        self._basic_logger = logging.getLogger('QTLPipeline_Basic')
         
-        self.logger = logging.getLogger('QTLPipeline')
+    def _create_essential_directories(self):
+        """Create only essential directories needed for logging"""
+        # Create minimal directory structure for logging
+        self.logs_dir = self.results_dir / 'system' / 'logs'
+        self.temp_dir = self.results_dir / 'system' / 'temporary_files'
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        if hasattr(self, '_basic_logger'):
+            self._basic_logger.info(f"📁 Created essential directories in: {self.results_dir}")
+        
+    def setup_logging(self):
+        """Setup proper logging with file handler"""
+        timestamp = self.start_time.strftime("%Y%m%d_%H%M%S")
+        
+        # Use directory manager to get logs directory if available, otherwise use basic structure
+        if hasattr(self, 'directory_manager') and self.directory_manager:
+            logs_dir = self.directory_manager.get_directory('system', 'logs')
+        else:
+            logs_dir = self.logs_dir
+            
+        log_file = logs_dir / f"pipeline_{timestamp}.log"
+        
+        # Remove existing handlers and setup new ones
+        logger = logging.getLogger('QTLPipeline')
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            
+        logger.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        
+        # Add file handler
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        
+        # Add console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+        
+        self.logger = logger
         self.logger.info("🚀 Enhanced QTL Analysis Pipeline Started")
         self.logger.info(f"📁 Results directory: {self.results_dir}")
         self.logger.info(f"🔧 Analysis mode: {self.config['analysis'].get('qtl_mode', 'cis')}")
@@ -98,7 +143,10 @@ class QTLPipeline:
             config_file = "config/config.yaml"
             
         if not os.path.exists(config_file):
-            raise FileNotFoundError(f"Config file not found: {config_file}")
+            error_msg = f"Config file not found: {config_file}"
+            if hasattr(self, '_basic_logger'):
+                self._basic_logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
             
         try:
             with open(config_file, 'r') as f:
@@ -107,12 +155,18 @@ class QTLPipeline:
             mandatory_fields = ['results_dir', 'input_files']
             for field in mandatory_fields:
                 if field not in config:
-                    raise ValueError(f"'{field}' must be specified in the config file")
+                    error_msg = f"'{field}' must be specified in the config file"
+                    if hasattr(self, '_basic_logger'):
+                        self._basic_logger.error(error_msg)
+                    raise ValueError(error_msg)
             
             mandatory_inputs = ['genotypes', 'covariates', 'annotations']
             for input_file in mandatory_inputs:
                 if input_file not in config['input_files']:
-                    raise ValueError(f"'{input_file}' must be specified in 'input_files'")
+                    error_msg = f"'{input_file}' must be specified in 'input_files'"
+                    if hasattr(self, '_basic_logger'):
+                        self._basic_logger.error(error_msg)
+                    raise ValueError(error_msg)
             
             config.setdefault('genotype_processing', {})
             processing_defaults = {
@@ -190,10 +244,15 @@ class QTLPipeline:
             for key, value in tool_defaults.items():
                 config['paths'].setdefault(key, value)
             
+            if hasattr(self, '_basic_logger'):
+                self._basic_logger.info(f"✅ Configuration loaded from: {config_file}")
+            
             return config
             
         except Exception as e:
-            logging.error(f"Error loading config file: {e}")
+            error_msg = f"Error loading config file: {e}"
+            if hasattr(self, '_basic_logger'):
+                self._basic_logger.error(error_msg)
             raise
             
     def setup_directories(self):
@@ -202,7 +261,7 @@ class QTLPipeline:
             self.directory_manager = get_directory_manager(self.results_dir)
             self.directory_manager.initialize_pipeline_directories()
             
-            # Set up directory attributes for backward compatibility
+            # Update directory attributes with directory manager paths
             self.logs_dir = self.directory_manager.get_directory('system', 'logs')
             self.temp_dir = self.directory_manager.get_directory('system', 'temporary_files')
             
@@ -211,11 +270,7 @@ class QTLPipeline:
             
         except Exception as e:
             self.logger.error(f"❌ Directory setup failed: {e}")
-            # Fallback: create minimal directory structure
-            self.logs_dir = self.results_dir / 'system' / 'logs'
-            self.temp_dir = self.results_dir / 'system' / 'temporary_files'
-            self.logs_dir.mkdir(parents=True, exist_ok=True)
-            self.temp_dir.mkdir(parents=True, exist_ok=True)
+            # Fallback: use already created minimal directory structure
             self.logger.warning("⚠️ Using fallback directory structure")
             
     def run_pipeline(self):
@@ -631,6 +686,13 @@ class QTLPipeline:
 
 
 if __name__ == "__main__":
+    # Setup basic logging for main execution
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    
     if len(sys.argv) > 1:
         config_file = sys.argv[1]
     else:

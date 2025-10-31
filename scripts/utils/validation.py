@@ -935,9 +935,10 @@ def validate_vcf_file_enhanced(file_path, config, result):
     """Enhanced VCF file validation with comprehensive checks"""
     try:
         bcftools_path = config['paths'].get('bcftools', 'bcftools')
+        bcftools_threads = config.get('genotype_processing', {}).get('bcftools_threads', 1)
         
         # Test basic VCF reading
-        cmd = f"{bcftools_path} view -h {file_path} 2>/dev/null | head -10 || echo 'ERROR'"
+        cmd = f"{bcftools_path} view -h {file_path} --threads {bcftools_threads} 2>/dev/null | head -10 || echo 'ERROR'"
         process = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
         
         if "ERROR" in process.stdout or process.returncode != 0:
@@ -945,7 +946,7 @@ def validate_vcf_file_enhanced(file_path, config, result):
             return
         
         # Extract sample count
-        samples_cmd = f"{bcftools_path} query -l {file_path} 2>/dev/null | wc -l"
+        samples_cmd = f"{bcftools_path} query -l {file_path} --threads {bcftools_threads} 2>/dev/null | wc -l"
         samples_process = subprocess.run(samples_cmd, shell=True, capture_output=True, text=True)
         if samples_process.returncode == 0 and samples_process.stdout.strip().isdigit():
             sample_count = int(samples_process.stdout.strip())
@@ -955,7 +956,7 @@ def validate_vcf_file_enhanced(file_path, config, result):
             result.add_warning('vcf', "Could not count samples in VCF file")
         
         # Extract variant count estimate
-        variants_cmd = f"{bcftools_path} view -H {file_path} 2>/dev/null | head -1000 | wc -l"
+        variants_cmd = f"{bcftools_path} view -H {file_path} --threads {bcftools_threads} 2>/dev/null | head -1000 | wc -l"
         variants_process = subprocess.run(variants_cmd, shell=True, capture_output=True, text=True)
         if variants_process.returncode == 0 and variants_process.stdout.strip().isdigit():
             variant_sample = int(variants_process.stdout.strip())
@@ -965,14 +966,14 @@ def validate_vcf_file_enhanced(file_path, config, result):
                 result.add_info('vcf', f"VCF contains variants (sampled {variant_sample})")
         
         # Check chromosome naming consistency
-        chrom_cmd = f"{bcftools_path} view -H {file_path} 2>/dev/null | cut -f1 | head -100 | sort | uniq"
+        chrom_cmd = f"{bcftools_path} view -H {file_path} --threads {bcftools_threads} 2>/dev/null | cut -f1 | head -100 | sort | uniq"
         chrom_process = subprocess.run(chrom_cmd, shell=True, capture_output=True, text=True)
         if chrom_process.returncode == 0:
             chromosomes = [c.strip() for c in chrom_process.stdout.split('\n') if c.strip()]
             analyze_chromosome_naming(chromosomes, 'vcf', result)
         
         # Check for required INFO and FORMAT fields
-        header_cmd = f"{bcftools_path} view -h {file_path} 2>/dev/null | grep -E '^##(INFO|FORMAT)' | head -10"
+        header_cmd = f"{bcftools_path} view -h {file_path} --threads {bcftools_threads} 2>/dev/null | grep -E '^##(INFO|FORMAT)' | head -10"
         header_process = subprocess.run(header_cmd, shell=True, capture_output=True, text=True)
         if header_process.returncode == 0:
             headers = header_process.stdout.strip().split('\n')
@@ -1581,7 +1582,8 @@ def extract_genotype_samples(genotype_file, config):
     if format_info['format'] in ['vcf', 'vcf.gz', 'bcf']:
         try:
             bcftools_path = config['paths'].get('bcftools', 'bcftools')
-            cmd = f"{bcftools_path} query -l {genotype_file} 2>/dev/null"
+            bcftools_threads = config.get('genotype_processing', {}).get('bcftools_threads', 1)
+            cmd = f"{bcftools_path} query -l {genotype_file} --threads {bcftools_threads} 2>/dev/null"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode == 0:
                 return set([s.strip() for s in result.stdout.split('\n') if s.strip()])

@@ -531,7 +531,8 @@ class GenotypeProcessor:
         """Extract chromosome list from VCF file - ORIGINAL FUNCTION"""
         logger.info("🔍 Extracting chromosome list...")
         
-        cmd = f"{self.config['paths']['bcftools']} view -h {vcf_file} 2>/dev/null | "
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
+        cmd = f"{self.config['paths']['bcftools']} view -h {vcf_file} --threads {bcftools_threads} 2>/dev/null | "
         cmd += "grep -v '^#' | cut -f1 | sort | uniq"
         
         result = self.run_command(cmd, "Extracting chromosomes", check=False)
@@ -542,7 +543,7 @@ class GenotypeProcessor:
         else:
             # Fallback: try to get from the file directly
             try:
-                cmd = f"{self.config['paths']['bcftools']} view -H {vcf_file} | cut -f1 | head -1000 | sort | uniq"
+                cmd = f"{self.config['paths']['bcftools']} view -H {vcf_file} --threads {bcftools_threads} | cut -f1 | head -1000 | sort | uniq"
                 result = self.run_command(cmd, "Extracting chromosomes fallback", check=False)
                 if result.returncode == 0:
                     chromosomes = [c.strip() for c in result.stdout.split('\n') if c.strip()]
@@ -706,7 +707,8 @@ class GenotypeProcessor:
         # For VCF files, check header compatibility for tensorQTL
         if input_file.endswith(('.vcf', '.vcf.gz')):
             try:
-                cmd = f"{self.config['paths']['bcftools']} view -h {input_file} | head -5"
+                bcftools_threads = self.processing_config.get('bcftools_threads', 1)
+                cmd = f"{self.config['paths']['bcftools']} view -h {input_file} --threads {bcftools_threads} | head -5"
                 result = self.run_command(cmd, "Checking VCF header for tensorQTL", check=False)
                 if result.returncode != 0:
                     raise ValueError("VCF file header cannot be read - tensorQTL may fail")
@@ -785,8 +787,9 @@ class GenotypeProcessor:
         elif input_format == 'bcf':
             # Convert BCF to VCF.gz
             temp_vcf = output_dir / "temp_standardized.vcf"
+            bcftools_threads = self.processing_config.get('bcftools_threads', 1)
             self.run_command(
-                f"{self.config['paths']['bcftools']} view {input_file} -Ov -o {temp_vcf}",
+                f"{self.config['paths']['bcftools']} view {input_file} -Ov -o {temp_vcf} --threads {bcftools_threads}",
                 "Converting BCF to VCF"
             )
             self.run_command(
@@ -863,9 +866,10 @@ class GenotypeProcessor:
         
         if filter_expr:
             filter_string = " && ".join(filter_expr)
+            bcftools_threads = self.processing_config.get('bcftools_threads', 1)
             self.run_command(
                 f"{self.config['paths']['bcftools']} view {input_file} "
-                f"-i '{filter_string}' -Oz -o {output_file}",
+                f"-i '{filter_string}' -Oz -o {output_file} --threads {bcftools_threads}",
                 "Filtering variants"
             )
         else:
@@ -893,16 +897,18 @@ class GenotypeProcessor:
             )
         elif action == 'drop':
             # Drop multi-allelic sites
+            bcftools_threads = self.processing_config.get('bcftools_threads', 1)
             self.run_command(
                 f"{self.config['paths']['bcftools']} view {input_file} "
-                f"--max-alleles 2 -Oz -o {output_file}",
+                f"--max-alleles 2 -Oz -o {output_file} --threads {bcftools_threads}",
                 "Dropping multi-allelic sites"
             )
         elif action == 'first_alt':
             # Keep only first alternate allele
+            bcftools_threads = self.processing_config.get('bcftools_threads', 1)
             self.run_command(
                 f"{self.config['paths']['bcftools']} view {input_file} "
-                f"--min-alleles 2 --max-alleles 2 -Oz -o {output_file}",
+                f"--min-alleles 2 --max-alleles 2 -Oz -o {output_file} --threads {bcftools_threads}",
                 "Keeping first alternate allele only"
             )
         else:
@@ -930,19 +936,21 @@ class GenotypeProcessor:
             current_file = self.auto_normalize_chromosomes(input_file, output_dir)
         elif prefix_config == 'chr':
             # Ensure chromosomes have 'chr' prefix
+            bcftools_threads = self.processing_config.get('bcftools_threads', 1)
             self.run_command(
                 f"{self.config['paths']['bcftools']} annotate {input_file} "
                 f"--rename-chrs <(echo -e '1\\tchr1\\n2\\tchr2\\n3\\tchr3\\n4\\tchr4\\n5\\tchr5\\n6\\tchr6\\n7\\tchr7\\n8\\tchr8\\n9\\tchr9\\n10\\tchr10\\n11\\tchr11\\n12\\tchr12\\n13\\tchr13\\n14\\tchr14\\n15\\tchr15\\n16\\tchr16\\n17\\tchr17\\n18\\tchr18\\n19\\tchr19\\n20\\tchr20\\n21\\tchr21\\n22\\tchr22\\nX\\tchrX\\nY\\tchrY\\nMT\\tchrM') "
-                f"-Oz -o {output_file}",
+                f"-Oz -o {output_file} --threads {bcftools_threads}",
                 "Adding 'chr' prefix to chromosomes"
             )
             current_file = str(output_file)
         elif prefix_config == 'none':
             # Remove 'chr' prefix if present
+            bcftools_threads = self.processing_config.get('bcftools_threads', 1)
             self.run_command(
                 f"{self.config['paths']['bcftools']} annotate {input_file} "
                 f"--rename-chrs <(echo -e 'chr1\\t1\\nchr2\\t2\\nchr3\\t3\\nchr4\\t4\\nchr5\\t5\\nchr6\\t6\\nchr7\\t7\\nchr8\\t8\\nchr9\\t9\\nchr10\\t10\\nchr11\\t11\\nchr12\\t12\\nchr13\\t13\\nchr14\\t14\\nchr15\\t15\\nchr16\\t16\\nchr17\\t17\\nchr18\\t18\\nchr19\\t19\\nchr20\\t20\\nchr21\\t21\\nchr22\\t22\\nchrX\\tX\\nchrY\\tY\\nchrM\\tMT') "
-                f"-Oz -o {output_file}",
+                f"-Oz -o {output_file} --threads {bcftools_threads}",
                 "Removing 'chr' prefix from chromosomes"
             )
             current_file = str(output_file)
@@ -961,8 +969,9 @@ class GenotypeProcessor:
     def auto_normalize_chromosomes(self, input_file, output_dir):
         """Auto-detect chromosome format and standardize - ORIGINAL FUNCTION"""
         # Check current format
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         result = self.run_command(
-            f"{self.config['paths']['bcftools']} view {input_file} | head -100 | grep -v '^#' | head -1",
+            f"{self.config['paths']['bcftools']} view {input_file} --threads {bcftools_threads} | head -100 | grep -v '^#' | head -1",
             "Checking chromosome format", check=False
         )
         
@@ -972,10 +981,11 @@ class GenotypeProcessor:
         else:
             # Add chr prefix
             output_file = output_dir / "chrom_normalized.vcf.gz"
+            bcftools_threads = self.processing_config.get('bcftools_threads', 1)
             self.run_command(
                 f"{self.config['paths']['bcftools']} annotate {input_file} "
                 f"--rename-chrs <(echo -e '1\\tchr1\\n2\\tchr2\\n3\\tchr3\\n4\\tchr4\\n5\\tchr5\\n6\\tchr6\\n7\\tchr7\\n8\\tchr8\\n9\\tchr9\\n10\\tchr10\\n11\\tchr11\\n12\\tchr12\\n13\\tchr13\\n14\\tchr14\\n15\\tchr15\\n16\\tchr16\\n17\\tchr17\\n18\\tchr18\\n19\\tchr19\\n20\\tchr20\\n21\\tchr21\\n22\\tchr22\\nX\\tchrX\\nY\\tchrY\\nMT\\tchrM') "
-                f"-Oz -o {output_file}",
+                f"-Oz -o {output_file} --threads {bcftools_threads}",
                 "Auto-adding 'chr' prefix to chromosomes"
             )
             return str(output_file)
@@ -984,8 +994,9 @@ class GenotypeProcessor:
         """Remove phasing information from genotypes - ORIGINAL FUNCTION"""
         output_file = output_dir / "unphased.vcf.gz"
         
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         self.run_command(
-            f"{self.config['paths']['bcftools']} view {input_file} -U -Oz -o {output_file}",
+            f"{self.config['paths']['bcftools']} view {input_file} -U -Oz -o {output_file} --threads {bcftools_threads}",
             "Removing phasing information"
         )
         
@@ -1087,20 +1098,23 @@ class GenotypeProcessor:
         qc_dir = self.dm.get_directory('reports', 'qc_reports/genotype_qc')
         
         # Basic stats
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         self.run_command(
-            f"{self.config['paths']['bcftools']} stats {vcf_file} > {qc_dir}/vcf_stats.txt",
+            f"{self.config['paths']['bcftools']} stats {vcf_file} --threads {bcftools_threads} > {qc_dir}/vcf_stats.txt",
             "Generating VCF statistics"
         )
         
         # Sample statistics
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         self.run_command(
-            f"{self.config['paths']['bcftools']} query -l {vcf_file} | wc -l > {qc_dir}/sample_count.txt",
+            f"{self.config['paths']['bcftools']} query -l {vcf_file} --threads {bcftools_threads} | wc -l > {qc_dir}/sample_count.txt",
             "Counting samples"
         )
         
         # Variant statistics
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         self.run_command(
-            f"{self.config['paths']['bcftools']} view -H {vcf_file} | wc -l > {qc_dir}/variant_count.txt",
+            f"{self.config['paths']['bcftools']} view -H {vcf_file} --threads {bcftools_threads} | wc -l > {qc_dir}/variant_count.txt",
             "Counting variants"
         )
         
@@ -1127,14 +1141,16 @@ class GenotypeProcessor:
         self.validate_vcf(str(final_file))
         
         # Log final file info
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         result = self.run_command(
-            f"{self.config['paths']['bcftools']} view -H {final_file} | wc -l",
+            f"{self.config['paths']['bcftools']} view -H {final_file} --threads {bcftools_threads} | wc -l",
             "Counting final variants", check=False
         )
         variant_count = int(result.stdout.strip()) if result.stdout.strip().isdigit() else 0
         
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         result = self.run_command(
-            f"{self.config['paths']['bcftools']} query -l {final_file} | wc -l", 
+            f"{self.config['paths']['bcftools']} query -l {final_file} --threads {bcftools_threads} | wc -l", 
             "Counting final samples", check=False
         )
         sample_count = int(result.stdout.strip()) if result.stdout.strip().isdigit() else 0
@@ -1148,8 +1164,9 @@ class GenotypeProcessor:
         logger.info("🔍 Validating VCF file structure...")
         
         # Check if VCF is valid
+        bcftools_threads = self.processing_config.get('bcftools_threads', 1)
         result = self.run_command(
-            f"{self.config['paths']['bcftools']} view {vcf_file} -h > /dev/null",
+            f"{self.config['paths']['bcftools']} view {vcf_file} -h --threads {bcftools_threads} > /dev/null",
             "Validating VCF header",
             check=False
         )
