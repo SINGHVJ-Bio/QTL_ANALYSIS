@@ -39,8 +39,10 @@ class ModularQTLPipeline:
         self.config_path = config_path
         self.config = self.load_config()
         self.results_dir = Path(self.config['results_dir'])
-        self.setup_directories()
+        
+        # REORDERED: Setup logging FIRST
         self.setup_logging()
+        self.setup_directories()
         
         # Define modules with dependencies and descriptions
         self.modules = {
