@@ -1,2244 +1,1698 @@
 #!/usr/bin/env python3
 """
-Enhanced Quality Control with comprehensive sample and variant QC
-Optimized for performance and memory efficiency
-
+Comprehensive input validation utilities for tensorQTL pipeline - Production Version
+Robust validation with enhanced mapping, parallel processing, and comprehensive error handling
 Author: Dr. Vijay Singh
 Email: vijay.s.gautam@gmail.com
 
-Features:
-- Comprehensive genotype and phenotype QC
-- Sample concordance checking
-- Population stratification (PCA)
-- Advanced outlier detection
-- Modular pipeline integration
-- Enhanced reporting and visualization
-- Full error handling and logging
+ENHANCED: Dynamic covariate and phenotype handling with flexible validation
+FIXED: Covariate file parsing for your specific format
+UPDATED: Consistent directory management using directory_manager
 """
 
 import os
 import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
-import seaborn as sns
-from scipy import stats
-import logging
-import subprocess
-import json
+import yaml
 from pathlib import Path
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import IsolationForest
+import subprocess
+import logging
+import gzip
+import tempfile
 import warnings
-from typing import Dict, List, Set, Optional, Any, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import gc
+import multiprocessing as mp
+from functools import lru_cache
+import psutil
+import re
+from datetime import datetime
+import json
+from collections import defaultdict
+import sys
 
 warnings.filterwarnings('ignore')
-
-# Set up logger
 logger = logging.getLogger('QTLPipeline')
 
-def map_qtl_type_to_config_key(qtl_type: str) -> str:
-    """Map QTL analysis types to config file keys"""
+# Import directory manager for consistent directory structure
+try:
+    from scripts.utils.directory_manager import get_module_directories
+except ImportError as e:
+    logger.warning(f"Directory manager not available: {e}")
+    get_module_directories = None
+
+class ValidationResult:
+    """Enhanced validation result tracking with comprehensive reporting"""
+    def __init__(self):
+        self.errors = []
+        self.warnings = []
+        self.info = []
+        self.file_stats = {}
+        self.sample_counts = {}
+        self.covariate_info = {}  # NEW: Store covariate metadata
+        self.phenotype_info = {}  # NEW: Store phenotype metadata
+        self.data_types_available = []
+        self.validation_time = datetime.now().isoformat()
+        self.overall_status = "PASS"
+    
+    def add_error(self, module, message):
+        self.errors.append(f"{module}: {message}")
+        self.overall_status = "FAIL"
+    
+    def add_warning(self, module, message):
+        self.warnings.append(f"{module}: {message}")
+    
+    def add_info(self, module, message):
+        self.info.append(f"{module}: {message}")
+    
+    def to_dict(self):
+        return {
+            'timestamp': self.validation_time,
+            'errors': self.errors,
+            'warnings': self.warnings,
+            'info': self.info,
+            'file_stats': self.file_stats,
+            'sample_counts': self.sample_counts,
+            'covariate_info': self.covariate_info,  # NEW
+            'phenotype_info': self.phenotype_info,  # NEW
+            'data_types_available': self.data_types_available,
+            'overall_status': self.overall_status
+        }
+
+class DynamicCovariateAnalyzer:
+    """NEW: Analyze covariates dynamically and provide recommendations"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.enhanced_qc_config = config.get('enhanced_qc', {})
+        
+    def analyze_covariates(self, covariate_df, result):
+        """Analyze covariates and provide dynamic recommendations"""
+        if covariate_df.empty:
+            result.add_warning('covariate_analysis', "No covariates provided for analysis")
+            return
+            
+        logger.info("🔍 Analyzing covariate structure and composition...")
+        
+        # Store basic covariate information
+        result.covariate_info['total_covariates'] = covariate_df.shape[0]
+        result.covariate_info['sample_count'] = covariate_df.shape[1]
+        result.covariate_info['covariate_names'] = covariate_df.index.tolist()
+        
+        # Analyze covariate types
+        numeric_covariates = []
+        categorical_covariates = []
+        binary_covariates = []
+        
+        for covar in covariate_df.index:
+            values = covariate_df.loc[covar]
+            
+            # Check if numeric
+            try:
+                numeric_vals = pd.to_numeric(values, errors='coerce')
+                non_na_count = numeric_vals.notna().sum()
+                total_count = len(values)
+                
+                if non_na_count == total_count:  # All values are numeric
+                    unique_vals = numeric_vals.nunique()
+                    
+                    if unique_vals == 2:
+                        binary_covariates.append(covar)
+                        result.covariate_info[f'covariate_{covar}_type'] = 'binary'
+                        result.covariate_info[f'covariate_{covar}_values'] = sorted(numeric_vals.unique().tolist())
+                    else:
+                        numeric_covariates.append(covar)
+                        result.covariate_info[f'covariate_{covar}_type'] = 'numeric'
+                        result.covariate_info[f'covariate_{covar}_stats'] = {
+                            'mean': float(numeric_vals.mean()),
+                            'std': float(numeric_vals.std()),
+                            'min': float(numeric_vals.min()),
+                            'max': float(numeric_vals.max())
+                        }
+                else:
+                    # Mixed or categorical data
+                    categorical_covariates.append(covar)
+                    result.covariate_info[f'covariate_{covar}_type'] = 'categorical'
+                    unique_values = values.unique()
+                    # Limit stored values to avoid huge JSON
+                    if len(unique_values) <= 20:
+                        result.covariate_info[f'covariate_{covar}_values'] = unique_values.tolist()
+                    else:
+                        result.covariate_info[f'covariate_{covar}_values'] = f"{len(unique_values)} unique values"
+                    
+            except Exception as e:
+                categorical_covariates.append(covar)
+                result.covariate_info[f'covariate_{covar}_type'] = 'categorical'
+                unique_values = values.unique()
+                if len(unique_values) <= 20:
+                    result.covariate_info[f'covariate_{covar}_values'] = unique_values.tolist()
+                else:
+                    result.covariate_info[f'covariate_{covar}_values'] = f"{len(unique_values)} unique values"
+        
+        # Store type counts
+        result.covariate_info['numeric_covariates'] = numeric_covariates
+        result.covariate_info['categorical_covariates'] = categorical_covariates
+        result.covariate_info['binary_covariates'] = binary_covariates
+        result.covariate_info['numeric_count'] = len(numeric_covariates)
+        result.covariate_info['categorical_count'] = len(categorical_covariates)
+        result.covariate_info['binary_count'] = len(binary_covariates)
+        
+        # Detect common covariate patterns
+        self._detect_covariate_patterns(covariate_df, result)
+        
+        # Provide recommendations
+        self._provide_covariate_recommendations(covariate_df, result)
+        
+        logger.info(f"✅ Covariate analysis: {len(numeric_covariates)} numeric, "
+                   f"{len(categorical_covariates)} categorical, {len(binary_covariates)} binary covariates")
+    
+    def _detect_covariate_patterns(self, covariate_df, result):
+        """Detect common covariate patterns and technical artifacts"""
+        detected_patterns = []
+        
+        # Check for PCA components
+        pca_pattern = re.compile(r'^PC\d+$', re.IGNORECASE)
+        pca_covariates = [covar for covar in covariate_df.index if pca_pattern.match(str(covar))]
+        if pca_covariates:
+            detected_patterns.append(f"PCA components: {len(pca_covariates)} found")
+            result.covariate_info['pca_components'] = pca_covariates
+        
+        # Check for batch effects
+        batch_pattern = re.compile(r'.*batch.*', re.IGNORECASE)
+        batch_covariates = [covar for covar in covariate_df.index if batch_pattern.match(str(covar))]
+        if batch_covariates:
+            detected_patterns.append(f"Batch covariates: {batch_covariates}")
+            result.covariate_info['batch_covariates'] = batch_covariates
+        
+        # Check for demographic covariates
+        demo_patterns = ['age', 'sex', 'gender', 'bmi', 'height', 'weight']
+        demo_covariates = [covar for covar in covariate_df.index 
+                          if any(pattern in str(covar).lower() for pattern in demo_patterns)]
+        if demo_covariates:
+            detected_patterns.append(f"Demographic covariates: {demo_covariates}")
+            result.covariate_info['demographic_covariates'] = demo_covariates
+        
+        # Check for study-specific covariates
+        study_patterns = ['study', 'cohort', 'center', 'site']
+        study_covariates = [covar for covar in covariate_df.index 
+                           if any(pattern in str(covar).lower() for pattern in study_patterns)]
+        if study_covariates:
+            detected_patterns.append(f"Study-specific covariates: {study_covariates}")
+            result.covariate_info['study_covariates'] = study_covariates
+        
+        if detected_patterns:
+            result.add_info('covariate_patterns', f"Detected patterns: {'; '.join(detected_patterns)}")
+    
+    def _provide_covariate_recommendations(self, covariate_df, result):
+        """Provide dynamic recommendations based on covariate analysis"""
+        recommendations = []
+        
+        # Check if PCA components are present
+        pca_count = len(result.covariate_info.get('pca_components', []))
+        if pca_count < 5 and self.enhanced_qc_config.get('run_pca', True):
+            recommendations.append("Consider adding more PCA components (5-10 recommended)")
+        
+        # Check for missing common covariates
+        expected_covariates = ['age', 'sex', 'batch']
+        missing_expected = [covar for covar in expected_covariates 
+                          if covar not in [c.lower() for c in covariate_df.index]]
+        if missing_expected:
+            recommendations.append(f"Common covariates not found: {missing_expected}")
+        
+        # Check for categorical covariates that might need encoding
+        categorical_count = result.covariate_info.get('categorical_count', 0)
+        if categorical_count > 0:
+            categorical_covars = result.covariate_info.get('categorical_covariates', [])
+            recommendations.append(f"Categorical covariates detected: {categorical_covars}. Ensure proper encoding.")
+        
+        # Check sample size vs covariate count
+        sample_count = covariate_df.shape[1]
+        covariate_count = covariate_df.shape[0]
+        if covariate_count > sample_count / 10:
+            recommendations.append(f"High covariate count ({covariate_count}) relative to sample size ({sample_count})")
+        
+        if recommendations:
+            result.add_info('covariate_recommendations', f"Recommendations: {'; '.join(recommendations)}")
+
+class DynamicPhenotypeAnalyzer:
+    """NEW: Analyze phenotype data dynamically"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.normalization_config = config.get('normalization', {})
+        
+    def analyze_phenotype_data(self, phenotype_df, qtl_type, result):
+        """Analyze phenotype data and provide dynamic recommendations"""
+        logger.info(f"🔍 Analyzing {qtl_type} phenotype data structure...")
+        
+        # Store basic phenotype information
+        result.phenotype_info[qtl_type] = {
+            'feature_count': phenotype_df.shape[0],
+            'sample_count': phenotype_df.shape[1],
+            'total_measurements': phenotype_df.size,
+            'missing_count': int(phenotype_df.isna().sum().sum()),
+            'missing_percentage': float((phenotype_df.isna().sum().sum() / phenotype_df.size) * 100)
+        }
+        
+        # Analyze data distribution
+        self._analyze_phenotype_distribution(phenotype_df, qtl_type, result)
+        
+        # Check normalization compatibility
+        self._check_normalization_compatibility(phenotype_df, qtl_type, result)
+        
+        # Detect data quality issues
+        self._detect_data_quality_issues(phenotype_df, qtl_type, result)
+        
+        logger.info(f"✅ {qtl_type} analysis: {phenotype_df.shape[0]} features, "
+                   f"{phenotype_df.shape[1]} samples, "
+                   f"{result.phenotype_info[qtl_type]['missing_percentage']:.2f}% missing")
+    
+    def _analyze_phenotype_distribution(self, phenotype_df, qtl_type, result):
+        """Analyze phenotype data distribution"""
+        try:
+            # Sample a subset for efficiency
+            if phenotype_df.shape[0] > 1000:
+                sample_df = phenotype_df.sample(n=1000, random_state=42)
+            else:
+                sample_df = phenotype_df
+            
+            # Calculate basic statistics
+            stats_data = {}
+            
+            # Mean and variance
+            means = sample_df.mean(axis=1)
+            variances = sample_df.var(axis=1)
+            
+            stats_data['mean_mean'] = float(means.mean())
+            stats_data['mean_std'] = float(means.std())
+            stats_data['variance_mean'] = float(variances.mean())
+            stats_data['variance_std'] = float(variances.std())
+            
+            # Detect distribution type based on QTL type
+            if qtl_type == 'eqtl':
+                # Expression data - typically count-like or continuous
+                if (sample_df >= 0).all().all():
+                    if (sample_df == 0).any().any():
+                        stats_data['distribution_type'] = 'count_like'
+                    else:
+                        stats_data['distribution_type'] = 'continuous_positive'
+                else:
+                    stats_data['distribution_type'] = 'continuous'
+                    
+            elif qtl_type == 'pqtl':
+                # Protein data - often continuous
+                stats_data['distribution_type'] = 'continuous'
+                
+            elif qtl_type == 'sqtl':
+                # Splicing data - often proportions (0-1)
+                if ((sample_df >= 0) & (sample_df <= 1)).all().all():
+                    stats_data['distribution_type'] = 'proportion'
+                else:
+                    stats_data['distribution_type'] = 'continuous'
+            
+            result.phenotype_info[qtl_type]['distribution'] = stats_data
+            
+        except Exception as e:
+            logger.warning(f"Phenotype distribution analysis failed: {e}")
+    
+    def _check_normalization_compatibility(self, phenotype_df, qtl_type, result):
+        """Check if configured normalization is compatible with data"""
+        norm_config = self.normalization_config.get(qtl_type, {})
+        norm_method = norm_config.get('method', 'log2')
+        
+        compatibility_notes = []
+        
+        if qtl_type == 'eqtl':
+            if norm_method == 'vst' and (phenotype_df < 0).any().any():
+                compatibility_notes.append("VST normalization expects non-negative data")
+            elif norm_method == 'log2' and (phenotype_df <= 0).any().any():
+                compatibility_notes.append("Log2 normalization requires positive values")
+                
+        elif qtl_type == 'sqtl':
+            if norm_method == 'log2' and ((phenotype_df < 0) | (phenotype_df > 1)).any().any():
+                compatibility_notes.append("Log2 normalization may not be ideal for PSI values outside [0,1]")
+        
+        if compatibility_notes:
+            result.add_warning(f'normalization_{qtl_type}', 
+                             f"Normalization compatibility: {'; '.join(compatibility_notes)}")
+        else:
+            result.add_info(f'normalization_{qtl_type}', 
+                          f"Configured normalization '{norm_method}' appears compatible")
+    
+    def _detect_data_quality_issues(self, phenotype_df, qtl_type, result):
+        """Detect potential data quality issues"""
+        issues = []
+        
+        # Check for constant features
+        constant_features = (phenotype_df.nunique(axis=1) == 1).sum()
+        if constant_features > 0:
+            issues.append(f"{constant_features} constant features")
+        
+        # Check for zero-variance features
+        zero_variance = (phenotype_df.std(axis=1) == 0).sum()
+        if zero_variance > 0:
+            issues.append(f"{zero_variance} zero-variance features")
+        
+        # Check for excessive missingness
+        missing_threshold = 0.2  # 20% missing threshold
+        high_missing_features = (phenotype_df.isna().sum(axis=1) / phenotype_df.shape[1] > missing_threshold).sum()
+        if high_missing_features > 0:
+            issues.append(f"{high_missing_features} features with >{missing_threshold*100}% missing values")
+        
+        # Check for outliers
+        if phenotype_df.size > 0:
+            Q1 = phenotype_df.quantile(0.25)
+            Q3 = phenotype_df.quantile(0.75)
+            IQR = Q3 - Q1
+            outlier_mask = (phenotype_df < (Q1 - 3 * IQR)) | (phenotype_df > (Q3 + 3 * IQR))
+            outlier_count = outlier_mask.sum().sum()
+            if outlier_count > 0:
+                outlier_percent = (outlier_count / phenotype_df.size) * 100
+                if outlier_percent > 5:  # More than 5% outliers
+                    issues.append(f"{outlier_percent:.1f}% potential outliers")
+        
+        if issues:
+            result.add_warning(f'data_quality_{qtl_type}', 
+                             f"Data quality issues: {'; '.join(issues)}")
+
+def validate_inputs(config):
+    """Validate all input files and data consistency with comprehensive checks for tensorQTL - ENHANCED"""
+    input_files = config['input_files']
+    result = ValidationResult()
+    
+    print("🔍 Starting comprehensive input validation for tensorQTL pipeline...")
+    logger.info("Starting comprehensive input validation")
+    
+    try:
+        # Setup directories using directory manager
+        results_dir = config.get('results_dir', 'results')
+        validation_dirs = setup_validation_directories(results_dir)
+        
+        # Initialize dynamic analyzers
+        covariate_analyzer = DynamicCovariateAnalyzer(config)
+        phenotype_analyzer = DynamicPhenotypeAnalyzer(config)
+        
+        # Validate mandatory files with enhanced parallel processing
+        mandatory_files = ['genotypes', 'covariates', 'annotations']
+        validate_mandatory_files_parallel(input_files, mandatory_files, config, result)
+        
+        # Validate phenotype files based on analysis types
+        analysis_types = get_qtl_types_from_config(config)
+        result.data_types_available = analysis_types
+        validate_phenotype_files_parallel(input_files, analysis_types, config, result)
+        
+        # NEW: Perform dynamic analysis of covariates and phenotypes
+        if 'covariates' in input_files and input_files['covariates'] and os.path.exists(input_files['covariates']):
+            try:
+                # FIXED: Use the corrected covariate reading function
+                cov_df = read_covariates_file_robust(input_files['covariates'])
+                if not cov_df.empty:
+                    covariate_analyzer.analyze_covariates(cov_df, result)
+            except Exception as e:
+                logger.warning(f"Dynamic covariate analysis failed: {e}")
+        
+        for analysis_type in analysis_types:
+            config_key = map_qtl_type_to_config_key(analysis_type)
+            if config_key in input_files and input_files[config_key] and os.path.exists(input_files[config_key]):
+                try:
+                    pheno_df = pd.read_csv(input_files[config_key], sep='\t', index_col=0, nrows=1000)
+                    if not pheno_df.empty:
+                        phenotype_analyzer.analyze_phenotype_data(pheno_df, analysis_type, result)
+                except Exception as e:
+                    logger.warning(f"Dynamic phenotype analysis for {analysis_type} failed: {e}")
+        
+        # Validate GWAS if enabled
+        if config['analysis'].get('run_gwas', False):
+            validate_gwas_files(input_files, config, result)
+        
+        # Enhanced tool validation with version checking
+        validate_tools_comprehensive(config, result)
+        
+        # Comprehensive sample concordance checking
+        if config['qc'].get('check_sample_concordance', True):
+            check_sample_concordance_enhanced(config, input_files, result)
+        
+        # Configuration and requirements validation
+        validate_configuration_comprehensive(config, result)
+        
+        # Generate validation report using consistent directories
+        generate_validation_report(result, config, validation_dirs)
+        
+        # Report results
+        if result.warnings:
+            print("\n⚠️  VALIDATION WARNINGS:")
+            for warning in result.warnings[:10]:
+                print(f"  - {warning}")
+            if len(result.warnings) > 10:
+                print(f"  ... and {len(result.warnings) - 10} more warnings")
+        
+        if result.errors:
+            print("\n❌ VALIDATION FAILED:")
+            for error in result.errors:
+                print(f"  - {error}")
+            logger.error(f"Input validation failed with {len(result.errors)} errors")
+            raise ValueError("Input validation failed - please fix the errors above")
+        else:
+            print("\n🎉 All inputs validated successfully!")
+            if result.warnings:
+                print(f"   Found {len(result.warnings)} warnings - review validation report for details")
+            logger.info(f"Input validation completed: {len(result.warnings)} warnings, {len(result.info)} info messages")
+            
+            # NEW: Print dynamic analysis summary
+            print_dynamic_analysis_summary(result)
+            
+            return True
+            
+    except Exception as e:
+        logger.error(f"Validation process failed: {e}")
+        result.add_error('validation_process', f"Validation process failed: {e}")
+        raise
+
+def setup_validation_directories(results_dir):
+    """Setup consistent directories for validation using directory manager"""
+    try:
+        if get_module_directories:
+            validation_dirs = get_module_directories(
+                'validation',
+                [
+                    'reports',
+                    {'reports': ['pipeline_reports', 'qc_reports']},
+                    'processed_data',
+                    {'processed_data': ['quality_control']},
+                    'system',
+                    {'system': ['logs']}
+                ],
+                results_dir
+            )
+            logger.info(f"✅ Validation directories setup using directory manager")
+            return validation_dirs
+        else:
+            # Fallback directory creation
+            validation_dirs = {
+                'reports_pipeline_reports': Path(results_dir) / "reports" / "pipeline_reports",
+                'reports_qc_reports': Path(results_dir) / "reports" / "qc_reports",
+                'processed_data_quality_control': Path(results_dir) / "processed_data" / "quality_control",
+                'system_logs': Path(results_dir) / "system" / "logs"
+            }
+            
+            for dir_path in validation_dirs.values():
+                dir_path.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"✅ Fallback validation directories created")
+            return validation_dirs
+            
+    except Exception as e:
+        logger.error(f"❌ Directory setup failed: {e}")
+        # Ultimate fallback
+        validation_dirs = {
+            'reports_pipeline_reports': Path(results_dir) / "reports",
+            'reports_qc_reports': Path(results_dir) / "reports",
+            'processed_data_quality_control': Path(results_dir) / "quality_control",
+            'system_logs': Path(results_dir) / "logs"
+        }
+        
+        for dir_path in validation_dirs.values():
+            dir_path.mkdir(parents=True, exist_ok=True)
+        
+        logger.warning(f"⚠️ Using ultimate fallback directories")
+        return validation_dirs
+
+def read_covariates_file_robust(file_path):
+    """FIXED: Robust covariate file reading that handles your specific format"""
+    try:
+        # First attempt: standard tab-separated with header
+        df = pd.read_csv(file_path, sep='\t', index_col=0)
+        logger.info(f"Successfully read covariates file with standard tab separation")
+        return df
+    except Exception as e:
+        logger.warning(f"Standard reading failed: {e}, trying alternative methods")
+        
+        try:
+            # Second attempt: try different separators
+            for sep in ['\t', '  ', ' ', ',']:
+                try:
+                    df = pd.read_csv(file_path, sep=sep, index_col=0, engine='python')
+                    if df.shape[1] > 1:  # Should have multiple samples
+                        logger.info(f"Successfully read covariates file with separator: {repr(sep)}")
+                        return df
+                except:
+                    continue
+        except Exception as e2:
+            logger.warning(f"Alternative separator reading failed: {e2}")
+        
+        # Final attempt: manual parsing for complex formats
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+            
+            # Find header line
+            header_line = None
+            data_start = 0
+            for i, line in enumerate(lines):
+                if line.strip() and not line.startswith('#'):
+                    # Check if this looks like a header with sample IDs
+                    parts = line.strip().split()
+                    if len(parts) > 3 and all(len(part) > 3 for part in parts[1:4]):  # Sample IDs usually have reasonable length
+                        header_line = i
+                        break
+            
+            if header_line is not None:
+                # Parse header and data
+                header = lines[header_line].strip().split()
+                data_lines = []
+                
+                for i in range(header_line + 1, len(lines)):
+                    if lines[i].strip() and not lines[i].startswith('#'):
+                        data_lines.append(lines[i].strip().split())
+                
+                if data_lines and len(data_lines[0]) == len(header):
+                    # Create DataFrame
+                    data_dict = {}
+                    for row in data_lines:
+                        if len(row) == len(header):
+                            covar_name = row[0]
+                            values = row[1:]
+                            data_dict[covar_name] = values
+                    
+                    df = pd.DataFrame(data_dict, index=header[1:]).T
+                    logger.info(f"Successfully read covariates file with manual parsing")
+                    return df
+                    
+        except Exception as e3:
+            logger.error(f"Manual parsing also failed: {e3}")
+            raise ValueError(f"Could not parse covariates file with any method: {e3}")
+    
+    raise ValueError("All covariate file reading methods failed")
+
+def print_dynamic_analysis_summary(result):
+    """NEW: Print summary of dynamic covariate and phenotype analysis"""
+    print("\n📊 DYNAMIC ANALYSIS SUMMARY:")
+    
+    # Covariate summary
+    if result.covariate_info:
+        print("  📈 Covariates:")
+        print(f"    - Total: {result.covariate_info.get('total_covariates', 'N/A')}")
+        print(f"    - Numeric: {result.covariate_info.get('numeric_count', 'N/A')}")
+        print(f"    - Categorical: {result.covariate_info.get('categorical_count', 'N/A')}")
+        print(f"    - Binary: {result.covariate_info.get('binary_count', 'N/A')}")
+        
+        # Print detected patterns
+        if 'pca_components' in result.covariate_info:
+            pca_count = len(result.covariate_info['pca_components'])
+            print(f"    - PCA components: {pca_count}")
+        
+        if 'batch_covariates' in result.covariate_info:
+            print(f"    - Batch covariates: {result.covariate_info['batch_covariates']}")
+    
+    # Phenotype summary
+    if result.phenotype_info:
+        print("  🧬 Phenotypes:")
+        for qtl_type, info in result.phenotype_info.items():
+            print(f"    - {qtl_type.upper()}: {info.get('feature_count', 'N/A')} features, "
+                  f"{info.get('sample_count', 'N/A')} samples, "
+                  f"{info.get('missing_percentage', 0):.1f}% missing")
+            
+            dist_info = info.get('distribution', {})
+            if 'distribution_type' in dist_info:
+                print(f"      Distribution: {dist_info['distribution_type']}")
+
+def validate_covariates_file_enhanced(file_path, config, result):
+    """Enhanced covariates file validation with dynamic handling - FIXED for your format"""
+    try:
+        # FIXED: Use robust reading function
+        df = read_covariates_file_robust(file_path)
+        
+        if df.empty:
+            result.add_error('covariates', "Covariates file is empty")
+            return
+        
+        # Store sample count
+        sample_count = df.shape[1]
+        result.sample_counts['covariates'] = sample_count
+        result.add_info('covariates', f"Found {df.shape[0]} covariates for {sample_count} samples")
+        
+        # NEW: Flexible covariate validation - don't enforce specific covariates
+        self_reported_covariates = df.index.tolist()
+        result.add_info('covariates', f"Covariates provided: {', '.join(self_reported_covariates[:10])}"
+                       f"{'...' if len(self_reported_covariates) > 10 else ''}")
+        
+        # Check for missing values with dynamic threshold
+        missing_matrix = df.isna()
+        missing_count = missing_matrix.sum().sum()
+        if missing_count > 0:
+            missing_percent = (missing_count / (df.shape[0] * df.shape[1])) * 100
+            result.add_warning('covariates', f"Found {missing_count} missing values ({missing_percent:.2f}%)")
+        
+        # Check for constant covariates
+        constant_covariates = []
+        for covar in df.index:
+            if df.loc[covar].nunique() <= 1:
+                constant_covariates.append(covar)
+        
+        if constant_covariates:
+            result.add_warning('covariates', f"Found {len(constant_covariates)} constant covariates: {constant_covariates[:5]}...")
+        
+        # Check for numeric covariates with flexible handling
+        non_numeric_covariates = []
+        numeric_covariates = []
+        
+        for covar in df.index:
+            try:
+                numeric_series = pd.to_numeric(df.loc[covar], errors='coerce')
+                non_na_count = numeric_series.notna().sum()
+                total_count = len(df.loc[covar])
+                
+                if non_na_count == total_count:
+                    numeric_covariates.append(covar)
+                else:
+                    non_numeric_covariates.append(covar)
+            except (ValueError, TypeError):
+                non_numeric_covariates.append(covar)
+        
+        if non_numeric_covariates:
+            result.add_info('covariates', f"Found {len(non_numeric_covariates)} non-numeric covariates: {non_numeric_covariates[:5]}...")
+        
+        # NEW: Dynamic check for extreme values only on numeric covariates
+        if numeric_covariates:
+            numeric_df = df.loc[numeric_covariates].apply(pd.to_numeric, errors='coerce')
+            extreme_threshold = 10  # Z-score threshold
+            # Avoid division by zero
+            numeric_std = numeric_df.std()
+            numeric_std = numeric_std.replace(0, 1)  # Replace zero std with 1 to avoid division by zero
+            z_scores = np.abs((numeric_df - numeric_df.mean()) / numeric_std)
+            extreme_count = (z_scores > extreme_threshold).sum().sum()
+            if extreme_count > 0:
+                result.add_warning('covariates', f"Found {extreme_count} extreme values (|Z| > {extreme_threshold}) in numeric covariates")
+        
+        # NEW: Check covariate count relative to sample size
+        if df.shape[0] > df.shape[1] / 2:
+            result.add_warning('covariates', 
+                             f"High covariate count ({df.shape[0]}) relative to sample size ({df.shape[1]})")
+        
+    except Exception as e:
+        result.add_error('covariates', f"Error reading covariates file: {e}")
+
+def validate_phenotype_file_enhanced(file_path, qtl_type, config, result):
+    """Enhanced phenotype file validation with dynamic handling"""
+    try:
+        # Read phenotype data
+        df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=1000)  # Sample for validation
+        
+        if df.empty:
+            result.add_error(qtl_type, f"Phenotype file is empty: {file_path}")
+            return
+        
+        # Store sample count
+        sample_count = df.shape[1]
+        result.sample_counts[qtl_type] = sample_count
+        result.add_info(qtl_type, f"Found {df.shape[0]} features for {sample_count} samples")
+        
+        # NEW: Dynamic phenotype validation based on QTL type
+        self_reported_features = df.index.tolist()[:5]  # First 5 features
+        result.add_info(qtl_type, f"Sample features: {', '.join(self_reported_features)}...")
+        
+        # Check for missing values with dynamic thresholds
+        missing_count = df.isna().sum().sum()
+        if missing_count > 0:
+            missing_percent = (missing_count / (df.shape[0] * df.shape[1])) * 100
+            result.add_warning(qtl_type, f"Found {missing_count} missing values ({missing_percent:.2f}%)")
+        
+        # Check for constant features
+        constant_features = (df.nunique(axis=1) == 1).sum()
+        if constant_features > 0:
+            result.add_warning(qtl_type, f"Found {constant_features} constant features")
+        
+        # Check for zero-variance features
+        zero_variance = (df.std(axis=1) == 0).sum()
+        if zero_variance > 0:
+            result.add_warning(qtl_type, f"Found {zero_variance} zero-variance features")
+        
+        # NEW: Dynamic data distribution checks based on QTL type
+        data_type = map_qtl_type_to_data_type(qtl_type)
+        if data_type == 'expression':
+            # Check for negative values in expression data
+            negative_count = (df < 0).sum().sum()
+            if negative_count > 0:
+                result.add_info(qtl_type, f"Found {negative_count} negative values - ensure proper normalization")
+        
+        elif data_type == 'splicing':
+            # Check if data appears to be proportions (PSI values)
+            if ((df >= 0) & (df <= 1)).all().all():
+                result.add_info(qtl_type, "Data appears to be proportion-based (PSI values 0-1)")
+            else:
+                result.add_info(qtl_type, "Data range suggests non-standard PSI values")
+        
+        # NEW: Check for extreme outliers with dynamic thresholds
+        if df.size > 0:
+            Q1 = df.quantile(0.25)
+            Q3 = df.quantile(0.75)
+            IQR = Q3 - Q1
+            # Avoid division by zero in IQR
+            iqr_nonzero = IQR.replace(0, 1)
+            outlier_mask = (df < (Q1 - 3 * iqr_nonzero)) | (df > (Q3 + 3 * iqr_nonzero))
+            outlier_count = outlier_mask.sum().sum()
+            
+            if outlier_count > 0:
+                outlier_percent = (outlier_count / (df.shape[0] * df.shape[1])) * 100
+                result.add_info(qtl_type, f"Found {outlier_count} potential outliers ({outlier_percent:.2f}%)")
+        
+        # NEW: Check normalization method compatibility
+        norm_method = config['normalization'].get(qtl_type, {}).get('method', 'unknown')
+        result.add_info(qtl_type, f"Configured normalization: {norm_method}")
+        
+        # Calculate basic statistics
+        if df.size > 0:
+            mean_val = df.mean().mean()
+            std_val = df.std().mean()
+            result.add_info(qtl_type, f"Data stats - Mean: {mean_val:.3f}, Std: {std_val:.3f}")
+        
+    except Exception as e:
+        result.add_error(qtl_type, f"Error reading phenotype file {file_path}: {e}")
+
+def validate_mandatory_files_parallel(input_files, mandatory_files, config, result):
+    """Validate mandatory files with enhanced parallel processing"""
+    with ThreadPoolExecutor(max_workers=min(6, mp.cpu_count())) as executor:
+        futures = []
+        
+        for file_type in mandatory_files:
+            file_path = input_files.get(file_type)
+            if not file_path:
+                result.add_error('mandatory_files', f"Missing mandatory input file: {file_type}")
+                continue
+                
+            if not os.path.exists(file_path):
+                result.add_error('mandatory_files', f"File not found: {file_path} (for {file_type})")
+                continue
+            
+            # Submit file-specific validation tasks
+            if file_type == 'genotypes':
+                future = executor.submit(validate_genotype_file_enhanced, file_path, config, result)
+            elif file_type == 'covariates':
+                future = executor.submit(validate_covariates_file_enhanced, file_path, config, result)
+            elif file_type == 'annotations':
+                future = executor.submit(validate_annotations_file_enhanced, file_path, config, result)
+            else:
+                future = executor.submit(validate_generic_file, file_path, file_type, config, result)
+            
+            futures.append(future)
+        
+        # Wait for all validations to complete
+        for future in as_completed(futures):
+            try:
+                future.result(timeout=300)
+            except Exception as e:
+                result.add_error('parallel_validation', f"Parallel validation task failed: {e}")
+
+def validate_phenotype_files_parallel(input_files, analysis_types, config, result):
+    """Validate phenotype files with enhanced parallel processing"""
+    with ThreadPoolExecutor(max_workers=min(4, mp.cpu_count())) as executor:
+        futures = []
+        
+        for analysis_type in analysis_types:
+            config_key = map_qtl_type_to_config_key(analysis_type)
+            file_path = input_files.get(config_key)
+            
+            if not file_path:
+                result.add_error('phenotype_files', f"Missing phenotype file for {analysis_type} (key: {config_key})")
+                continue
+                
+            if not os.path.exists(file_path):
+                result.add_error('phenotype_files', f"Phenotype file not found: {file_path} (for {analysis_type})")
+                continue
+            
+            future = executor.submit(validate_phenotype_file_enhanced, file_path, analysis_type, config, result)
+            futures.append(future)
+        
+        for future in as_completed(futures):
+            try:
+                future.result(timeout=300)
+            except Exception as e:
+                result.add_error('phenotype_validation', f"Phenotype validation task failed: {e}")
+
+def validate_genotype_file_enhanced(file_path, config, result):
+    """Enhanced genotype file validation with comprehensive checks"""
+    logger.info(f"Validating genotype file: {file_path}")
+    
+    # Basic file checks
+    if not os.path.exists(file_path):
+        result.add_error('genotype', f"File not found: {file_path}")
+        return
+    
+    # Check file size and permissions
+    try:
+        file_size = os.path.getsize(file_path) / (1024**3)  # GB
+        if file_size == 0:
+            result.add_error('genotype', f"Genotype file is empty: {file_path}")
+            return
+        elif file_size > 50:
+            result.add_warning('genotype', f"Genotype file is very large ({file_size:.2f} GB), ensure sufficient memory")
+        
+        result.file_stats['genotype_size_gb'] = file_size
+        result.add_info('genotype', f"File size: {file_size:.2f} GB")
+        
+    except OSError as e:
+        result.add_error('genotype', f"Cannot access genotype file: {e}")
+        return
+    
+    # Detect format with enhanced detection
+    format_info = detect_genotype_format_enhanced(file_path)
+    result.add_info('genotype', f"Detected format: {format_info['format']} (compressed: {format_info['compressed']})")
+    
+    # Validate specific formats
+    if format_info['format'] in ['vcf', 'vcf.gz', 'bcf']:
+        validate_vcf_file_enhanced(file_path, config, result)
+    elif format_info['format'] == 'plink_bed':
+        validate_plink_file_enhanced(file_path, config, result)
+    elif format_info['format'] == 'unknown':
+        result.add_warning('genotype', f"Could not automatically detect genotype file format: {file_path}")
+        # Try to validate as generic tabular file
+        validate_generic_tabular_file(file_path, 'genotype', config, result)
+    else:
+        result.add_warning('genotype', f"Format {format_info['format']} may not be directly compatible with tensorQTL")
+
+def detect_genotype_format_enhanced(file_path):
+    """Enhanced genotype format detection with more comprehensive checks"""
+    file_ext = file_path.lower()
+    
+    # Extension-based detection
+    if file_ext.endswith('.vcf.gz') or file_ext.endswith('.vcf.bgz'):
+        return {'format': 'vcf.gz', 'compressed': True}
+    elif file_ext.endswith('.vcf'):
+        return {'format': 'vcf', 'compressed': False}
+    elif file_ext.endswith('.bcf'):
+        return {'format': 'bcf', 'compressed': True}
+    elif file_ext.endswith('.bed'):
+        return {'format': 'plink_bed', 'compressed': False}
+    elif file_ext.endswith(('.h5', '.hdf5')):
+        return {'format': 'hdf5', 'compressed': True}
+    elif file_ext.endswith(('.bgen', '.gen')):
+        return {'format': 'bgen', 'compressed': True}
+    else:
+        # Content-based detection
+        return detect_format_by_content_enhanced(file_path)
+
+def detect_format_by_content_enhanced(file_path):
+    """Enhanced content-based format detection"""
+    try:
+        if file_path.endswith('.gz'):
+            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                first_lines = [f.readline().strip() for _ in range(5)]
+        else:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                first_lines = [f.readline().strip() for _ in range(5)]
+        
+        for line in first_lines:
+            if not line:
+                continue
+                
+            if line.startswith('##fileformat=VCF'):
+                return {'format': 'vcf', 'compressed': file_path.endswith('.gz')}
+            elif line.startswith('#CHROM'):
+                return {'format': 'vcf', 'compressed': file_path.endswith('.gz')}
+            elif 'VCF' in line.upper():
+                return {'format': 'vcf', 'compressed': file_path.endswith('.gz')}
+            elif 'BED' in line:
+                return {'format': 'plink_bed', 'compressed': file_path.endswith('.gz')}
+            elif line.startswith('##GENOTYPE'):
+                return {'format': 'genotype_matrix', 'compressed': file_path.endswith('.gz')}
+        
+        # Check for PLINK BED magic number
+        if file_path.endswith('.bed'):
+            with open(file_path, 'rb') as f:
+                magic = f.read(3)
+                if magic == b'\x6c\x1b\x01':  # PLINK BED magic number
+                    return {'format': 'plink_bed', 'compressed': False}
+        
+        # Check if it looks like a tabular genotype file
+        if len(first_lines) > 1 and '\t' in first_lines[0]:
+            return {'format': 'tabular', 'compressed': file_path.endswith('.gz')}
+            
+    except Exception as e:
+        logger.debug(f"Enhanced format detection failed: {e}")
+    
+    return {'format': 'unknown', 'compressed': file_path.endswith('.gz')}
+
+def validate_vcf_file_enhanced(file_path, config, result):
+    """Enhanced VCF file validation with comprehensive checks"""
+    try:
+        bcftools_path = config['paths'].get('bcftools', 'bcftools')
+        
+        # Test basic VCF reading
+        cmd = f"{bcftools_path} view -h {file_path} 2>/dev/null | head -10 || echo 'ERROR'"
+        process = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
+        
+        if "ERROR" in process.stdout or process.returncode != 0:
+            result.add_error('vcf', f"bcftools cannot read VCF file. Check file format and compression.")
+            return
+        
+        # Extract sample count
+        samples_cmd = f"{bcftools_path} query -l {file_path} 2>/dev/null | wc -l"
+        samples_process = subprocess.run(samples_cmd, shell=True, capture_output=True, text=True)
+        if samples_process.returncode == 0 and samples_process.stdout.strip().isdigit():
+            sample_count = int(samples_process.stdout.strip())
+            result.sample_counts['genotypes'] = sample_count
+            result.add_info('vcf', f"Found {sample_count} samples in VCF")
+        else:
+            result.add_warning('vcf', "Could not count samples in VCF file")
+        
+        # Extract variant count estimate
+        variants_cmd = f"{bcftools_path} view -H {file_path} 2>/dev/null | head -1000 | wc -l"
+        variants_process = subprocess.run(variants_cmd, shell=True, capture_output=True, text=True)
+        if variants_process.returncode == 0 and variants_process.stdout.strip().isdigit():
+            variant_sample = int(variants_process.stdout.strip())
+            if variant_sample == 0:
+                result.add_error('vcf', "No variants found in VCF file")
+            else:
+                result.add_info('vcf', f"VCF contains variants (sampled {variant_sample})")
+        
+        # Check chromosome naming consistency
+        chrom_cmd = f"{bcftools_path} view -H {file_path} 2>/dev/null | cut -f1 | head -100 | sort | uniq"
+        chrom_process = subprocess.run(chrom_cmd, shell=True, capture_output=True, text=True)
+        if chrom_process.returncode == 0:
+            chromosomes = [c.strip() for c in chrom_process.stdout.split('\n') if c.strip()]
+            analyze_chromosome_naming(chromosomes, 'vcf', result)
+        
+        # Check for required INFO and FORMAT fields
+        header_cmd = f"{bcftools_path} view -h {file_path} 2>/dev/null | grep -E '^##(INFO|FORMAT)' | head -10"
+        header_process = subprocess.run(header_cmd, shell=True, capture_output=True, text=True)
+        if header_process.returncode == 0:
+            headers = header_process.stdout.strip().split('\n')
+            has_gt = any('ID=GT' in h for h in headers if h)
+            if not has_gt:
+                result.add_warning('vcf', "VCF file may not contain genotype (GT) format field")
+        
+    except Exception as e:
+        result.add_error('vcf', f"VCF validation error: {e}")
+
+def validate_plink_file_enhanced(file_path, config, result):
+    """Enhanced PLINK file validation with comprehensive checks"""
+    try:
+        base_name = file_path.replace('.bed', '')
+        required_files = [f'{base_name}.bed', f'{base_name}.bim', f'{base_name}.fam']
+        
+        # Check for all required files
+        missing_files = [f for f in required_files if not os.path.exists(f)]
+        if missing_files:
+            result.add_error('plink', f"Missing PLINK companion files: {', '.join(missing_files)}")
+            return
+        
+        # Validate FAM file (samples)
+        try:
+            fam_df = pd.read_csv(f'{base_name}.fam', sep='\s+', header=None, 
+                               names=['family_id', 'sample_id', 'father_id', 'mother_id', 'sex', 'phenotype'])
+            sample_count = len(fam_df)
+            result.sample_counts['genotypes'] = sample_count
+            result.add_info('plink', f"Found {sample_count} samples in PLINK FAM file")
+            
+            # Check for duplicate sample IDs
+            duplicate_samples = fam_df['sample_id'].duplicated().sum()
+            if duplicate_samples > 0:
+                result.add_error('plink', f"Found {duplicate_samples} duplicate sample IDs in FAM file")
+        except Exception as e:
+            result.add_error('plink', f"Error reading PLINK FAM file: {e}")
+        
+        # Validate BIM file (variants)
+        try:
+            bim_df = pd.read_csv(f'{base_name}.bim', sep='\s+', header=None,
+                               names=['chr', 'variant_id', 'pos_cm', 'pos_bp', 'allele1', 'allele2'])
+            variant_count = len(bim_df)
+            result.add_info('plink', f"Found {variant_count} variants in PLINK BIM file")
+            
+            # Check for duplicate variant IDs
+            duplicate_variants = bim_df['variant_id'].duplicated().sum()
+            if duplicate_variants > 0:
+                result.add_warning('plink', f"Found {duplicate_variants} duplicate variant IDs in BIM file")
+            
+            # Check chromosome naming
+            analyze_chromosome_naming(bim_df['chr'].unique(), 'plink', result)
+            
+            # Check for invalid positions
+            invalid_positions = bim_df[(bim_df['pos_bp'] <= 0) | (bim_df['pos_bp'].isna())]
+            if len(invalid_positions) > 0:
+                result.add_warning('plink', f"Found {len(invalid_positions)} variants with invalid positions")
+                
+        except Exception as e:
+            result.add_error('plink', f"Error reading PLINK BIM file: {e}")
+        
+    except Exception as e:
+        result.add_error('plink', f"PLINK validation error: {e}")
+
+def validate_annotations_file_enhanced(file_path, config, result):
+    """Enhanced annotations file validation"""
+    try:
+        # Try to read with different comment characters
+        try:
+            df = pd.read_csv(file_path, sep='\t', comment='#', nrows=1000)
+        except:
+            try:
+                df = pd.read_csv(file_path, sep='\t', nrows=1000)
+            except Exception as e:
+                result.add_error('annotations', f"Cannot read annotations file: {e}")
+                return
+        
+        # Check required columns
+        required_columns = ['chr', 'start', 'end', 'gene_id']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            result.add_error('annotations', f"Missing required columns: {', '.join(missing_columns)}")
+            result.add_info('annotations', f"Available columns: {list(df.columns)}")
+            return
+        
+        # Validate data types
+        try:
+            df['start'] = pd.to_numeric(df['start'])
+            df['end'] = pd.to_numeric(df['end'])
+        except Exception as e:
+            result.add_error('annotations', f"Start/end positions must be numeric: {e}")
+        
+        # Check for invalid ranges
+        invalid_ranges = df[df['start'] >= df['end']]
+        if len(invalid_ranges) > 0:
+            result.add_warning('annotations', f"Found {len(invalid_ranges)} annotations with start >= end")
+        
+        # Check for duplicate gene IDs
+        duplicate_genes = df[df.duplicated('gene_id')]
+        if len(duplicate_genes) > 0:
+            result.add_warning('annotations', f"Found {len(duplicate_genes)} duplicate gene IDs")
+        
+        # Analyze chromosome naming
+        analyze_chromosome_naming(df['chr'].unique(), 'annotations', result)
+        
+        # Check annotation coverage
+        expected_chromosomes = [str(i) for i in range(1, 23)] + ['X', 'Y', 'MT', 'M']
+        found_chromosomes = set(df['chr'].astype(str))
+        missing_chromosomes = [chrom for chrom in expected_chromosomes 
+                             if chrom not in found_chromosomes and f"chr{chrom}" not in found_chromosomes]
+        
+        if missing_chromosomes:
+            result.add_info('annotations', f"Missing annotations for chromosomes: {', '.join(missing_chromosomes)}")
+        
+        # Calculate basic statistics
+        total_length = (df['end'] - df['start']).sum()
+        avg_length = (df['end'] - df['start']).mean()
+        
+        result.add_info('annotations', f"Annotation stats: {len(df)} features, total length {total_length:,} bp, avg {avg_length:.0f} bp")
+        
+    except Exception as e:
+        result.add_error('annotations', f"Error reading annotations file: {e}")
+
+def validate_gwas_files(input_files, config, result):
+    """Validate GWAS-related files"""
+    gwas_file = input_files.get('gwas_phenotype') or config['analysis'].get('gwas_phenotype')
+    
+    if not gwas_file:
+        result.add_error('gwas', "GWAS enabled but no gwas_phenotype specified")
+        return
+    
+    if not os.path.exists(gwas_file):
+        result.add_error('gwas', f"GWAS phenotype file not found: {gwas_file}")
+        return
+    
+    try:
+        df = pd.read_csv(gwas_file, sep='\t', nrows=1000)
+        
+        # Check required columns
+        if 'sample_id' not in df.columns:
+            result.add_error('gwas', "GWAS phenotype file must contain 'sample_id' column")
+        
+        # Check phenotype columns
+        phenotype_cols = [col for col in df.columns if col != 'sample_id']
+        if not phenotype_cols:
+            result.add_error('gwas', "GWAS phenotype file has no phenotype columns")
+        
+        # Validate sample IDs
+        missing_samples = df['sample_id'].isna().sum()
+        if missing_samples > 0:
+            result.add_warning('gwas', f"Found {missing_samples} missing sample IDs")
+        
+        # Validate phenotype data types
+        gwas_method = config.get('gwas', {}).get('method', 'linear')
+        for pheno in phenotype_cols[:10]:  # Check first 10 phenotypes
+            try:
+                pd.to_numeric(df[pheno])
+            except:
+                result.add_warning('gwas', f"Phenotype '{pheno}' contains non-numeric values")
+            
+            # Check for binary phenotypes if logistic regression
+            if gwas_method == 'logistic':
+                unique_vals = df[pheno].dropna().unique()
+                if len(unique_vals) != 2:
+                    result.add_warning('gwas', f"Phenotype '{pheno}' has {len(unique_vals)} unique values, logistic regression expects binary")
+        
+        result.add_info('gwas', f"GWAS phenotypes: {len(phenotype_cols)} phenotypes for {len(df)} samples")
+        
+    except Exception as e:
+        result.add_error('gwas', f"Error reading GWAS file: {e}")
+
+def validate_tools_comprehensive(config, result):
+    """Comprehensive tool validation with version checking"""
+    tools = config.get('paths', {})
+    
+    required_tools = {
+        'plink': {'version_flag': '--version', 'min_version': '1.9'},
+        'bcftools': {'version_flag': '--version', 'min_version': '1.9'},
+        'bgzip': {'version_flag': '--version', 'min_version': '1.9'},
+        'tabix': {'version_flag': '--version', 'min_version': '1.9'}
+    }
+    
+    optional_tools = {
+        'R': {'version_flag': '--version', 'min_version': '3.6'},
+        'python': {'version_flag': '--version', 'min_version': '3.6'}
+    }
+    
+    def check_tool_version(tool_name, tool_config):
+        """Check tool version and compatibility"""
+        tool_path = tools.get(tool_name, tool_name)
+        
+        try:
+            # Check if tool exists
+            which_cmd = f"which {tool_path} > /dev/null 2>&1 && echo 'FOUND' || echo 'NOT_FOUND'"
+            which_result = subprocess.run(which_cmd, shell=True, capture_output=True, text=True)
+            if "NOT_FOUND" in which_result.stdout:
+                return False, f"Tool not found in PATH: {tool_name} ({tool_path})"
+            
+            # Get version
+            version_cmd = f"{tool_path} {tool_config['version_flag']} 2>&1 | head -1"
+            version_result = subprocess.run(version_cmd, shell=True, capture_output=True, text=True)
+            
+            if version_result.returncode == 0:
+                version_text = version_result.stdout.strip()
+                # Extract version number
+                version_match = re.search(r'(\d+\.\d+(\.\d+)?)', version_text)
+                if version_match:
+                    version = version_match.group(1)
+                    return True, f"{tool_name} {version}"
+                else:
+                    return True, f"{tool_name} (version unknown: {version_text})"
+            else:
+                return True, f"{tool_name} (could not get version)"
+                
+        except Exception as e:
+            return False, f"Error checking {tool_name}: {e}"
+    
+    # Check required tools
+    for tool_name, tool_config in required_tools.items():
+        found, message = check_tool_version(tool_name, tool_config)
+        if found:
+            result.add_info('tools', message)
+        else:
+            result.add_error('tools', message)
+    
+    # Check optional tools
+    for tool_name, tool_config in optional_tools.items():
+        found, message = check_tool_version(tool_name, tool_config)
+        if found:
+            result.add_info('tools', message)
+        else:
+            result.add_warning('tools', message)
+    
+    # Check Python packages
+    python_packages = {
+        'tensorqtl': 'tensorQTL for QTL mapping',
+        'pandas': 'Data manipulation',
+        'numpy': 'Numerical computations',
+        'scipy': 'Statistical functions',
+        'statsmodels': 'Statistical models'
+    }
+    
+    for package, description in python_packages.items():
+        try:
+            __import__(package)
+            result.add_info('python_packages', f"Found {package}: {description}")
+        except ImportError:
+            if package == 'tensorqtl':
+                result.add_error('python_packages', f"Missing {package}: {description} - Required for analysis")
+            else:
+                result.add_warning('python_packages', f"Missing {package}: {description}")
+
+def check_sample_concordance_enhanced(config, input_files, result):
+    """Enhanced sample concordance checking"""
+    try:
+        # Get samples from genotype file
+        geno_samples = extract_genotype_samples(input_files['genotypes'], config)
+        if not geno_samples:
+            result.add_error('sample_concordance', "Could not extract samples from genotype file")
+            return
+        
+        result.add_info('sample_concordance', f"Genotype samples: {len(geno_samples)}")
+        
+        # Get samples from covariate file
+        cov_samples = extract_covariate_samples(input_files['covariates'])
+        if not cov_samples:
+            result.add_error('sample_concordance', "Could not extract samples from covariate file")
+            return
+        
+        result.add_info('sample_concordance', f"Covariate samples: {len(cov_samples)}")
+        
+        # Check genotype-covariate overlap
+        geno_cov_overlap = geno_samples.intersection(cov_samples)
+        if not geno_cov_overlap:
+            result.add_error('sample_concordance', "No sample overlap between genotypes and covariates")
+        else:
+            overlap_percent = len(geno_cov_overlap) / min(len(geno_samples), len(cov_samples)) * 100
+            if overlap_percent < 80:
+                result.add_warning('sample_concordance', 
+                                 f"Low genotype-covariate overlap: {len(geno_cov_overlap)} samples ({overlap_percent:.1f}%)")
+            else:
+                result.add_info('sample_concordance', 
+                              f"Genotype-covariate overlap: {len(geno_cov_overlap)} samples ({overlap_percent:.1f}%)")
+        
+        # Check phenotype files
+        analysis_types = get_qtl_types_from_config(config)
+        for analysis_type in analysis_types:
+            config_key = map_qtl_type_to_config_key(analysis_type)
+            if config_key in input_files and input_files[config_key]:
+                pheno_samples = extract_phenotype_samples(input_files[config_key])
+                if pheno_samples:
+                    pheno_overlap = geno_samples.intersection(pheno_samples)
+                    if not pheno_overlap:
+                        result.add_error('sample_concordance', f"No sample overlap for {analysis_type}")
+                    else:
+                        overlap_percent = len(pheno_overlap) / min(len(geno_samples), len(pheno_samples)) * 100
+                        if overlap_percent < 80:
+                            result.add_warning('sample_concordance', 
+                                             f"Low {analysis_type} overlap: {len(pheno_overlap)} samples ({overlap_percent:.1f}%)")
+                        else:
+                            result.add_info('sample_concordance', 
+                                          f"{analysis_type} overlap: {len(pheno_overlap)} samples ({overlap_percent:.1f}%)")
+        
+        # Check GWAS samples if enabled
+        if config['analysis'].get('run_gwas', False):
+            gwas_file = input_files.get('gwas_phenotype') or config['analysis'].get('gwas_phenotype')
+            if gwas_file and os.path.exists(gwas_file):
+                gwas_samples = extract_gwas_samples(gwas_file)
+                if gwas_samples:
+                    gwas_overlap = geno_samples.intersection(gwas_samples)
+                    if not gwas_overlap:
+                        result.add_error('sample_concordance', "No sample overlap for GWAS")
+                    else:
+                        overlap_percent = len(gwas_overlap) / min(len(geno_samples), len(gwas_samples)) * 100
+                        if overlap_percent < 80:
+                            result.add_warning('sample_concordance', 
+                                             f"Low GWAS overlap: {len(gwas_overlap)} samples ({overlap_percent:.1f}%)")
+                        else:
+                            result.add_info('sample_concordance', 
+                                          f"GWAS overlap: {len(gwas_overlap)} samples ({overlap_percent:.1f}%)")
+        
+        # Store final sample set for pipeline
+        final_samples = geno_cov_overlap
+        for analysis_type in analysis_types:
+            config_key = map_qtl_type_to_config_key(analysis_type)
+            if config_key in input_files and input_files[config_key]:
+                pheno_samples = extract_phenotype_samples(input_files[config_key])
+                if pheno_samples:
+                    final_samples = final_samples.intersection(pheno_samples)
+        
+        if final_samples:
+            result.add_info('sample_concordance', f"Final sample set: {len(final_samples)} samples")
+            result.sample_counts['final'] = len(final_samples)
+        else:
+            result.add_error('sample_concordance', "No common samples found across all data types")
+        
+    except Exception as e:
+        result.add_error('sample_concordance', f"Sample concordance check failed: {e}")
+
+def validate_configuration_comprehensive(config, result):
+    """Comprehensive configuration validation with dynamic checks"""
+    print("\n⚙️  Validating configuration parameters...")
+    
+    # TensorQTL configuration
+    tensorqtl_config = config.get('tensorqtl', {})
+    if tensorqtl_config.get('num_permutations', 1000) < 100:
+        result.add_warning('configuration', "Low number of permutations (<100) may affect FDR estimation")
+    
+    # Memory and performance settings
+    memory_gb = config.get('performance', {}).get('memory_gb', 8)
+    available_memory = psutil.virtual_memory().available / (1024**3)
+    if memory_gb > available_memory:
+        result.add_warning('configuration', f"Configured memory ({memory_gb} GB) exceeds available memory ({available_memory:.1f} GB)")
+    
+    num_threads = config.get('performance', {}).get('num_threads', 1)
+    if num_threads == 1:
+        result.add_info('configuration', "Using single thread - consider increasing for better performance")
+    
+    # Analysis mode validation
+    qtl_mode = config['analysis'].get('qtl_mode', 'cis')
+    if qtl_mode == 'trans' and num_threads < 4:
+        result.add_warning('configuration', "Trans-QTL analysis is computationally intensive, recommend using more threads")
+    
+    # Output directory checks
+    results_dir = config.get('results_dir', 'results')
+    if os.path.exists(results_dir) and len(os.listdir(results_dir)) > 0:
+        result.add_warning('configuration', f"Results directory {results_dir} already exists and is not empty")
+    
+    # NEW: Dynamic normalization configuration validation
+    normalization_config = config.get('normalization', {})
+    for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
+        if qtl_type in normalization_config:
+            method = normalization_config[qtl_type].get('method', 'unknown')
+            pseudocount = normalization_config[qtl_type].get('log2_pseudocount', 1)
+            
+            result.add_info('configuration', f"{qtl_type.upper()} normalization: {method} (pseudocount: {pseudocount})")
+            
+            # Provide method-specific recommendations
+            if method == 'vst' and qtl_type != 'eqtl':
+                result.add_warning('configuration', f"VST normalization is typically for expression data, not {qtl_type}")
+    
+    # Enhanced features
+    if config.get('enhanced_qc', {}).get('enable', False):
+        result.add_info('configuration', "Enhanced QC enabled")
+    
+    if config.get('interaction_analysis', {}).get('enable', False):
+        result.add_info('configuration', "Interaction analysis enabled")
+    
+    if config.get('fine_mapping', {}).get('enable', False):
+        result.add_info('configuration', "Fine-mapping enabled")
+    
+    # NEW: Validate dynamic covariate handling
+    covariates_file = config['input_files'].get('covariates')
+    if covariates_file and os.path.exists(covariates_file):
+        try:
+            cov_df = read_covariates_file_robust(covariates_file)
+            covariate_count = cov_df.shape[0]
+            sample_count = cov_df.shape[1]
+            result.add_info('configuration', f"Covariate structure: {covariate_count} covariates for {sample_count} samples")
+        except:
+            pass
+
+def generate_validation_report(result, config, validation_dirs=None):
+    """Generate comprehensive validation report using consistent directories"""
+    if validation_dirs is None:
+        results_dir = config.get('results_dir', 'results')
+        validation_dirs = setup_validation_directories(results_dir)
+    
+    # Use consistent directories from directory manager
+    report_dir = validation_dirs.get('reports_qc_reports', Path(config.get('results_dir', 'results')) / 'reports' / 'qc_reports')
+    qc_dir = validation_dirs.get('processed_data_quality_control', Path(config.get('results_dir', 'results')) / 'processed_data' / 'quality_control')
+    
+    # Ensure directories exist
+    report_dir.mkdir(parents=True, exist_ok=True)
+    qc_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save JSON report
+    report_file = report_dir / 'input_validation_report.json'
+    with open(report_file, 'w') as f:
+        json.dump(result.to_dict(), f, indent=2)
+    
+    # Generate text report
+    text_report_file = report_dir / 'input_validation_report.txt'
+    with open(text_report_file, 'w') as f:
+        f.write("QTL Pipeline - Input Validation Report\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Generated: {result.validation_time}\n")
+        f.write(f"Overall Status: {result.overall_status}\n\n")
+        
+        f.write("Data Types Available:\n")
+        for data_type in result.data_types_available:
+            f.write(f"  - {data_type}\n")
+        f.write("\n")
+        
+        f.write("Sample Counts:\n")
+        for data_type, count in result.sample_counts.items():
+            f.write(f"  - {data_type}: {count} samples\n")
+        f.write("\n")
+        
+        # NEW: Add covariate information
+        if result.covariate_info:
+            f.write("Covariate Information:\n")
+            f.write(f"  - Total covariates: {result.covariate_info.get('total_covariates', 'N/A')}\n")
+            f.write(f"  - Numeric covariates: {result.covariate_info.get('numeric_count', 'N/A')}\n")
+            f.write(f"  - Categorical covariates: {result.covariate_info.get('categorical_count', 'N/A')}\n")
+            f.write(f"  - Binary covariates: {result.covariate_info.get('binary_count', 'N/A')}\n")
+            if 'pca_components' in result.covariate_info:
+                f.write(f"  - PCA components: {len(result.covariate_info['pca_components'])}\n")
+            f.write("\n")
+        
+        # NEW: Add phenotype information
+        if result.phenotype_info:
+            f.write("Phenotype Information:\n")
+            for qtl_type, info in result.phenotype_info.items():
+                f.write(f"  - {qtl_type.upper()}: {info.get('feature_count', 'N/A')} features, "
+                       f"{info.get('sample_count', 'N/A')} samples, "
+                       f"{info.get('missing_percentage', 0):.1f}% missing\n")
+            f.write("\n")
+        
+        if result.errors:
+            f.write("ERRORS:\n")
+            for error in result.errors:
+                f.write(f"  ❌ {error}\n")
+            f.write("\n")
+        
+        if result.warnings:
+            f.write("WARNINGS:\n")
+            for warning in result.warnings:
+                f.write(f"  ⚠️  {warning}\n")
+            f.write("\n")
+        
+        if result.info:
+            f.write("INFO:\n")
+            for info in result.info:
+                f.write(f"  ℹ️  {info}\n")
+    
+    # Generate sample mapping file in quality control directory
+    sample_mapping_file = qc_dir / 'sample_mapping.txt'
+    generate_sample_mapping(result, sample_mapping_file, config)
+    
+    logger.info(f"Validation report saved: {report_file}")
+    logger.info(f"Text report saved: {text_report_file}")
+    logger.info(f"Sample mapping saved: {sample_mapping_file}")
+
+def generate_sample_mapping(result, output_file, config):
+    """Generate sample mapping file from validation results"""
+    try:
+        # Extract actual samples from genotype file if possible
+        input_files = config['input_files']
+        geno_samples = extract_genotype_samples(input_files['genotypes'], config)
+        
+        if geno_samples:
+            sample_data = []
+            for sample in list(geno_samples)[:1000]:  # Limit to first 1000 samples
+                data_types = ['genotype']
+                
+                # Check which phenotype files this sample appears in
+                analysis_types = get_qtl_types_from_config(config)
+                for analysis_type in analysis_types:
+                    config_key = map_qtl_type_to_config_key(analysis_type)
+                    if config_key in input_files and input_files[config_key]:
+                        pheno_samples = extract_phenotype_samples(input_files[config_key])
+                        if sample in pheno_samples:
+                            data_types.append(analysis_type)
+                
+                # Check covariates
+                cov_samples = extract_covariate_samples(input_files['covariates'])
+                if sample in cov_samples:
+                    data_types.append('covariates')
+                
+                sample_data.append({
+                    'sample_id': sample,
+                    'data_types': ','.join(data_types),
+                    'qc_status': 'PASS'
+                })
+            
+            if sample_data:
+                df = pd.DataFrame(sample_data)
+                df.to_csv(output_file, sep='\t', index=False)
+                logger.info(f"Generated sample mapping with {len(sample_data)} samples")
+            else:
+                # Create minimal sample mapping
+                df = pd.DataFrame([{
+                    'sample_id': 'example_sample',
+                    'data_types': 'genotype,covariates,expression',
+                    'qc_status': 'PASS'
+                }])
+                df.to_csv(output_file, sep='\t', index=False)
+                logger.warning("Created example sample mapping - actual samples could not be extracted")
+    except Exception as e:
+        logger.warning(f"Could not generate comprehensive sample mapping: {e}")
+
+# Enhanced mapping functions
+def map_qtl_type_to_config_key(qtl_type):
+    """Map QTL analysis types to config file keys - ENHANCED"""
     mapping = {
         'eqtl': 'expression',
         'pqtl': 'protein', 
         'sqtl': 'splicing',
-        'gwas': 'gwas_phenotype'
+        'expression': 'expression',  # Allow reverse mapping
+        'protein': 'protein',
+        'splicing': 'splicing'
     }
     return mapping.get(qtl_type, qtl_type)
 
-class EnhancedQC:
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.qc_config = config.get('enhanced_qc', {})
-        self.results_dir = config.get('results_dir', 'results')
-        self._plink_cache = {}  # Cache for PLINK results
-        self._file_cache = {}   # Cache for file reads
-        
-        # Setup directories using directory manager
-        self.setup_qc_directories()
-        
-    def setup_qc_directories(self) -> None:
-        """Create comprehensive QC directory structure using directory manager"""
-        try:
-            from scripts.utils.directory_manager import get_module_directories
-            
-            self.dirs = get_module_directories(
-                'quality_control',
-                [
-                    'reports',
-                    {'reports': ['qc_reports']},
-                    'visualization',
-                    {'visualization': ['qc_plots']},
-                    'processed_data',
-                    {'processed_data': ['quality_control']},
-                    {'processed_data_quality_control': [
-                        'sample_concordance',
-                        'pca_results', 
-                        'outlier_analysis',
-                        'sample_lists',
-                        'variant_lists'
-                    ]},
-                    'system',
-                    {'system': ['temporary_files']},
-                    'comparison_analysis',
-                    {'comparison_analysis': ['tensorqtl_compatibility']}
-                ],
-                str(self.results_dir)
-            )
-            
-            # Set main directory paths
-            self.reports_dir = self.dirs['reports_qc_reports']
-            self.visualization_dir = self.dirs['visualization_qc_plots']
-            self.qc_data_dir = self.dirs['processed_data_quality_control']
-            self.temp_dir = self.dirs['system_temporary_files']
-            self.tensorqtl_compat_dir = self.dirs['comparison_analysis_tensorqtl_compatibility']
-            
-            # Set subdirectory paths
-            self.sample_concordance_dir = self.dirs['processed_data_quality_control_sample_concordance']
-            self.pca_results_dir = self.dirs['processed_data_quality_control_pca_results']
-            self.outlier_analysis_dir = self.dirs['processed_data_quality_control_outlier_analysis']
-            self.sample_lists_dir = self.dirs['processed_data_quality_control_sample_lists']
-            self.variant_lists_dir = self.dirs['processed_data_quality_control_variant_lists']
-            
-            logger.info("✅ QC directory structure created using directory manager")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to create QC directories: {e}")
-            raise
+def map_qtl_type_to_data_type(qtl_type):
+    """Map QTL analysis types to data types for validation logic - ENHANCED"""
+    mapping = {
+        'eqtl': 'expression',
+        'pqtl': 'protein',
+        'sqtl': 'splicing',
+        'expression': 'expression',
+        'protein': 'protein', 
+        'splicing': 'splicing'
+    }
+    return mapping.get(qtl_type, qtl_type)
 
-    def run_data_preparation(self) -> bool:
-        """Run data preparation module for modular pipeline"""
-        logger.info("🚀 Starting data preparation module...")
-        
-        try:
-            steps = [
-                ("📋 Validating input files", self.validate_input),
-                ("🔍 Performing basic data quality checks", self.basic_data_quality_checks),
-                ("📊 Generating data preparation report", lambda: self.generate_data_preparation_report(
-                    self._validation_results, self._quality_results)),
-                ("👥 Creating sample mapping files", self.create_sample_mapping_files),
-                ("🔧 Checking tensorQTL compatibility", self.check_tensorqtl_compatibility)
-            ]
-            
-            results = []
-            for desc, func in steps:
-                logger.info(desc)
-                if desc == "📊 Generating data preparation report":
-                    # Use cached results for report generation
-                    result = func()
-                else:
-                    result = func()
-                    # Cache results for report generation
-                    if desc == "📋 Validating input files":
-                        self._validation_results = result
-                    elif desc == "🔍 Performing basic data quality checks":
-                        self._quality_results = result
-                results.append(result)
-            
-            success = all(results)
-            
-            if success:
-                logger.info("✅ Data preparation module completed successfully")
-            else:
-                logger.error("❌ Data preparation module had issues")
-            
-            # Clear cached results to free memory
-            if hasattr(self, '_validation_results'):
-                del self._validation_results
-            if hasattr(self, '_quality_results'):
-                del self._quality_results
-            gc.collect()
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"❌ Data preparation module failed: {e}")
-            return False
-
-    def check_tensorqtl_compatibility(self) -> bool:
-        """Check if all data formats are compatible with tensorQTL"""
-        logger.info("🔧 Checking tensorQTL compatibility...")
-        
-        compatibility_issues = []
-        
-        try:
-            # Check genotype file format
-            geno_file = self.config['input_files']['genotypes']
-            if not geno_file.endswith(('.vcf.gz', '.vcf', '.bed', '.bcf')):
-                compatibility_issues.append(f"Genotype file format may not be optimal for tensorQTL: {geno_file}")
-                logger.warning("⚠️  Consider converting genotype data to PLINK format for better tensorQTL performance")
-            
-            # Check if we can extract samples from genotype file
-            geno_samples = self.extract_samples_from_genotypes(geno_file)
-            if not geno_samples:
-                compatibility_issues.append("Cannot extract samples from genotype file")
-            else:
-                logger.info(f"✅ Genotype samples: {len(geno_samples)} samples found")
-            
-            # Check phenotype files in parallel
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                future_to_qtl = {}
-                for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
-                    config_key = map_qtl_type_to_config_key(qtl_type)
-                    pheno_file = self.config['input_files'].get(config_key)
-                    if pheno_file and os.path.exists(pheno_file):
-                        future = executor.submit(self._check_phenotype_compatibility, pheno_file, qtl_type, geno_samples)
-                        future_to_qtl[future] = qtl_type
-                
-                for future in as_completed(future_to_qtl):
-                    qtl_type = future_to_qtl[future]
-                    try:
-                        issues = future.result()
-                        compatibility_issues.extend(issues)
-                    except Exception as e:
-                        compatibility_issues.append(f"Error checking {qtl_type} compatibility: {e}")
-            
-            # Check covariates format
-            covar_file = self.config['input_files'].get('covariates')
-            if covar_file and os.path.exists(covar_file):
-                try:
-                    # Use robust covariate reading that handles categorical data
-                    covar_df = self._read_covariates_robust(covar_file, nrows=5)
-                    if covar_df is not None:
-                        covar_samples = set(covar_df.columns)
-                        overlap = set(geno_samples) & covar_samples
-                        
-                        if len(overlap) == 0:
-                            compatibility_issues.append("No overlapping samples between genotype and covariates")
-                        
-                        logger.info(f"✅ Covariates compatibility: {len(covar_samples)} samples, {len(overlap)} overlap with genotypes")
-                    else:
-                        compatibility_issues.append("Could not read covariates file for compatibility check")
-                    
-                except Exception as e:
-                    compatibility_issues.append(f"Error reading covariates file: {e}")
-            
-            # Generate compatibility report
-            self.generate_tensorqtl_compatibility_report(compatibility_issues, geno_samples)
-            
-            if compatibility_issues:
-                logger.warning(f"⚠️  Found {len(compatibility_issues)} tensorQTL compatibility issues")
-                for issue in compatibility_issues[:5]:  # Limit log output
-                    logger.warning(f"   - {issue}")
-                if len(compatibility_issues) > 5:
-                    logger.warning(f"   ... and {len(compatibility_issues) - 5} more issues")
-                return False
-            
-            logger.info("✅ All data formats are compatible with tensorQTL")
-            return True
-                
-        except Exception as e:
-            logger.error(f"❌ TensorQTL compatibility check failed: {e}")
-            return False
-
-    def _read_covariates_robust(self, file_path: str, nrows: Optional[int] = None):
-        """Robust covariate file reading that handles categorical data"""
-        try:
-            # First attempt: standard tab-separated with header
-            df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=nrows)
-            logger.info(f"Successfully read covariates file with standard tab separation")
-            return df
-        except Exception as e:
-            logger.warning(f"Standard reading failed: {e}, trying alternative methods")
-            
-            try:
-                # Second attempt: try different separators
-                for sep in ['\t', '  ', ' ', ',']:
-                    try:
-                        df = pd.read_csv(file_path, sep=sep, index_col=0, nrows=nrows, engine='python')
-                        if df.shape[1] > 1:  # Should have multiple samples
-                            logger.info(f"Successfully read covariates file with separator: {repr(sep)}")
-                            return df
-                    except:
-                        continue
-            except Exception as e2:
-                logger.warning(f"Alternative separator reading failed: {e2}")
-            
-            # Final attempt: manual parsing for complex formats
-            try:
-                with open(file_path, 'r') as f:
-                    lines = f.readlines()
-                
-                # Find header line
-                header_line = None
-                data_start = 0
-                for i, line in enumerate(lines):
-                    if line.strip() and not line.startswith('#'):
-                        # Check if this looks like a header with sample IDs
-                        parts = line.strip().split()
-                        if len(parts) > 3 and all(len(part) > 3 for part in parts[1:4]):  # Sample IDs usually have reasonable length
-                            header_line = i
-                            break
-                
-                if header_line is not None:
-                    # Parse header and data
-                    header = lines[header_line].strip().split()
-                    data_lines = []
-                    
-                    for i in range(header_line + 1, len(lines)):
-                        if lines[i].strip() and not lines[i].startswith('#'):
-                            data_lines.append(lines[i].strip().split())
-                    
-                    if data_lines and len(data_lines[0]) == len(header):
-                        # Create DataFrame
-                        data_dict = {}
-                        for row in data_lines:
-                            if len(row) == len(header):
-                                covar_name = row[0]
-                                values = row[1:]
-                                data_dict[covar_name] = values
-                        
-                        df = pd.DataFrame(data_dict, index=header[1:]).T
-                        logger.info(f"Successfully read covariates file with manual parsing")
-                        return df
-                        
-            except Exception as e3:
-                logger.error(f"Manual parsing also failed: {e3}")
-        
-        logger.error("All covariate file reading methods failed")
-        return None
-
-    def _check_phenotype_compatibility(self, pheno_file: str, qtl_type: str, geno_samples: List[str]) -> List[str]:
-        """Check phenotype file compatibility (for parallel execution)"""
-        issues = []
-        try:
-            # Use chunking for large files
-            chunksize = 10000
-            first_chunk = True
-            pheno_samples = set()
-            
-            for chunk in pd.read_csv(pheno_file, sep='\t', index_col=0, chunksize=chunksize):
-                if first_chunk:
-                    pheno_samples = set(chunk.columns)
-                    first_chunk = False
-                
-                # Basic validation on first chunk only
-                if first_chunk:
-                    if chunk.shape[0] == 0 or chunk.shape[1] == 0:
-                        issues.append(f"Empty or invalid {qtl_type} phenotype file")
-                        break
-            
-            overlap = set(geno_samples) & pheno_samples
-            
-            if len(overlap) == 0:
-                issues.append(f"No overlapping samples between genotype and {qtl_type} data")
-            elif len(overlap) < min(len(geno_samples), len(pheno_samples)) * 0.8:
-                issues.append(f"Low sample overlap ({len(overlap)}) for {qtl_type} analysis")
-            
-            logger.info(f"✅ {qtl_type.upper()} compatibility: {len(pheno_samples)} samples, {len(overlap)} overlap with genotypes")
-            
-        except Exception as e:
-            issues.append(f"Error reading {qtl_type} file: {e}")
-        
-        return issues
-
-    def extract_samples_from_genotypes(self, genotype_file: str) -> List[str]:
-        """Extract sample names from genotype file with multiple format support"""
-        if genotype_file in self._file_cache:
-            return self._file_cache[genotype_file]
-        
-        samples = []
-        
-        try:
-            if genotype_file.endswith(('.vcf.gz', '.vcf', '.bcf')):
-                # Use bcftools for VCF files
-                cmd = f"{self.config['paths']['bcftools']} query -l {genotype_file}"
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-                if result.returncode == 0:
-                    samples = [s.strip() for s in result.stdout.split('\n') if s.strip()]
-                else:
-                    # Fallback: try to read VCF header efficiently
-                    samples = self._extract_samples_from_vcf_header(genotype_file)
-            
-            elif genotype_file.endswith('.bed'):
-                # PLINK BED format - read from FAM file
-                base_name = genotype_file.rsplit('.', 1)[0]  # More robust than replace
-                fam_file = f"{base_name}.fam"
-                if os.path.exists(fam_file):
-                    fam_df = pd.read_csv(fam_file, sep='\s+', header=None, usecols=[1])  # Only read sample column
-                    samples = fam_df.iloc[:, 0].tolist()
-            
-            logger.info(f"📊 Extracted {len(samples)} samples from genotype file")
-            
-            # Cache the result
-            self._file_cache[genotype_file] = samples
-            return samples
-            
-        except Exception as e:
-            logger.error(f"❌ Error extracting samples from genotype file: {e}")
-            return []
-
-    def _extract_samples_from_vcf_header(self, vcf_file: str) -> List[str]:
-        """Efficiently extract samples from VCF header"""
-        samples = []
-        try:
-            if vcf_file.endswith('.gz'):
-                import gzip
-                open_func = gzip.open
-            else:
-                open_func = open
-            
-            with open_func(vcf_file, 'rt') as f:
-                for line in f:
-                    if line.startswith('#CHROM'):
-                        samples = line.strip().split('\t')[9:]
-                        break
-                    # Stop after reasonable number of lines if header is malformed
-                    if f.tell() > 1000000:  # 1MB limit for header
-                        break
-        except Exception as e:
-            logger.warning(f"Could not extract samples from VCF header: {e}")
-        
-        return samples
-
-    def generate_tensorqtl_compatibility_report(self, issues: List[str], geno_samples: List[str]) -> bool:
-        """Generate tensorQTL compatibility report"""
-        try:
-            # Use the tensorqtl_compatibility directory from directory setup
-            report_dir = self.tensorqtl_compat_dir
-            
-            report_file = report_dir / "tensorqtl_compatibility_report.html"
-            
-            # Template for HTML report
-            html_template = """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>TensorQTL Compatibility Report</title>
-                <meta charset="UTF-8">
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                    .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }}
-                    .good {{ color: green; font-weight: bold; }}
-                    .warning {{ color: orange; font-weight: bold; }}
-                    .error {{ color: red; font-weight: bold; }}
-                    table {{ width: 100%; border-collapse: collapse; }}
-                    th, td {{ padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }}
-                </style>
-            </head>
-            <body>
-                <h1>TensorQTL Compatibility Report</h1>
-                <p>Generated on: {timestamp}</p>
-                
-                <div class="section">
-                    <h2>Compatibility Summary</h2>
-                    <p><strong>Genotype Samples:</strong> {sample_count}</p>
-                    <p><strong>Compatibility Issues:</strong> {issue_count}</p>
-                    {status_message}
-                </div>
-                {issues_section}
-                <div class="section">
-                    <h2>Sample Information</h2>
-                    <p><strong>Total Genotype Samples:</strong> {sample_count}</p>
-                    <details>
-                        <summary>Show Sample List (first 20)</summary>
-                        <pre>{sample_list}</pre>
-                    </details>
-                </div>
-                
-                <div class="section">
-                    <h2>Recommendations</h2>
-                    <ul>
-                        <li>Ensure sample IDs match exactly across all files</li>
-                        <li>Use PLINK format for genotype data for optimal tensorQTL performance</li>
-                        <li>Check that all files use consistent sample ordering</li>
-                        <li>Verify that phenotype data is properly normalized</li>
-                    </ul>
-                </div>
-            </body>
-            </html>
-            """
-            
-            # Prepare content
-            status_message = ("<p class='good'>✅ All checks passed - Data is compatible with tensorQTL</p>" 
-                            if not issues else 
-                            f"<p class='warning'>⚠️ Found {len(issues)} compatibility issues that need attention</p>")
-            
-            issues_section = ""
-            if issues:
-                issues_html = "".join(f"<li class='warning'>{issue}</li>" for issue in issues)
-                issues_section = f"""
-                <div class="section">
-                    <h2>Compatibility Issues</h2>
-                    <ul>{issues_html}</ul>
-                </div>
-                """
-            
-            html_content = html_template.format(
-                timestamp=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
-                sample_count=len(geno_samples),
-                issue_count=len(issues),
-                status_message=status_message,
-                issues_section=issues_section,
-                sample_list='\n'.join(geno_samples[:20])
-            )
-            
-            with open(report_file, 'w') as f:
-                f.write(html_content)
-            
-            logger.info(f"✅ TensorQTL compatibility report generated: {report_file}")
-            return True
-            
-        except Exception as e:
-            logger.warning(f"Could not generate tensorQTL compatibility report: {e}")
-            return False
-
-    def validate_input(self) -> Dict[str, Any]:
-        """Validate all input files exist and are accessible"""
-        logger.info("🔍 Validating input files...")
-        
-        validation_results = {}
-        input_files = self.config.get('input_files', {})
-        
-        required_files = ['genotypes', 'covariates', 'annotations']
-        optional_files = ['expression', 'protein', 'splicing', 'gwas_phenotype']
-        
-        for file_type in required_files + optional_files:
-            file_path = input_files.get(file_type)
-            
-            if file_type in required_files and not file_path:
-                validation_results[file_type] = self._create_validation_result('REQUIRED_MISSING')
-                logger.error(f"  ❌ {file_type}: REQUIRED BUT NOT SPECIFIED")
-                continue
-                
-            if not file_path:
-                validation_results[file_type] = self._create_validation_result('OPTIONAL_NOT_CONFIGURED')
-                logger.info(f"  ⚠️  {file_type}: Optional (not configured)")
-                continue
-            
-            validation_results[file_type] = self._validate_single_file(file_type, file_path)
-        
-        return validation_results
-
-    def _create_validation_result(self, status: str) -> Dict[str, Any]:
-        """Create a standardized validation result"""
-        return {
-            'status': status,
-            'path': None,
-            'size_gb': 0,
-            'accessible': False
-        }
-
-    def _validate_single_file(self, file_type: str, file_path: str) -> Dict[str, Any]:
-        """Validate a single file"""
-        if not os.path.exists(file_path):
-            result = self._create_validation_result('FILE_NOT_FOUND')
-            if file_type in ['genotypes', 'covariates', 'annotations']:
-                logger.error(f"  ❌ {file_type}: {file_path} - REQUIRED FILE NOT FOUND")
-            else:
-                logger.warning(f"  ⚠️  {file_type}: {file_path} - OPTIONAL FILE NOT FOUND")
-            return result
-        
-        try:
-            file_size = os.path.getsize(file_path) / (1024**3)  # GB
-            result = {
-                'status': 'OK',
-                'path': file_path,
-                'size_gb': round(file_size, 2),
-                'accessible': True
-            }
-            
-            logger.info(f"  ✅ {file_type}: {file_path} ({file_size:.2f} GB)")
-            
-            # Additional format validation
-            if file_type == 'genotypes':
-                result['tensorqtl_compatible'] = self.validate_genotype_format(file_path)
-            elif file_type == 'expression':
-                result['tensorqtl_compatible'] = self.validate_phenotype_format(file_path, 'expression')
-            elif file_type == 'covariates':
-                result['tensorqtl_compatible'] = self.validate_covariates_format(file_path)
-                
-            return result
-            
-        except Exception as e:
-            result = self._create_validation_result('ACCESS_ERROR')
-            result['error'] = str(e)
-            logger.error(f"  ❌ {file_type}: {file_path} - ACCESS ERROR: {e}")
-            return result
-
-    def validate_genotype_format(self, genotype_file: str) -> bool:
-        """Validate genotype file format for tensorQTL compatibility"""
-        try:
-            if genotype_file.endswith(('.vcf.gz', '.vcf', '.bcf')):
-                cmd = f"{self.config['paths']['bcftools']} view -h {genotype_file} | head -5"
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-                return result.returncode == 0 and '#CHROM' in result.stdout
-            elif genotype_file.endswith('.bed'):
-                base_name = genotype_file.rsplit('.', 1)[0]
-                required_files = [f'{base_name}.bed', f'{base_name}.bim', f'{base_name}.fam']
-                return all(os.path.exists(f) for f in required_files)
-            return False
-        except:
-            return False
-
-    def validate_phenotype_format(self, phenotype_file: str, pheno_type: str) -> bool:
-        """Validate phenotype file format for tensorQTL compatibility"""
-        try:
-            # Only read first few rows for validation
-            df = pd.read_csv(phenotype_file, sep='\t', index_col=0, nrows=5)
-            return df.shape[0] > 0 and df.shape[1] > 0
-        except:
-            return False
-
-    def validate_covariates_format(self, covariates_file: str) -> bool:
-        """Validate covariates file format for tensorQTL compatibility"""
-        try:
-            df = self._read_covariates_robust(covariates_file, nrows=5)
-            return df is not None and df.shape[0] > 0 and df.shape[1] > 0
-        except:
-            return False
-
-    def basic_data_quality_checks(self) -> Dict[str, Any]:
-        """Perform basic data quality checks in parallel"""
-        logger.info("🔍 Performing basic data quality checks...")
-        
-        quality_results = {}
-        input_files = self.config.get('input_files', {})
-        
-        # Define quality check functions
-        check_functions = [
-            ('genotypes', self.check_genotype_file_quality, input_files.get('genotypes')),
-        ]
-        
-        # Add phenotype checks
+def get_qtl_types_from_config(config):
+    """Extract QTL types from config - ENHANCED with better error handling"""
+    qtl_types = config['analysis']['qtl_types']
+    
+    if qtl_types == 'all':
+        available_types = []
         for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
             config_key = map_qtl_type_to_config_key(qtl_type)
-            check_functions.append((qtl_type, self.check_phenotype_file_quality, input_files.get(config_key)))
-        
-        # Add covariates and annotations
-        check_functions.extend([
-            ('covariates', self.check_covariates_file_quality, input_files.get('covariates')),
-            ('annotations', self.check_annotations_file_quality, input_files.get('annotations'))
-        ])
-        
-        # Run checks in parallel
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_type = {}
-            for file_type, check_func, file_path in check_functions:
-                if file_path and os.path.exists(file_path):
-                    future = executor.submit(check_func, file_path, file_type if file_type != 'genotypes' else None)
-                    future_to_type[future] = file_type
-            
-            for future in as_completed(future_to_type):
-                file_type = future_to_type[future]
-                try:
-                    quality_results[file_type] = future.result()
-                except Exception as e:
-                    logger.error(f"❌ {file_type} quality check failed: {e}")
-                    quality_results[file_type] = self._create_empty_quality_result(file_type)
-        
-        return quality_results
-
-    def _create_empty_quality_result(self, file_type: str) -> Dict[str, Any]:
-        """Create empty quality result for failed checks"""
-        checks_total = {'genotypes': 5, 'eqtl': 7, 'pqtl': 7, 'sqtl': 7, 'covariates': 6, 'annotations': 4}.get(file_type, 5)
-        return {
-            'file_type': file_type,
-            'checks_passed': 0,
-            'checks_total': checks_total,
-            'details': {'error': 'Check failed'}
-        }
-
-    def check_genotype_file_quality(self, vcf_file: str, file_type: str = None) -> Dict[str, Any]:
-        """Check genotype file quality using bcftools"""
-        logger.info(f"  🧬 Checking genotype file: {vcf_file}")
-        
-        try:
-            quality_info = {
-                'file_type': 'genotype',
-                'checks_passed': 0,
-                'checks_total': 5,
-                'details': {}
-            }
-            
-            # Check 1: File exists and is accessible
-            if not os.path.exists(vcf_file):
-                quality_info['details']['file_exists'] = False
-                return quality_info
-            
-            quality_info['checks_passed'] += 1
-            file_size = os.path.getsize(vcf_file) / (1024**3)
-            quality_info['details']['file_size_gb'] = round(file_size, 2)
-            quality_info['details']['file_exists'] = True
-            
-            # Check 2: Basic stats using bcftools
-            stats_cmd = f"{self.config['paths']['bcftools']} stats {vcf_file} 2>/dev/null | head -20 || true"
-            result = subprocess.run(stats_cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-            
-            if result.returncode == 0 and result.stdout.strip():
-                quality_info['checks_passed'] += 1
-                quality_info['details']['bcftools_accessible'] = True
-                
-                # Parse basic info from stats
-                for line in result.stdout.split('\n'):
-                    if 'number of samples:' in line.lower():
-                        quality_info['details']['n_samples'] = line.split(':')[-1].strip()
-                    elif 'number of records:' in line.lower():
-                        quality_info['details']['n_variants'] = line.split(':')[-1].strip()
+            if (config_key in config['input_files'] and 
+                config['input_files'][config_key] and 
+                os.path.exists(config['input_files'][config_key])):
+                available_types.append(qtl_type)
+        return available_types
+    elif isinstance(qtl_types, str):
+        types_list = [t.strip() for t in qtl_types.split(',')]
+        # Validate each type exists
+        valid_types = []
+        for qtl_type in types_list:
+            config_key = map_qtl_type_to_config_key(qtl_type)
+            if (config_key in config['input_files'] and 
+                config['input_files'][config_key] and 
+                os.path.exists(config['input_files'][config_key])):
+                valid_types.append(qtl_type)
             else:
-                quality_info['details']['bcftools_accessible'] = False
-            
-            # Check 3: File is indexed
-            if os.path.exists(f"{vcf_file}.tbi") or os.path.exists(f"{vcf_file}.csi"):
-                quality_info['checks_passed'] += 1
-                quality_info['details']['indexed'] = True
-            else:
-                quality_info['details']['indexed'] = False
-            
-            # Check 4: File format
-            if vcf_file.endswith(('.vcf', '.vcf.gz', '.bcf', '.bed')):
-                quality_info['checks_passed'] += 1
-                quality_info['details']['format_ok'] = True
-                quality_info['details']['format'] = os.path.splitext(vcf_file)[1]
-                quality_info['details']['tensorqtl_optimized'] = vcf_file.endswith('.bed')
-            else:
-                quality_info['details']['format_ok'] = False
-            
-            # Check 5: Sample extraction
-            samples = self.extract_samples_from_genotypes(vcf_file)
-            if samples:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['samples_extractable'] = True
-                quality_info['details']['sample_count'] = len(samples)
-            else:
-                quality_info['details']['samples_extractable'] = False
-            
-            logger.info(f"    ✅ Genotype file checks: {quality_info['checks_passed']}/5 passed")
-            return quality_info
-            
-        except Exception as e:
-            logger.error(f"    ❌ Genotype quality check failed: {e}")
-            return self._create_empty_quality_result('genotypes')
+                logger.warning(f"QTL type {qtl_type} specified but file not found")
+        return valid_types
+    elif isinstance(qtl_types, list):
+        return qtl_types
+    else:
+        logger.warning(f"Invalid qtl_types configuration: {qtl_types}, defaulting to eqtl")
+        return ['eqtl']
 
-    def check_phenotype_file_quality(self, pheno_file: str, pheno_type: str) -> Dict[str, Any]:
-        """Check phenotype file quality efficiently using chunking"""
-        logger.info(f"  📊 Checking {pheno_type} file: {pheno_file}")
-        
-        try:
-            # Read only first chunk for initial assessment
-            chunksize = 10000
-            reader = pd.read_csv(pheno_file, sep='\t', index_col=0, chunksize=chunksize)
-            first_chunk = next(reader)
-            
-            quality_info = {
-                'file_type': pheno_type,
-                'checks_passed': 0,
-                'checks_total': 7,
-                'details': {
-                    'n_features': 0,
-                    'n_samples': first_chunk.shape[1],
-                    'data_type': 'counts' if first_chunk.values.sum() > first_chunk.shape[0] * first_chunk.shape[1] else 'normalized',
-                    'tensorqtl_format': 'OK'
-                }
-            }
-            
-            # Check 1: Non-empty file
-            if first_chunk.shape[0] > 0 and first_chunk.shape[1] > 0:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['non_empty'] = True
-            
-            # Process chunks to get total feature count and missingness
-            total_features = first_chunk.shape[0]
-            total_missing = first_chunk.isna().sum().sum()
-            total_cells = first_chunk.size
-            
-            for chunk in reader:
-                total_features += chunk.shape[0]
-                total_missing += chunk.isna().sum().sum()
-                total_cells += chunk.size
-            
-            quality_info['details']['n_features'] = total_features
-            quality_info['details']['missing_percentage'] = (total_missing / total_cells) * 100
-            quality_info['details']['total_measurements'] = total_cells
-            
-            # Check 2: Reasonable missing rate
-            if quality_info['details']['missing_percentage'] < 50:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['missing_rate_acceptable'] = True
-            
-            # Check 3: No duplicate feature names (check first chunk only for efficiency)
-            if not first_chunk.index.duplicated().any():
-                quality_info['checks_passed'] += 1
-                quality_info['details']['no_duplicate_features'] = True
-            
-            # Check 4: Numeric data
-            try:
-                first_chunk.astype(float)
-                quality_info['checks_passed'] += 1
-                quality_info['details']['all_numeric'] = True
-            except:
-                quality_info['details']['all_numeric'] = False
-            
-            # Check 5: Proper format for tensorQTL
-            if first_chunk.shape[0] > 0 and first_chunk.shape[1] > 0:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['tensorqtl_compatible'] = True
-            
-            logger.info(f"    ✅ {pheno_type} file: {total_features} features, {first_chunk.shape[1]} samples - {quality_info['checks_passed']}/7 checks passed")
-            return quality_info
-            
-        except Exception as e:
-            logger.error(f"    ❌ {pheno_type} quality check failed: {e}")
-            return self._create_empty_quality_result(pheno_type)
-
-    def check_covariates_file_quality(self, covariates_file: str, file_type: str = None) -> Dict[str, Any]:
-        """Check covariates file quality with robust handling of categorical data"""
-        logger.info(f"  📈 Checking covariates file: {covariates_file}")
-        
-        try:
-            # Use robust reading that handles categorical data
-            df = self._read_covariates_robust(covariates_file, nrows=1000)
-            
-            if df is None or df.empty:
-                return self._create_empty_quality_result('covariates')
-            
-            quality_info = {
-                'file_type': 'covariates',
-                'checks_passed': 0,
-                'checks_total': 6,
-                'details': {
-                    'n_covariates': df.shape[0],
-                    'n_samples': df.shape[1],
-                    'missing_percentage': (df.isna().sum().sum() / df.size) * 100,
-                    'tensorqtl_format': 'OK'
-                }
-            }
-            
-            # Check 1: Non-empty file
-            if df.shape[0] > 0 and df.shape[1] > 0:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['non_empty'] = True
-            
-            # Check 2: Low missing rate (more lenient for covariates)
-            if quality_info['details']['missing_percentage'] < 10:  # Increased threshold for covariates
-                quality_info['checks_passed'] += 1
-                quality_info['details']['missing_rate_acceptable'] = True
-            
-            # Check 3: No constant rows - handle both numeric and categorical
-            try:
-                # For numeric columns, check standard deviation
-                # For categorical, check number of unique values
-                constant_rows = 0
-                for idx in df.index:
-                    row = df.loc[idx]
-                    # Try to convert to numeric, if successful check std
-                    try:
-                        numeric_row = pd.to_numeric(row, errors='coerce')
-                        if numeric_row.notna().all() and numeric_row.std() == 0:
-                            constant_rows += 1
-                    except:
-                        # If conversion fails, check if all values are the same
-                        if row.nunique() == 1:
-                            constant_rows += 1
-                
-                if constant_rows == 0:
-                    quality_info['checks_passed'] += 1
-                    quality_info['details']['no_constant_rows'] = True
-                else:
-                    quality_info['details']['constant_rows'] = constant_rows
-            except Exception as e:
-                logger.warning(f"Could not check constant rows: {e}")
-            
-            # Check 4: No duplicate names
-            if not df.index.duplicated().any():
-                quality_info['checks_passed'] += 1
-                quality_info['details']['no_duplicate_names'] = True
-            
-            # Check 5: Data type analysis (not strict requirement)
-            numeric_count = 0
-            categorical_count = 0
-            for idx in df.index:
-                row = df.loc[idx]
-                try:
-                    numeric_row = pd.to_numeric(row, errors='coerce')
-                    if numeric_row.notna().all():
-                        numeric_count += 1
-                    else:
-                        categorical_count += 1
-                except:
-                    categorical_count += 1
-            
-            quality_info['details']['numeric_covariates'] = numeric_count
-            quality_info['details']['categorical_covariates'] = categorical_count
-            
-            # This check always passes for covariates since we handle mixed types
-            quality_info['checks_passed'] += 1
-            quality_info['details']['mixed_types_handled'] = True
-            
-            # Check 6: Proper format
-            if df.shape[0] > 0 and df.shape[1] > 0:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['tensorqtl_compatible'] = True
-            
-            logger.info(f"    ✅ covariates file: {df.shape[0]} rows, {df.shape[1]} samples - {quality_info['checks_passed']}/6 checks passed")
-            logger.info(f"    📊 Covariate types: {numeric_count} numeric, {categorical_count} categorical")
-            return quality_info
-            
-        except Exception as e:
-            logger.error(f"    ❌ covariates quality check failed: {e}")
-            return self._create_empty_quality_result('covariates')
-
-    def check_annotations_file_quality(self, annotations_file: str, file_type: str = None) -> Dict[str, Any]:
-        """Check annotations file quality"""
-        logger.info(f"  📖 Checking annotations file: {annotations_file}")
-        
-        try:
-            # Try reading as BED format with limited rows
-            df = pd.read_csv(annotations_file, sep='\t', comment='#', header=None, nrows=1000)
-            
-            quality_info = {
-                'file_type': 'annotations',
-                'checks_passed': 0,
-                'checks_total': 4,
-                'details': {
-                    'n_annotations': '>1000' if len(df) == 1000 else len(df),
-                    'n_columns': df.shape[1],
-                    'format': 'BED' if df.shape[1] >= 3 else 'unknown'
-                }
-            }
-            
-            # Check 1: Non-empty file
-            if df.shape[0] > 0:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['non_empty'] = True
-            
-            # Check 2: Has minimum BED columns
-            if df.shape[1] >= 3:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['min_columns'] = True
-            
-            # Check 3: Chromosome column looks reasonable
-            if df.shape[1] >= 1:
-                first_col = df.iloc[:, 0].astype(str)
-                chrom_like = first_col.str.startswith('chr').any() or first_col.isin([str(i) for i in range(1, 23)] + ['X', 'Y', 'MT']).any()
-                if chrom_like:
-                    quality_info['checks_passed'] += 1
-                    quality_info['details']['chromosome_format_ok'] = True
-            
-            # Check 4: Has gene IDs
-            if df.shape[1] >= 4:
-                quality_info['checks_passed'] += 1
-                quality_info['details']['has_gene_ids'] = True
-            
-            logger.info(f"    ✅ Annotations file: {df.shape[0]} annotations - {quality_info['checks_passed']}/4 checks passed")
-            return quality_info
-            
-        except Exception as e:
-            logger.error(f"    ❌ Annotations quality check failed: {e}")
-            return self._create_empty_quality_result('annotations')
-
-    def create_sample_mapping_files(self) -> bool:
-        """Create sample mapping files for downstream analysis"""
-        logger.info("👥 Creating sample mapping files...")
-        
-        try:
-            # Use the sample_lists directory from directory setup
-            samples_dir = self.sample_lists_dir
-            
-            input_files = self.config.get('input_files', {})
-            all_samples = {}
-            
-            # Extract samples from genotype file
-            if 'genotypes' in input_files and input_files['genotypes']:
-                geno_samples = self.extract_samples_from_genotypes(input_files['genotypes'])
-                if geno_samples:
-                    all_samples['genotypes'] = set(geno_samples)
-                    self._write_sample_file(samples_dir / "genotype_samples.txt", geno_samples)
-            
-            # Extract samples from other files
-            sample_sources = [
-                ('expression', 'eqtl'),
-                ('protein', 'pqtl'), 
-                ('splicing', 'sqtl'),
-                ('covariates', 'covariates')
-            ]
-            
-            for config_key, sample_key in sample_sources:
-                if config_key in input_files and input_files[config_key]:
-                    samples = self._extract_samples_from_tabular(input_files[config_key])
-                    if samples:
-                        all_samples[sample_key] = samples
-                        self._write_sample_file(samples_dir / f"{sample_key}_samples.txt", list(samples))
-            
-            # Create sample intersection
-            if all_samples:
-                common_samples = set.intersection(*all_samples.values())
-                self._write_sample_file(samples_dir / "common_samples.txt", sorted(common_samples))
-                
-                # Create tensorQTL-specific sample lists
-                tensorqtl_dir = samples_dir / "tensorqtl"
-                tensorqtl_dir.mkdir(parents=True, exist_ok=True)
-                
-                for dataset, samples in all_samples.items():
-                    self._write_sample_file(tensorqtl_dir / f"{dataset}_samples.txt", sorted(samples))
-                
-                self.log_sample_overlap_statistics(all_samples, common_samples)
-                return True
-            
-            logger.warning("⚠️ No samples could be extracted from input files")
-            return False
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to create sample mapping files: {e}")
-            return False
-
-    def _extract_samples_from_tabular(self, file_path: str) -> Set[str]:
-        """Extract samples from tabular file efficiently"""
-        try:
-            # For covariates, use robust reading
-            if 'covariate' in file_path.lower():
-                df = self._read_covariates_robust(file_path, nrows=0)
-            else:
-                # Only read header to get sample names
-                df = pd.read_csv(file_path, sep='\t', index_col=0, nrows=0)
-            return set(df.columns)
-        except Exception as e:
-            logger.warning(f"Could not extract samples from {file_path}: {e}")
-            return set()
-
-    def _write_sample_file(self, file_path: Path, samples: List[str]) -> None:
-        """Write sample list to file"""
-        with open(file_path, 'w') as f:
-            for sample in samples:
-                f.write(f"{sample}\n")
-
-    def log_sample_overlap_statistics(self, all_samples: Dict[str, Set[str]], common_samples: Set[str]) -> None:
-        """Log detailed sample overlap statistics"""
-        logger.info("📊 Sample Overlap Statistics:")
-        
-        for dataset, samples in all_samples.items():
-            overlap_count = len(samples & common_samples)
-            overlap_percentage = (overlap_count / len(samples)) * 100 if samples else 0
-            logger.info(f"   {dataset.upper()}: {len(samples)} total, {overlap_count} common ({overlap_percentage:.1f}%)")
-        
-        if common_samples:
-            logger.info(f"✅ TensorQTL will use {len(common_samples)} common samples for analysis")
-        else:
-            logger.error("❌ No common samples found - tensorQTL analysis will fail!")
-
-    def generate_data_preparation_report(self, validation_results: Dict[str, Any], quality_results: Dict[str, Any]) -> bool:
-        """Generate data preparation report efficiently"""
-        logger.info("📝 Generating data preparation report...")
-        
-        try:
-            # Use the reports directory from directory setup
-            report_dir = self.reports_dir
-            
-            # Calculate overall status
-            total_checks = sum(result.get('checks_total', 0) for result in quality_results.values() if isinstance(result, dict))
-            passed_checks = sum(result.get('checks_passed', 0) for result in quality_results.values() if isinstance(result, dict))
-            
-            if total_checks > 0:
-                pass_rate = passed_checks / total_checks
-                if pass_rate > 0.8:
-                    overall_status, status_class = "PASS", "pass"
-                elif pass_rate > 0.5:
-                    overall_status, status_class = "WARNING", "warning"
-                else:
-                    overall_status, status_class = "FAIL", "fail"
-            else:
-                overall_status, status_class = "UNKNOWN", "warning"
-            
-            # Generate HTML report
-            self._generate_html_report(report_dir, validation_results, quality_results, overall_status, status_class, passed_checks, total_checks)
-            
-            # Save JSON version
-            json_report = {
-                'validation_results': validation_results,
-                'quality_results': quality_results,
-                'overall_status': overall_status,
-                'timestamp': pd.Timestamp.now().isoformat()
-            }
-            
-            with open(report_dir / "data_preparation_report.json", 'w') as f:
-                json.dump(json_report, f, indent=2, default=str)
-            
-            logger.info("✅ Data preparation report generated")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to generate data preparation report: {e}")
-            return False
-
-    def _generate_html_report(self, report_dir: Path, validation_results: Dict[str, Any], 
-                         quality_results: Dict[str, Any], overall_status: str, 
-                         status_class: str, passed_checks: int, total_checks: int) -> None:
-        """Generate HTML report content"""
-        report_file = report_dir / "data_preparation_report.html"
-        
-        # HTML template with placeholders
-        html_template = """<!DOCTYPE html>
-    <html>
-    <head>
-        <title>Data Preparation Report</title>
-        <meta charset="UTF-8">
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            .header {{ background: #f8f9fa; padding: 20px; border-radius: 5px; }}
-            .status-pass {{ color: #28a745; font-weight: bold; }}
-            .status-warning {{ color: #ffc107; font-weight: bold; }}
-            .status-fail {{ color: #dc3545; font-weight: bold; }}
-            .section {{ margin: 20px 0; padding: 15px; border: 1px solid #dee2e6; border-radius: 5px; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
-            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }}
-            th {{ background-color: #f8f9fa; }}
-            .tensorqtl-note {{ background: #e7f3ff; padding: 10px; border-left: 4px solid #007bff; margin: 10px 0; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>Data Preparation Report</h1>
-            <p>Generated on: {timestamp}</p>
-            <p>Overall Status: <span class="status-{status_class}">{overall_status}</span></p>
-            <p>Checks Passed: {passed_checks} / {total_checks}</p>
-        </div>
-        
-        <div class="tensorqtl-note">
-            <h3>🧬 TensorQTL Compatibility Notes</h3>
-            <p>This pipeline uses <strong>tensorQTL</strong> for QTL analysis. Ensure:</p>
-            <ul>
-                <li>Genotype data is in PLINK format for optimal performance</li>
-                <li>Sample IDs match exactly across all files</li>
-                <li>Phenotype data is properly normalized (VST recommended for RNA-seq)</li>
-                <li>Sufficient common samples exist across all datasets</li>
-            </ul>
-        </div>
-        
-        {validation_table}
-        
-        {quality_table}
-        
-        <div class="section">
-            <h2>Next Steps</h2>
-            <ul>
-                <li><strong>If status is PASS:</strong> Proceed with genotype and expression processing</li>
-                <li><strong>If status is WARNING:</strong> Review warnings and consider addressing issues</li>
-                <li><strong>If status is FAIL:</strong> Fix the reported issues before proceeding</li>
-            </ul>
-        </div>
-    </body>
-    </html>"""
-        
-        # Generate validation table
-        validation_table = self._generate_validation_table(validation_results)
-        
-        # Generate quality table
-        quality_table = self._generate_quality_table(quality_results)
-        
-        # Fill template
-        html_content = html_template.format(
-            timestamp=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
-            status_class=status_class,
-            overall_status=overall_status,
-            passed_checks=passed_checks,
-            total_checks=total_checks,
-            validation_table=validation_table,
-            quality_table=quality_table
-        )
-        
-        with open(report_file, 'w') as f:
-            f.write(html_content)
-
-    def _generate_validation_table(self, validation_results: Dict[str, Any]) -> str:
-        """Generate validation results table HTML"""
-        if not validation_results:
-            return "<div class='section'><h2>File Validation</h2><p>No validation results available.</p></div>"
-        
-        table_html = """
-        <div class="section">
-            <h2>File Validation</h2>
-            <table>
-                <tr><th>File Type</th><th>Status</th><th>Path</th><th>Size (GB)</th><th>TensorQTL Compatible</th></tr>
-        """
-        
-        status_map = {
-            'OK': ('status-pass', 'OK'),
-            'REQUIRED_MISSING': ('status-fail', 'REQUIRED MISSING'),
-            'FILE_NOT_FOUND': ('status-fail', 'NOT FOUND'),
-            'ACCESS_ERROR': ('status-fail', 'ACCESS ERROR'),
-            'OPTIONAL_NOT_CONFIGURED': ('status-warning', 'OPTIONAL (NOT CONFIGURED)')
-        }
-        
-        for file_type, result in validation_results.items():
-            status_class, status_text = status_map.get(result['status'], ('status-warning', result['status']))
-            tensorqtl_status = result.get('tensorqtl_compatible', 'Unknown')
-            tensorqtl_class = 'status-pass' if tensorqtl_status == True else 'status-warning' if tensorqtl_status == 'Unknown' else 'status-fail'
-            tensorqtl_text = '✅' if tensorqtl_status == True else '⚠️' if tensorqtl_status == 'Unknown' else '❌'
-            
-            table_html += f"""
-                <tr>
-                    <td>{file_type}</td>
-                    <td class="{status_class}">{status_text}</td>
-                    <td>{result.get('path', 'N/A')}</td>
-                    <td>{result.get('size_gb', 'N/A')}</td>
-                    <td class="{tensorqtl_class}">{tensorqtl_text}</td>
-                </tr>
-            """
-        
-        table_html += "</table></div>"
-        return table_html
-
-    def _generate_quality_table(self, quality_results: Dict[str, Any]) -> str:
-        """Generate quality results table HTML"""
-        if not quality_results:
-            return "<div class='section'><h2>Data Quality Checks</h2><p>No quality results available.</p></div>"
-        
-        table_html = """
-        <div class="section">
-            <h2>Data Quality Checks</h2>
-            <table>
-                <tr><th>Data Type</th><th>Checks Passed</th><th>Total Checks</th><th>Details</th></tr>
-        """
-        
-        for data_type, result in quality_results.items():
-            if isinstance(result, dict):
-                checks_passed = result.get('checks_passed', 0)
-                checks_total = result.get('checks_total', 0)
-                
-                if checks_total > 0:
-                    pass_rate = checks_passed / checks_total
-                    if pass_rate >= 0.8:
-                        status_class = "status-pass"
-                    elif pass_rate >= 0.5:
-                        status_class = "status-warning"
-                    else:
-                        status_class = "status-fail"
-                else:
-                    status_class = "status-warning"
-                
-                details_html = "<ul>"
-                for key, value in list(result.get('details', {}).items())[:5]:  # Limit details
-                    details_html += f"<li><strong>{key}:</strong> {value}</li>"
-                details_html += "</ul>"
-                
-                table_html += f"""
-                    <tr>
-                        <td>{data_type}</td>
-                        <td class="{status_class}">{checks_passed}/{checks_total}</td>
-                        <td>{checks_total}</td>
-                        <td>{details_html}</td>
-                    </tr>
-                """
-        
-        table_html += "</table></div>"
-        return table_html
-
-    def get_qtl_types_from_config(self) -> List[str]:
-        """Get QTL types from configuration"""
-        try:
-            qtl_types_config = self.config['analysis'].get('qtl_types', 'all')
-            
-            if qtl_types_config == 'all':
-                available_types = []
-                for qtl_type in ['eqtl', 'pqtl', 'sqtl']:
-                    config_key = map_qtl_type_to_config_key(qtl_type)
-                    if (config_key in self.config['input_files'] and 
-                        self.config['input_files'][config_key] and 
-                        os.path.exists(self.config['input_files'][config_key])):
-                        available_types.append(qtl_type)
-                return available_types
-            elif isinstance(qtl_types_config, str):
-                return [t.strip() for t in qtl_types_config.split(',')]
-            elif isinstance(qtl_types_config, list):
-                return qtl_types_config
-            else:
-                logger.warning(f"Invalid qtl_types configuration: {qtl_types_config}")
-                return ['eqtl']
-        except Exception as e:
-            logger.error(f"Error getting QTL types from config: {e}")
-            return ['eqtl']
+def analyze_chromosome_naming(chromosomes, file_type, result):
+    """Analyze chromosome naming consistency"""
+    has_chr_prefix = any(str(c).startswith('chr') for c in chromosomes)
+    no_chr_prefix = any(str(c) in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', 'X', 'Y', 'MT', 'M'] for c in chromosomes)
     
-    def run_quality_control(self) -> bool:
-        """Run quality control module for modular pipeline"""
-        logger.info("🚀 Starting quality control module...")
-        
-        try:
-            if 'input_files' not in self.config:
-                logger.error("❌ No input_files section in config")
-                return False
-                
-            vcf_file = self.config['input_files'].get('genotypes')
-            if not vcf_file:
-                logger.error("❌ No genotypes file specified in config")
-                return False
-            
-            if not os.path.exists(vcf_file):
-                logger.error(f"❌ Genotype file not found: {vcf_file}")
-                return False
-            
-            qtl_types = self.get_qtl_types_from_config()
-            qc_results = self.run_comprehensive_qc(vcf_file, qtl_types, self.results_dir)
-            
-            success = bool(qc_results)
-            if success:
-                logger.info("✅ Quality control module completed successfully")
-            else:
-                logger.error("❌ Quality control module failed to produce results")
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"❌ Quality control module failed: {e}")
-            return False
+    if has_chr_prefix and no_chr_prefix:
+        result.add_warning(file_type, "Mixed chromosome naming (some with 'chr' prefix, some without)")
+    elif has_chr_prefix:
+        result.add_info(file_type, "Chromosome naming: with 'chr' prefix")
+    elif no_chr_prefix:
+        result.add_info(file_type, "Chromosome naming: without 'chr' prefix")
 
-    def run_comprehensive_qc(self, vcf_file: str, qtl_types: List[str], output_dir: str) -> Dict[str, Any]:
-        """Run comprehensive QC on all data types"""
-        logger.info("🔍 Running comprehensive quality control...")
-        
-        qc_results = {}
-        
+def extract_genotype_samples(genotype_file, config):
+    """Extract samples from genotype file"""
+    format_info = detect_genotype_format_enhanced(genotype_file)
+    
+    if format_info['format'] in ['vcf', 'vcf.gz', 'bcf']:
         try:
-            # Use the directories from setup
-            qc_dir = self.reports_dir
-            
-            # Get phenotype files
-            phenotype_files = {}
-            for qtl_type in qtl_types:
-                config_key = map_qtl_type_to_config_key(qtl_type)
-                phenotype_files[qtl_type] = self.config['input_files'].get(config_key)
-            
-            # Run QC steps
-            qc_steps = [
-                ("🧬 Genotype QC", lambda: self.genotype_qc(vcf_file, str(qc_dir))),
-                ("🔗 Sample concordance", lambda: self.sample_concordance_qc(vcf_file, phenotype_files, str(qc_dir))),
-            ]
-            
-            # Add phenotype QC for available types
-            for qtl_type, pheno_file in phenotype_files.items():
-                if pheno_file and os.path.exists(pheno_file):
-                    qc_steps.append((f"📊 {qtl_type} phenotype QC", 
-                                   lambda p=pheno_file, t=qtl_type: self.phenotype_qc(p, t, str(qc_dir))))
-            
-            # Add optional steps
-            if self.qc_config.get('run_pca', True):
-                qc_steps.append(("📈 PCA analysis", lambda: self.run_pca_analysis(vcf_file, str(qc_dir))))
-            
-            if self.qc_config.get('advanced_outlier_detection', True):
-                qc_steps.append(("🎯 Advanced outlier detection", 
-                               lambda: self.advanced_outlier_detection(vcf_file, phenotype_files, str(qc_dir))))
-            
-            # Execute QC steps
-            for desc, func in qc_steps:
-                logger.info(desc)
-                try:
-                    result = func()
-                    key = desc.split(' ')[1].lower()  # Extract key from description
-                    qc_results[key] = result
-                except Exception as e:
-                    logger.error(f"❌ {desc} failed: {e}")
-                    qc_results[desc.split(' ')[1].lower()] = {}
-            
-            # Generate reports
-            logger.info("📋 Generating comprehensive QC report...")
-            self.generate_qc_report(qc_results, str(qc_dir))
-            self.save_qc_results(qc_results, str(qc_dir))
-            
-            logger.info("✅ Comprehensive QC completed")
-            return qc_results
-            
-        except Exception as e:
-            logger.error(f"❌ Comprehensive QC failed: {e}")
-            return {}
-
-    def genotype_qc(self, vcf_file: str, output_dir: str) -> Dict[str, Any]:
-        """Optimized genotype QC using caching and efficient operations"""
-        logger.info("🔬 Running genotype QC...")
-        
-        # Use cache if available
-        cache_key = f"genotype_qc_{vcf_file}"
-        if cache_key in self._plink_cache:
-            logger.info("📚 Using cached genotype QC results")
-            return self._plink_cache[cache_key]
-        
-        qc_metrics = {}
-        
-        try:
-            # Use the qc_data_dir for temporary PLINK files
-            plink_base = self.qc_data_dir / "plink_qc"
-            
-            # Convert VCF to PLINK format with error handling
-            cmd = f"{self.config['paths']['plink']} --vcf {vcf_file} --make-bed --out {plink_base} 2>/dev/null"
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-            
-            if result.returncode != 0:
-                logger.warning("VCF to PLINK conversion failed, trying alternative approach")
-                return qc_metrics
-            
-            # Run QC metrics in parallel
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                future_to_metric = {
-                    executor.submit(self._calculate_sample_missingness_plink, str(plink_base)): 'sample_missingness',
-                    executor.submit(self._calculate_variant_missingness_plink, str(plink_base)): 'variant_missingness',
-                    executor.submit(self._calculate_maf_distribution_plink, str(plink_base)): 'maf_distribution'
-                }
-                
-                for future in as_completed(future_to_metric):
-                    metric_name = future_to_metric[future]
-                    try:
-                        qc_metrics[metric_name] = future.result()
-                    except Exception as e:
-                        logger.warning(f"Could not calculate {metric_name}: {e}")
-                        qc_metrics[metric_name] = {}
-            
-            # Calculate additional metrics
-            qc_metrics['hwe'] = self._calculate_hwe_plink(str(plink_base), output_dir)
-            qc_metrics['heterozygosity'] = self._calculate_heterozygosity_plink(str(plink_base))
-            
-            # Generate plots
-            self._plot_genotype_qc(qc_metrics, output_dir)
-            
-            # Apply filters
-            filtered_file = self._apply_genotype_filters_plink(str(plink_base), output_dir, qc_metrics)
-            qc_metrics['filtered_file'] = filtered_file
-            
-            # Calculate summary
-            qc_metrics['summary'] = self._calculate_genotype_qc_summary(qc_metrics)
-            
-            logger.info("✅ Genotype QC completed")
-            
-            # Cache results
-            self._plink_cache[cache_key] = qc_metrics
-            return qc_metrics
-            
-        except Exception as e:
-            logger.error(f"❌ Genotype QC failed: {e}")
-            return {}
-
-    def _calculate_sample_missingness_plink(self, plink_base: str) -> Dict[str, float]:
-        """Calculate sample-level missingness using PLINK"""
-        try:
-            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --missing --out {plink_base}_missingness 2>/dev/null"
-            subprocess.run(cmd, shell=True, capture_output=True, executable='/bin/bash')
-            
-            sample_missingness = {}
-            imiss_file = f"{plink_base}_missingness.imiss"
-            if os.path.exists(imiss_file):
-                df = pd.read_csv(imiss_file, sep='\s+', usecols=['IID', 'F_MISS'])
-                sample_missingness = df.set_index('IID')['F_MISS'].to_dict()
-            
-            return sample_missingness
-            
-        except Exception as e:
-            logger.warning(f"Could not calculate sample missingness: {e}")
-            return {}
-
-    def _calculate_variant_missingness_plink(self, plink_base: str) -> Dict[str, float]:
-        """Calculate variant-level missingness using PLINK"""
-        try:
-            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --missing --out {plink_base}_missingness 2>/dev/null"
-            subprocess.run(cmd, shell=True, capture_output=True, executable='/bin/bash')
-            
-            variant_missingness = {}
-            lmiss_file = f"{plink_base}_missingness.lmiss"
-            if os.path.exists(lmiss_file):
-                df = pd.read_csv(lmiss_file, sep='\s+', usecols=['CHR', 'SNP', 'F_MISS'])
-                variant_missingness = {f"{row['CHR']}:{row['SNP']}": row['F_MISS'] for _, row in df.iterrows()}
-            
-            return variant_missingness
-            
-        except Exception as e:
-            logger.warning(f"Could not calculate variant missingness: {e}")
-            return {}
-
-    def _calculate_maf_distribution_plink(self, plink_base: str) -> Dict[str, Any]:
-        """Calculate MAF distribution using PLINK"""
-        try:
-            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --freq --out {plink_base}_maf 2>/dev/null"
-            subprocess.run(cmd, shell=True, capture_output=True, executable='/bin/bash')
-            
-            maf_values = []
-            frq_file = f"{plink_base}_maf.frq"
-            if os.path.exists(frq_file):
-                df = pd.read_csv(frq_file, sep='\s+', usecols=['MAF'])
-                maf_values = df['MAF'].tolist()
-            
-            return {
-                'maf_values': maf_values,
-                'mean_maf': np.mean(maf_values) if maf_values else 0,
-                'median_maf': np.median(maf_values) if maf_values else 0
-            }
-            
-        except Exception as e:
-            logger.warning(f"Could not calculate MAF distribution: {e}")
-            return {'maf_values': [], 'mean_maf': 0, 'median_maf': 0}
-
-    def _calculate_hwe_plink(self, plink_base: str, output_dir: str) -> Dict[str, Any]:
-        """Calculate Hardy-Weinberg Equilibrium using PLINK"""
-        try:
-            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --hardy --out {plink_base}_hwe 2>/dev/null"
-            subprocess.run(cmd, shell=True, capture_output=True, executable='/bin/bash')
-            
-            hwe_file = f"{plink_base}_hwe.hwe"
-            if os.path.exists(hwe_file):
-                df = pd.read_csv(hwe_file, sep='\s+', usecols=['P'])
-                hwe_threshold = self.qc_config.get('hwe_threshold', 1e-6)
-                violations = (df['P'] < hwe_threshold).sum()
-                total_variants = len(df)
-                
-                return {
-                    'violations': int(violations),
-                    'total_variants': total_variants,
-                    'violation_rate': violations / total_variants if total_variants > 0 else 0
-                }
-            
-            return {'violations': 0, 'total_variants': 0, 'violation_rate': 0}
-            
-        except Exception as e:
-            logger.warning(f"Could not calculate HWE: {e}")
-            return {'violations': 0, 'total_variants': 0, 'violation_rate': 0}
-
-    def _calculate_heterozygosity_plink(self, plink_base: str) -> Dict[str, float]:
-        """Calculate sample heterozygosity using PLINK"""
-        try:
-            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} --het --out {plink_base}_het 2>/dev/null"
-            subprocess.run(cmd, shell=True, capture_output=True, executable='/bin/bash')
-            
-            heterozygosity = {}
-            het_file = f"{plink_base}_het.het"
-            if os.path.exists(het_file):
-                # Read the file and clean column names
-                df = pd.read_csv(het_file, sep='\s+', engine='python')
-                df.columns = df.columns.str.strip().str.lstrip('#')
-                
-                # Use OBS_CT as confirmed by your file format
-                for _, row in df.iterrows():
-                    sample_id = row['IID']
-                    hom_count = row['O(HOM)']
-                    nm_count = row['OBS_CT']  # This is correct for your PLINK version
-                    het_rate = (nm_count - hom_count) / nm_count if nm_count > 0 else 0
-                    heterozygosity[sample_id] = het_rate
-            
-            return heterozygosity
-            
-        except Exception as e:
-            logger.warning(f"Could not calculate heterozygosity: {e}")
-            return {}
-
-    def _apply_genotype_filters_plink(self, plink_base: str, output_dir: str, qc_metrics: Dict[str, Any]) -> Optional[str]:
-        """Apply genotype filters using PLINK"""
-        logger.info("🔧 Applying genotype filters using PLINK...")
-        
-        try:
-            filtered_base = self.qc_data_dir / "filtered_genotypes"
-            
-            filter_args = [
-                f"--maf {self.qc_config.get('maf_threshold', 0.01)}",
-                f"--geno {self.qc_config.get('variant_missingness_threshold', 0.1)}",
-                f"--hwe {self.qc_config.get('hwe_threshold', 1e-6)}",
-                f"--mind {self.qc_config.get('sample_missingness_threshold', 0.1)}"
-            ]
-            
-            filter_string = " ".join(filter_args)
-            cmd = f"{self.config['paths']['plink']} --bfile {plink_base} {filter_string} --recode vcf --out {filtered_base} 2>/dev/null"
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-            
+            bcftools_path = config['paths'].get('bcftools', 'bcftools')
+            cmd = f"{bcftools_path} query -l {genotype_file} 2>/dev/null"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode == 0:
-                filtered_vcf = f"{filtered_base}.vcf"
-                if os.path.exists(filtered_vcf):
-                    # Compress and index
-                    compressed_vcf = f"{filtered_vcf}.gz"
-                    subprocess.run(f"{self.config['paths']['bgzip']} -c {filtered_vcf} > {compressed_vcf}", shell=True, executable='/bin/bash')
-                    subprocess.run(f"{self.config['paths']['tabix']} -p vcf {compressed_vcf}", shell=True, executable='/bin/bash')
-                    return compressed_vcf
-            
-            logger.warning("PLINK filtering failed, using original file")
-            return None
-                
-        except Exception as e:
-            logger.warning(f"Genotype filtering failed: {e}")
-            return None
-
-    def _plot_genotype_qc(self, qc_metrics: Dict[str, Any], output_dir: str) -> None:
-        """Generate genotype QC plots"""
+                return set([s.strip() for s in result.stdout.split('\n') if s.strip()])
+        except:
+            pass
+    elif format_info['format'] == 'plink_bed':
         try:
-            # Use the visualization directory from directory setup
-            plot_dir = self.visualization_dir
-            
-            # MAF distribution plot
-            if 'maf_distribution' in qc_metrics and qc_metrics['maf_distribution']['maf_values']:
-                plt.figure(figsize=(10, 6))
-                plt.hist(qc_metrics['maf_distribution']['maf_values'], bins=50, alpha=0.7, color='skyblue', edgecolor='black')
-                plt.axvline(self.qc_config.get('maf_threshold', 0.01), color='red', linestyle='--', 
-                           label=f'MAF threshold ({self.qc_config.get("maf_threshold", 0.01)})')
-                plt.xlabel('Minor Allele Frequency (MAF)')
-                plt.ylabel('Number of Variants')
-                plt.title('MAF Distribution')
-                plt.legend()
-                plt.tight_layout()
-                plt.savefig(plot_dir / 'maf_distribution.png', dpi=300, bbox_inches='tight')
-                plt.close()
-            
-            # Sample missingness plot
-            if 'sample_missingness' in qc_metrics and qc_metrics['sample_missingness']:
-                plt.figure(figsize=(12, 6))
-                missing_rates = list(qc_metrics['sample_missingness'].values())
-                plt.hist(missing_rates, bins=50, alpha=0.7, color='lightcoral', edgecolor='black')
-                plt.axvline(self.qc_config.get('sample_missingness_threshold', 0.1), color='red', linestyle='--',
-                           label=f'Missingness threshold ({self.qc_config.get("sample_missingness_threshold", 0.1)})')
-                plt.xlabel('Sample Missing Rate')
-                plt.ylabel('Number of Samples')
-                plt.title('Sample Missingness Distribution')
-                plt.legend()
-                plt.tight_layout()
-                plt.savefig(plot_dir / 'sample_missingness.png', dpi=300, bbox_inches='tight')
-                plt.close()
-                
-        except Exception as e:
-            logger.warning(f"Could not generate genotype QC plots: {e}")
+            base_name = genotype_file.replace('.bed', '')
+            fam_file = f"{base_name}.fam"
+            if os.path.exists(fam_file):
+                fam_df = pd.read_csv(fam_file, sep='\s+', header=None, usecols=[1])
+                return set(fam_df[1].tolist())
+        except:
+            pass
+    
+    return set()
 
-    def _calculate_genotype_qc_summary(self, qc_metrics: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate genotype QC summary statistics"""
-        summary = {}
-        
-        try:
-            # Sample missingness summary
-            if 'sample_missingness' in qc_metrics and qc_metrics['sample_missingness']:
-                missing_rates = list(qc_metrics['sample_missingness'].values())
-                summary['sample_missingness'] = {
-                    'mean': float(np.mean(missing_rates)),
-                    'median': float(np.median(missing_rates)),
-                    'max': float(np.max(missing_rates)),
-                    'samples_above_threshold': len([x for x in missing_rates if x > 0.1])
-                }
-            
-            # Variant missingness summary
-            if 'variant_missingness' in qc_metrics and qc_metrics['variant_missingness']:
-                missing_rates = list(qc_metrics['variant_missingness'].values())
-                summary['variant_missingness'] = {
-                    'mean': float(np.mean(missing_rates)),
-                    'median': float(np.median(missing_rates)),
-                    'max': float(np.max(missing_rates)),
-                    'variants_above_threshold': len([x for x in missing_rates if x > 0.1])
-                }
-            
-            # MAF summary
-            if 'maf_distribution' in qc_metrics:
-                maf_data = qc_metrics['maf_distribution']
-                maf_values = maf_data.get('maf_values', [])
-                summary['maf'] = {
-                    'mean': maf_data.get('mean_maf', 0),
-                    'median': maf_data.get('median_maf', 0),
-                    'variants_maf_lt_01': len([x for x in maf_values if x < 0.01]),
-                    'variants_maf_lt_05': len([x for x in maf_values if x < 0.05])
-                }
-            
-            # HWE summary
-            if 'hwe' in qc_metrics:
-                summary['hwe'] = qc_metrics['hwe']
-            
-            return summary
-            
-        except Exception as e:
-            logger.warning(f"Could not calculate genotype QC summary: {e}")
-            return {}
-
-    def phenotype_qc(self, pheno_file: str, pheno_type: str, output_dir: str) -> Dict[str, Any]:
-        """Comprehensive phenotype QC with enhanced metrics"""
-        logger.info(f"🔬 Running {pheno_type} QC...")
-        
-        try:
-            # Use chunking for large files
-            chunksize = 10000
-            reader = pd.read_csv(pheno_file, sep='\t', index_col=0, chunksize=chunksize)
-            first_chunk = next(reader)
-            
-            qc_metrics = {
-                'basic_stats': {
-                    'n_features': 0,
-                    'n_samples': first_chunk.shape[1],
-                    'data_type': 'counts' if first_chunk.values.sum() > first_chunk.shape[0] * first_chunk.shape[1] else 'normalized'
-                }
-            }
-            
-            # Process chunks to accumulate statistics
-            total_features = first_chunk.shape[0]
-            total_missing = first_chunk.isna().sum().sum()
-            total_cells = first_chunk.size
-            
-            for chunk in reader:
-                total_features += chunk.shape[0]
-                total_missing += chunk.isna().sum().sum()
-                total_cells += chunk.size
-            
-            qc_metrics['basic_stats']['n_features'] = total_features
-            qc_metrics['basic_stats']['total_measurements'] = total_cells
-            
-            # Missingness analysis
-            qc_metrics['missingness'] = {
-                'total_missing': int(total_missing),
-                'missing_percentage': (total_missing / total_cells) * 100
-            }
-            
-            # Distribution metrics (on first chunk for efficiency)
-            qc_metrics['distribution'] = {
-                'mean': float(first_chunk.mean().mean()),
-                'std': float(first_chunk.std().mean())
-            }
-            
-            # Quality flags
-            qc_metrics['quality_flags'] = {
-                'has_negative_values': (first_chunk < 0).any().any(),
-                'has_zero_values': (first_chunk == 0).any().any(),
-                'has_constant_features': (first_chunk.std(axis=1) == 0).any(),
-                'has_duplicate_features': first_chunk.index.duplicated().any()
-            }
-            
-            # Generate plots
-            self._plot_phenotype_qc(first_chunk, pheno_type, output_dir, qc_metrics)
-            
-            logger.info(f"✅ {pheno_type} QC completed: {total_features} features, {first_chunk.shape[1]} samples")
-            return qc_metrics
-            
-        except Exception as e:
-            logger.error(f"❌ {pheno_type} QC failed: {e}")
-            return {}
-
-    def _plot_phenotype_qc(self, df: pd.DataFrame, pheno_type: str, output_dir: str, qc_metrics: Dict[str, Any]) -> None:
-        """Generate phenotype QC plots"""
-        try:
-            # Use the visualization directory from directory setup
-            plot_dir = self.visualization_dir
-            
-            plt.figure(figsize=(12, 5))
-            
-            plt.subplot(1, 2, 1)
-            # Sample random features for visualization
-            n_features_to_plot = min(20, df.shape[0])
-            if n_features_to_plot > 0:
-                features_to_plot = np.random.choice(df.index, n_features_to_plot, replace=False)
-                for feature in features_to_plot:
-                    plt.hist(df.loc[feature].dropna(), bins=20, alpha=0.3, density=True)
-            
-            plt.xlabel('Value')
-            plt.ylabel('Density')
-            plt.title(f'{pheno_type.upper()} Distribution\n({n_features_to_plot} random features)')
-            
-            plt.subplot(1, 2, 2)
-            # Missingness pattern (sampled for large datasets)
-            sample_size = min(1000, df.shape[0])
-            if sample_size < df.shape[0]:
-                df_sample = df.sample(n=sample_size)
-            else:
-                df_sample = df
-                
-            missing_data = df_sample.isna().astype(int)
-            plt.imshow(missing_data.values, aspect='auto', cmap='Reds', interpolation='nearest')
-            plt.xlabel('Samples')
-            plt.ylabel('Features')
-            plt.title(f'{pheno_type.upper()} Missingness Pattern')
-            plt.colorbar(label='Missing (1) / Present (0)')
-            
-            plt.tight_layout()
-            plt.savefig(plot_dir / f'{pheno_type}_qc_plots.png', dpi=200, bbox_inches='tight')  # Reduced DPI for speed
-            plt.close()
-            
-        except Exception as e:
-            logger.warning(f"Could not generate phenotype QC plots: {e}")
-
-    def sample_concordance_qc(self, vcf_file: str, phenotype_files: Dict[str, str], output_dir: str) -> Dict[str, Any]:
-        """Check sample concordance across all datasets"""
-        logger.info("🔍 Checking sample concordance...")
-        
-        concordance_results = {}
-        
-        try:
-            # Get samples from genotype file
-            geno_samples = self.extract_samples_from_genotypes(vcf_file)
-            if not geno_samples:
-                logger.warning("Could not extract samples from genotype file")
-                return {}
-            
-            concordance_results['genotype_samples'] = geno_samples
-            concordance_results['genotype_sample_count'] = len(geno_samples)
-            
-            # Get samples from each phenotype file
-            sample_overlap = {}
-            for pheno_type, pheno_file in phenotype_files.items():
-                if pheno_file and os.path.exists(pheno_file):
-                    try:
-                        # Only read header to get sample names
-                        df = pd.read_csv(pheno_file, sep='\t', index_col=0, nrows=0)
-                        pheno_samples = set(df.columns)
-                        overlap = set(geno_samples) & pheno_samples
-                        
-                        sample_overlap[pheno_type] = {
-                            'pheno_sample_count': len(pheno_samples),
-                            'overlap_count': len(overlap),
-                            'overlap_percentage': (len(overlap) / len(geno_samples)) * 100 if geno_samples else 0
-                        }
-                    except Exception as e:
-                        logger.warning(f"Could not read phenotype file {pheno_file}: {e}")
-                        continue
-            
-            concordance_results['sample_overlap'] = sample_overlap
-            
-            # Generate concordance plot
-            self._plot_sample_concordance(concordance_results, output_dir)
-            
-            return concordance_results
-            
-        except Exception as e:
-            logger.error(f"Sample concordance check failed: {e}")
-            return {}
-
-    def _plot_sample_concordance(self, concordance_results: Dict[str, Any], output_dir: str) -> None:
-        """Plot sample concordance across datasets"""
-        try:
-            # Use the visualization directory from directory setup
-            plot_dir = self.visualization_dir
-            
-            if 'sample_overlap' in concordance_results and concordance_results['sample_overlap']:
-                datasets = list(concordance_results['sample_overlap'].keys())
-                overlap_percentages = [concordance_results['sample_overlap'][d]['overlap_percentage'] for d in datasets]
-                
-                plt.figure(figsize=(10, 6))
-                colors = ['#2E86AB', '#A23B72', '#F18F01', '#1B998B', '#FF6B6B']
-                bars = plt.bar(datasets, overlap_percentages, color=colors[:len(datasets)])
-                
-                for bar, percentage in zip(bars, overlap_percentages):
-                    plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
-                            f'{percentage:.1f}%', ha='center', va='bottom', fontweight='bold')
-                
-                plt.axhline(y=80, color='red', linestyle='--', alpha=0.7, label='80% threshold')
-                plt.ylabel('Sample Overlap Percentage')
-                plt.title('Sample Concordance Across Datasets')
-                plt.legend()
-                plt.xticks(rotation=45)
-                plt.tight_layout()
-                plt.savefig(plot_dir / 'sample_concordance.png', dpi=300, bbox_inches='tight')
-                plt.close()
-                
-        except Exception as e:
-            logger.warning(f"Could not generate sample concordance plot: {e}")
-
-    def run_pca_analysis(self, vcf_file: str, output_dir: str) -> Dict[str, Any]:
-        """Run PCA for population stratification using PLINK - FIXED VERSION"""
-        logger.info("📊 Running PCA analysis using PLINK...")
-        
-        try:
-            # Use the pca_results directory from directory setup
-            plink_base = self.pca_results_dir / "pca_input"
-            
-            cmd = f"{self.config['paths']['plink']} --vcf {vcf_file} --pca 10 --out {plink_base} 2>/dev/null"
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable='/bin/bash')
-            
-            if result.returncode == 0:
-                pca_eigenvec = f"{plink_base}.eigenvec"
-                if os.path.exists(pca_eigenvec):
-                    # FIX: Dynamically handle column assignment based on actual number of columns
-                    pca_df = pd.read_csv(pca_eigenvec, sep='\s+', header=None)
-                    
-                    # Determine number of principal components based on actual columns
-                    n_columns = pca_df.shape[1]
-                    if n_columns >= 12:
-                        # Standard case: 2 ID columns + 10 PCs
-                        pca_df.columns = ['FID', 'IID'] + [f'PC{i+1}' for i in range(10)]
-                    elif n_columns >= 2:
-                        # Flexible case: handle different numbers of PCs
-                        n_pcs = n_columns - 2
-                        pca_df.columns = ['FID', 'IID'] + [f'PC{i+1}' for i in range(n_pcs)]
-                        logger.info(f"📊 PCA analysis: Found {n_pcs} principal components")
-                    else:
-                        logger.warning(f"Unexpected number of columns in PCA results: {n_columns}")
-                        return {}
-                    
-                    self._plot_pca_results(pca_df, output_dir)
-                    
-                    return {
-                        'pca_file': pca_eigenvec,
-                        'explained_variance': self._calculate_pca_variance(f"{plink_base}.eigenval"),
-                        'sample_count': len(pca_df)
-                    }
-            
-            return {}
-            
-        except Exception as e:
-            logger.warning(f"PCA analysis failed: {e}")
-            return {}
-
-    def _calculate_pca_variance(self, eigenval_file: str) -> List[float]:
-        """Calculate explained variance from eigenvalues - FIXED VERSION"""
-        try:
-            if os.path.exists(eigenval_file):
-                eigenvalues = pd.read_csv(eigenval_file, header=None)[0].values
-                total_variance = np.sum(eigenvalues)
-                explained_variance = (eigenvalues / total_variance) * 100
-                return explained_variance.tolist()
-        except Exception as e:
-            logger.warning(f"Could not calculate PCA variance: {e}")
-        return []
-
-    def _plot_pca_results(self, pca_df: pd.DataFrame, output_dir: str) -> None:
-        """Plot PCA results - FIXED VERSION"""
-        try:
-            # Use the visualization directory from directory setup
-            plot_dir = self.visualization_dir
-            
-            plt.figure(figsize=(12, 5))
-            
-            plt.subplot(1, 2, 1)
-            plt.scatter(pca_df['PC1'], pca_df['PC2'], alpha=0.6, color='#2E86AB', s=20)
-            plt.xlabel('Principal Component 1')
-            plt.ylabel('Principal Component 2')
-            plt.title('PCA: PC1 vs PC2')
-            
-            plt.subplot(1, 2, 2)
-            # FIX: Dynamically determine number of PCs to plot
-            pcs_available = [col for col in pca_df.columns if col.startswith('PC')]
-            n_pcs = len(pcs_available)
-            pcs = range(1, n_pcs + 1)
-            
-            # Get actual explained variance if available, otherwise use simplified scree
-            if hasattr(self, '_pca_variance'):
-                explained_variance = self._pca_variance[:n_pcs]
-                plt.plot(pcs, explained_variance, 'o-', color='#A23B72')
-            else:
-                # Simplified scree plot (fallback)
-                plt.plot(pcs, [100/i for i in pcs], 'o-', color='#A23B72')
-            
-            plt.xlabel('Principal Component')
-            plt.ylabel('Explained Variance (%)')
-            plt.title('Scree Plot')
-            plt.xticks(pcs)
-            
-            plt.tight_layout()
-            plt.savefig(plot_dir / 'pca_analysis.png', dpi=300, bbox_inches='tight')
-            plt.close()
-            
-        except Exception as e:
-            logger.warning(f"Could not generate PCA plots: {e}")
-
-    def advanced_outlier_detection(self, vcf_file: str, phenotype_files: Dict[str, str], output_dir: str) -> Dict[str, Any]:
-        """Advanced outlier detection using multiple methods"""
-        logger.info("🎯 Running advanced outlier detection...")
-        
-        outlier_results = {}
-        
-        try:
-            # Use the outlier_analysis directory from directory setup
-            plink_base = self.outlier_analysis_dir / "outlier_detection"
-            
-            # Convert Path object to string for PLINK command
-            plink_base_str = str(plink_base)
-            
-            # Create PLINK binary files from VCF
-            cmd1 = f"{self.config['paths']['plink']} --vcf {vcf_file} --make-bed --out {plink_base_str} 2>/dev/null"
-            result1 = subprocess.run(cmd1, shell=True, capture_output=True, executable='/bin/bash')
-            if result1.returncode != 0:
-                logger.warning(f"PLINK --make-bed failed: {result1.stderr.decode()}")
-                return {}
-            
-            # Calculate heterozygosity
-            cmd2 = f"{self.config['paths']['plink']} --bfile {plink_base_str} --het --out {plink_base_str}_het 2>/dev/null"
-            result2 = subprocess.run(cmd2, shell=True, capture_output=True, executable='/bin/bash')
-            if result2.returncode != 0:
-                logger.warning(f"PLINK --het failed: {result2.stderr.decode()}")
-                return {}
-            
-            # Read heterozygosity results
-            het_file = f"{plink_base_str}_het.het"
-            if os.path.exists(het_file):
-                # Read the file and clean column names
-                df = pd.read_csv(het_file, sep='\s+', engine='python')
-                df.columns = df.columns.str.strip().str.lstrip('#')
-                
-                # Calculate heterozygosity rate: (OBS_CT - O(HOM)) / OBS_CT
-                # Handle division by zero properly
-                df['het_rate'] = df.apply(
-                    lambda row: (row['OBS_CT'] - row['O(HOM)']) / row['OBS_CT'] if row['OBS_CT'] > 0 else 0, 
-                    axis=1
-                )
-                
-                # Remove any NaN values that might have occurred
-                df = df.dropna(subset=['het_rate'])
-                
-                # Identify heterozygosity outliers using 3 standard deviations
-                if len(df) > 0:
-                    mean_het = df['het_rate'].mean()
-                    std_het = df['het_rate'].std()
-                    
-                    # Avoid division by zero in case all samples have same heterozygosity
-                    if std_het > 0:
-                        outlier_mask = (df['het_rate'] < mean_het - 3 * std_het) | (df['het_rate'] > mean_het + 3 * std_het)
-                    else:
-                        # If no variation, no outliers
-                        outlier_mask = pd.Series(False, index=df.index)
-                    
-                    outlier_results['heterozygosity_outliers'] = {
-                        'n_outliers': int(outlier_mask.sum()),
-                        'outlier_samples': df[outlier_mask]['IID'].tolist(),
-                        'threshold_low': float(mean_het - 3 * std_het),
-                        'threshold_high': float(mean_het + 3 * std_het),
-                        'mean_heterozygosity': float(mean_het),
-                        'std_heterozygosity': float(std_het),
-                        'total_samples': len(df)
-                    }
-                else:
-                    logger.warning("No valid samples found for heterozygosity calculation")
-                    outlier_results['heterozygosity_outliers'] = {
-                        'n_outliers': 0,
-                        'outlier_samples': [],
-                        'threshold_low': 0,
-                        'threshold_high': 0,
-                        'mean_heterozygosity': 0,
-                        'std_heterozygosity': 0,
-                        'total_samples': 0
-                    }
-            
-            logger.info("✅ Advanced outlier detection completed")
-            return outlier_results
-            
-        except Exception as e:
-            logger.warning(f"Advanced outlier detection failed: {e}")
-            return {}
-
-    def generate_qc_report(self, qc_results: Dict[str, Any], output_dir: str) -> None:
-        """Generate comprehensive QC report"""
-        logger.info("📊 Generating QC report...")
-        
-        try:
-            # Use the reports directory from directory setup
-            report_file = self.reports_dir / "comprehensive_qc_report.html"
-            
-            html_content = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Comprehensive QC Report</title>
-                <meta charset="UTF-8">
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                    .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }}
-                    .good {{ color: green; font-weight: bold; }}
-                    .warning {{ color: orange; font-weight: bold; }}
-                    .bad {{ color: red; font-weight: bold; }}
-                    .plot {{ text-align: center; margin: 20px 0; }}
-                    .plot img {{ max-width: 100%; height: auto; border: 1px solid #ddd; }}
-                    table {{ width: 100%; border-collapse: collapse; }}
-                    th, td {{ padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }}
-                    th {{ background-color: #f2f2f2; }}
-                </style>
-            </head>
-            <body>
-                <h1>Comprehensive Quality Control Report</h1>
-                <p>Generated on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-                
-                <div class="section">
-                    <h2>Genotype QC Summary</h2>
-                    {self._generate_genotype_qc_summary_html(qc_results.get('genotype', {}))}
-                </div>
-                
-                <div class="section">
-                    <h2>Sample Concordance</h2>
-                    {self._generate_concordance_summary_html(qc_results.get('concordance', {}))}
-                </div>
-                
-                <div class="section">
-                    <h2>QC Plots</h2>
-                    {self._generate_plot_section_html(output_dir)}
-                </div>
-                
-                <div class="section">
-                    <h2>Next Steps</h2>
-                    <p>Based on the QC results, you can proceed with the next modules:</p>
-                    <ul>
-                        <li><strong>If QC passes:</strong> Run QTL mapping</li>
-                        <li><strong>If issues found:</strong> Review the warnings and consider re-running data preparation</li>
-                    </ul>
-                </div>
-            </body>
-            </html>
-            """
-            
-            with open(report_file, 'w') as f:
-                f.write(html_content)
-                
-            logger.info(f"✅ QC report generated: {report_file}")
-            
-        except Exception as e:
-            logger.error(f"❌ Could not generate QC report: {e}")
-
-    def _generate_genotype_qc_summary_html(self, genotype_qc: Dict[str, Any]) -> str:
-        """Generate genotype QC summary HTML"""
-        if not genotype_qc:
-            return "<p>No genotype QC data available.</p>"
-        
-        summary = "<table>"
-        summary += "<tr><th>Metric</th><th>Value</th><th>Status</th></tr>"
-        
-        # Sample missingness
-        if 'sample_missingness' in genotype_qc and genotype_qc['sample_missingness']:
-            max_missing = max(genotype_qc['sample_missingness'].values()) if genotype_qc['sample_missingness'] else 0
-            status = "good" if max_missing < 0.1 else "warning" if max_missing < 0.2 else "bad"
-            summary += f"<tr><td>Max Sample Missingness</td><td>{max_missing:.3f}</td><td class='{status}'>{'PASS' if status == 'good' else 'WARNING' if status == 'warning' else 'FAIL'}</td></tr>"
-        
-        # MAF summary
-        if 'maf_distribution' in genotype_qc:
-            mean_maf = genotype_qc['maf_distribution'].get('mean_maf', 0)
-            summary += f"<tr><td>Mean MAF</td><td>{mean_maf:.4f}</td><td>-</td></tr>"
-        
-        summary += "</table>"
-        return summary
-
-    def _generate_concordance_summary_html(self, concordance_results: Dict[str, Any]) -> str:
-        """Generate sample concordance summary HTML"""
-        if not concordance_results or 'sample_overlap' not in concordance_results:
-            return "<p>No concordance data available.</p>"
-        
-        summary = "<table>"
-        summary += "<tr><th>Dataset</th><th>Samples</th><th>Overlap with Genotypes</th><th>Overlap %</th><th>Status</th></tr>"
-        
-        for dataset, data in concordance_results['sample_overlap'].items():
-            overlap_pct = data.get('overlap_percentage', 0)
-            status = "good" if overlap_pct >= 80 else "warning" if overlap_pct >= 50 else "bad"
-            
-            summary += f"<tr><td>{dataset.upper()}</td><td>{data.get('pheno_sample_count', 0)}</td><td>{data.get('overlap_count', 0)}</td><td>{overlap_pct:.1f}%</td><td class='{status}'>{'PASS' if status == 'good' else 'WARNING' if status == 'warning' else 'FAIL'}</td></tr>"
-        
-        summary += f"<tr><td><strong>GENOTYPES</strong></td><td><strong>{concordance_results.get('genotype_sample_count', 0)}</strong></td><td>-</td><td>-</td><td>-</td></tr>"
-        summary += "</table>"
-        return summary
-
-    def _generate_plot_section_html(self, output_dir: str) -> str:
-        """Generate HTML for QC plots"""
-        plots_html = "<div class='plot-grid'>"
-        
-        plot_files = [
-            ('maf_distribution.png', 'MAF Distribution'),
-            ('sample_missingness.png', 'Sample Missingness'),
-            ('sample_concordance.png', 'Sample Concordance'),
-            ('pca_analysis.png', 'PCA Analysis')
-        ]
-        
-        # Use the visualization directory from directory setup
-        plot_dir = self.visualization_dir
-        
-        for plot_file, title in plot_files:
-            plot_path = plot_dir / plot_file
-            if plot_path.exists():
-                plots_html += f"""
-                <div class="plot">
-                    <h3>{title}</h3>
-                    <img src="../visualization/qc_plots/{plot_file}" alt="{title}" style="max-width: 400px;">
-                </div>
-                """
-        
-        plots_html += "</div>"
-        return plots_html
-
-    def save_qc_results(self, qc_results: Dict[str, Any], output_dir: str) -> None:
-        """Save QC results for downstream modules - FIXED JSON SERIALIZATION"""
-        try:
-            # Use the qc_data directory from directory setup
-            results_file = self.qc_data_dir / "comprehensive_qc_results.json"
-            
-            # Enhanced JSON serialization function
-            def convert_for_json(obj):
-                """Convert numpy/pandas objects to JSON-serializable types"""
-                if isinstance(obj, (np.int_, np.intc, np.intp, np.int8, np.int16, np.int32, np.int64)):
-                    return int(obj)
-                elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
-                    return float(obj)
-                elif isinstance(obj, (np.ndarray,)):
-                    return obj.tolist()
-                elif isinstance(obj, (pd.DataFrame, pd.Series)):
-                    return obj.to_dict()
-                elif isinstance(obj, (np.bool_, bool)):
-                    return bool(obj)  # Handle both numpy and Python bool
-                elif isinstance(obj, (np.void, type(None))):
-                    return None
-                elif hasattr(obj, 'dtype') and obj.dtype == bool:
-                    return bool(obj)
-                return obj
-            
-            def recursive_convert(obj):
-                """Recursively convert all objects in nested structures"""
-                if isinstance(obj, dict):
-                    return {k: recursive_convert(v) for k, v in obj.items()}
-                elif isinstance(obj, (list, tuple)):
-                    return [recursive_convert(item) for item in obj]
-                else:
-                    return convert_for_json(obj)
-            
-            # Apply recursive conversion to ensure all objects are JSON serializable
-            serializable_results = recursive_convert(qc_results)
-            
-            with open(results_file, 'w') as f:
-                json.dump(serializable_results, f, indent=2, default=str)
-            
-            logger.info(f"💾 QC results saved: {results_file}")
-            
-        except Exception as e:
-            logger.warning(f"Could not save QC results: {e}")
-
-
-# Maintain backward compatibility
-def run_data_preparation(config: Dict[str, Any]) -> bool:
-    """Main function for data preparation module"""
+def extract_covariate_samples(covariates_file):
+    """Extract samples from covariates file"""
     try:
-        logger.info("🚀 Starting data preparation module...")
-        qc = EnhancedQC(config)
-        success = qc.run_data_preparation()
-        
-        if success:
-            logger.info("✅ Data preparation module completed successfully")
-        else:
-            logger.error("❌ Data preparation module failed")
-        
-        return success
-        
-    except Exception as e:
-        logger.error(f"❌ Data preparation module failed: {e}")
-        return False
+        # Use robust reading for covariate file
+        df = read_covariates_file_robust(covariates_file)
+        return set(df.columns)
+    except:
+        return set()
 
-def run_quality_control(config: Dict[str, Any]) -> bool:
-    """Main function for quality control module"""
+def extract_phenotype_samples(phenotype_file):
+    """Extract samples from phenotype file"""
     try:
-        logger.info("🚀 Starting quality control module...")
-        qc = EnhancedQC(config)
-        success = qc.run_quality_control()
+        df = pd.read_csv(phenotype_file, sep='\t', index_col=0, nrows=0)
+        return set(df.columns)
+    except:
+        return set()
+
+def extract_gwas_samples(gwas_file):
+    """Extract samples from GWAS file"""
+    try:
+        df = pd.read_csv(gwas_file, sep='\t', usecols=['sample_id'], nrows=1000)
+        return set(df['sample_id'])
+    except:
+        return set()
+
+def validate_generic_file(file_path, file_type, config, result):
+    """Validate generic file type"""
+    try:
+        file_size = os.path.getsize(file_path) / (1024**2)  # MB
+        result.add_info(file_type, f"File size: {file_size:.2f} MB")
         
-        if success:
-            logger.info("✅ Quality control module completed successfully")
-        else:
-            logger.error("❌ Quality control module failed")
-        
-        return success
-        
+        # Try to read as text file
+        with open(file_path, 'r', encoding='utf-8') as f:
+            first_line = f.readline().strip()
+            if first_line:
+                result.add_info(file_type, f"First line sample: {first_line[:100]}...")
     except Exception as e:
-        logger.error(f"❌ Quality control module failed: {e}")
-        return False
+        result.add_warning(file_type, f"Generic validation failed: {e}")
 
+def validate_generic_tabular_file(file_path, file_type, config, result):
+    """Validate generic tabular file"""
+    try:
+        df = pd.read_csv(file_path, sep='\t', nrows=100)
+        result.add_info(file_type, f"Tabular file: {df.shape[0]} rows, {df.shape[1]} columns")
+        
+        # Check for common issues
+        missing_count = df.isna().sum().sum()
+        if missing_count > 0:
+            result.add_warning(file_type, f"Found {missing_count} missing values in sample")
+    except Exception as e:
+        result.add_warning(file_type, f"Tabular validation failed: {e}")
 
-# Standalone execution
+# Backward compatibility functions
+def validate_tensorqtl_requirements(config):
+    """Legacy function for backward compatibility"""
+    result = ValidationResult()
+    validate_configuration_comprehensive(config, result)
+    return result.errors, result.warnings
+
+def validate_configuration(config):
+    """Legacy function for backward compatibility"""
+    result = ValidationResult()
+    validate_configuration_comprehensive(config, result)
+    return result.errors, result.warnings
+
+def validate_enhanced_qc_requirements(config):
+    """Legacy function for backward compatibility"""
+    return [], []
+
+def validate_interaction_requirements(config):
+    """Legacy function for backward compatibility"""
+    return [], []
+
+def validate_finemap_requirements(config):
+    """Legacy function for backward compatibility"""
+    return [], []
+
 if __name__ == "__main__":
+    """Standalone validation script"""
     import sys
     import yaml
     
-    config_file = sys.argv[1] if len(sys.argv) > 1 else "config/config.yaml"
+    if len(sys.argv) > 1:
+        config_file = sys.argv[1]
+    else:
+        config_file = "config/config.yaml"
     
     try:
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
         
-        # Run comprehensive QC
-        qc = EnhancedQC(config)
-        vcf_file = config['input_files']['genotypes']
-        qtl_types = qc.get_qtl_types_from_config()
+        success = validate_inputs(config)
+        sys.exit(0 if success else 1)
         
-        results = qc.run_comprehensive_qc(vcf_file, qtl_types, config.get('results_dir', 'results'))
-        
-        if results:
-            print("✅ QC completed successfully!")
-            sys.exit(0)
-        else:
-            print("❌ QC failed!")
-            sys.exit(1)
-            
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Validation failed: {e}")
         sys.exit(1)
